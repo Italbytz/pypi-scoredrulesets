@@ -142,6 +142,7 @@ Datensaetze:
 
 - Standard: `sklearn_iris`, `sklearn_wine`, `sklearn_breast_cancer`
 - Optional lokal: CSV-Dateien aus `SCORERULESETS_UCI_DIR` (letzte Spalte = Ziel)
+- Paper-UCI-Katalog: via Alias `paper_uci` (nutzt verfuegbare Datensaetze aus dem Paper-Katalog)
 
 Beispielaufruf:
 
@@ -160,6 +161,25 @@ python examples/benchmark_runner.py \
   --output-plot-base benchmark_results \
   --plot-size-metric n_rules
 ```
+
+Paper-vergleichbarer Lauf (inkl. Paper-Split-Policy):
+
+```bash
+python examples/benchmark_runner.py \
+  --paper-uci \
+  --paper-split-policy \
+  --estimators wrapper_cart,wrapper_hs,gp,gp_diverse,gp_fast,native \
+  --repeats 10 \
+  --aggregate-repeats \
+  --output-markdown benchmarks/2026-03-paper-uci/benchmark_report.md \
+  --output-csv benchmarks/2026-03-paper-uci/benchmark_results.csv \
+  --output-json benchmarks/2026-03-paper-uci/benchmark_results.json
+```
+
+Hinweis: Der Alias `paper_uci` waehlt nur Datensaetze aus, die in deiner Registry verfuegbar sind.
+Fuer lokale UCI-CSVs setze `SCORERULESETS_UCI_DIR` auf ein Verzeichnis mit CSV-Dateien.
+Mit `--paper-uci-strict` faellt der Lauf sofort aus, wenn nicht alle 8 Paper-Datensaetze verfuegbar sind.
+Mit `--offline-uci` werden Online-Quellen (ucimlrepo/OpenML) deaktiviert.
 
 Wenn du nur die GP-Profile gegeneinander vergleichen willst:
 

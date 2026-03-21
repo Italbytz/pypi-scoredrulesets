@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import numpy as np
+
 from scoredrulesets.benchmarking import (
     BenchmarkConfig,
     aggregate_benchmark_results,
@@ -13,6 +15,8 @@ from scoredrulesets.benchmarking import (
     plot_benchmark_results,
     run_benchmarks,
 )
+from scoredrulesets.benchmarking.datasets import DatasetBundle
+from scoredrulesets.benchmarking.runner import _resolve_test_size
 
 
 def test_benchmarking_runs_for_core_estimators():
@@ -225,5 +229,31 @@ def test_benchmark_leaderboard_html_contains_table():
     assert "<table>" in html
     assert "<th>dataset</th>" in html
     assert leaderboard[0].dataset in html
+
+
+def test_paper_split_policy_thresholds():
+    small = DatasetBundle(
+        name="small",
+        X=np.zeros((150, 1)),
+        y=np.zeros(150),
+        source="test",
+    )
+    medium = DatasetBundle(
+        name="medium",
+        X=np.zeros((1200, 1)),
+        y=np.zeros(1200),
+        source="test",
+    )
+    large = DatasetBundle(
+        name="large",
+        X=np.zeros((6000, 1)),
+        y=np.zeros(6000),
+        source="test",
+    )
+
+    cfg = BenchmarkConfig(use_paper_split_policy=True)
+    assert _resolve_test_size(small, cfg) == 0.30
+    assert _resolve_test_size(medium, cfg) == 0.25
+    assert _resolve_test_size(large, cfg) == 0.20
 
 

@@ -8,7 +8,7 @@ import numpy as np
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 
-from .datasets import load_dataset_registry
+from .datasets import load_dataset_registry, resolve_dataset_names
 from .estimators import default_estimator_specs
 from .metrics import model_size_metrics
 
@@ -18,6 +18,9 @@ class BenchmarkConfig:
     dataset_names: list[str] | None = None
     estimator_names: list[str] | None = None
     test_size: float = 0.3
+    use_paper_split_policy: bool = False
+    include_online_uci: bool = True
+    paper_uci_strict: bool = False
     repeats: int = 1
     random_state: int = 0
 
@@ -61,10 +64,14 @@ class AggregatedBenchmarkResult:
 
 
 def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
-    dataset_registry = load_dataset_registry()
+    dataset_registry = load_dataset_registry(include_online_uci=bool(config.include_online_uci))
     estimator_registry = default_estimator_specs()
 
-    dataset_names = config.dataset_names or list(dataset_registry.keys())
+    dataset_names = resolve_dataset_names(
+        config.dataset_names,
+        dataset_registry,
+        paper_uci_strict=bool(config.paper_uci_strict),
+    )
     estimator_names = config.estimator_names or list(estimator_registry.keys())
 
     _validate_names("dataset", dataset_names, dataset_registry)
@@ -73,12 +80,13 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
     results: list[BenchmarkResult] = []
     for dataset_name in dataset_names:
         bundle = dataset_registry[dataset_name]
+        test_size = _resolve_test_size(bundle, config)
         for repeat in range(max(1, int(config.repeats))):
             split_seed = int(config.random_state + repeat)
             X_train, X_test, y_train, y_test = train_test_split(
                 bundle.X,
                 bundle.y,
-                test_size=config.test_size,
+                test_size=test_size,
                 random_state=split_seed,
                 stratify=bundle.y,
             )
@@ -97,6 +105,18 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                 )
                 results.append(result)
     return results
+
+
+def _resolve_test_size(bundle, config: BenchmarkConfig) -> float:
+    if not config.use_paper_split_policy:
+        return float(config.test_size)
+
+    n_obs = int(bundle.X.shape[0])
+    if n_obs < 500:
+        return 0.30
+    if n_obs < 5000:
+        return 0.25
+    return 0.20
 
 
 def results_as_dicts(results: list[BenchmarkResult]) -> list[dict[str, Any]]:

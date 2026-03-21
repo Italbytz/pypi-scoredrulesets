@@ -25,7 +25,22 @@ def parse_args() -> argparse.Namespace:
         "--datasets",
         type=str,
         default="",
-        help="Kommagetrennte Liste, z.B. sklearn_iris,sklearn_wine",
+        help="Kommagetrennte Liste, z.B. sklearn_iris,sklearn_wine oder paper_uci",
+    )
+    parser.add_argument(
+        "--paper-uci",
+        action="store_true",
+        help="Fuegt den Paper-UCI-Katalog als Dataset-Auswahl hinzu (Alias: paper_uci).",
+    )
+    parser.add_argument(
+        "--paper-uci-strict",
+        action="store_true",
+        help="Fehlschlag, wenn bei paper_uci nicht alle Paper-Datensaetze verfuegbar sind.",
+    )
+    parser.add_argument(
+        "--offline-uci",
+        action="store_true",
+        help="Deaktiviert Online-UCI-Loader (ucimlrepo/OpenML) und nutzt nur lokale Registry-Quellen.",
     )
     parser.add_argument(
         "--estimators",
@@ -35,6 +50,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--random-state", type=int, default=0)
+    parser.add_argument(
+        "--paper-split-policy",
+        action="store_true",
+        help="Aktiviert die im Paper verwendete Split-Policy (n<500:0.30, 500-4999:0.25, >=5000:0.20).",
+    )
     parser.add_argument("--output-csv", type=str, default="benchmark_results.csv")
     parser.add_argument("--output-json", type=str, default="benchmark_results.json")
     parser.add_argument("--output-plot-base", type=str, default="benchmark_results")
@@ -71,7 +91,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    dataset_names = [x.strip() for x in args.datasets.split(",") if x.strip()] or None
+    dataset_names = [x.strip() for x in args.datasets.split(",") if x.strip()]
+    if args.paper_uci:
+        dataset_names.append("paper_uci")
+    dataset_names = dataset_names or None
     estimator_names = [x.strip() for x in args.estimators.split(",") if x.strip()] or None
     aggregated_csv = _sibling_output(Path(args.output_csv), "_aggregated")
     aggregated_json = _sibling_output(Path(args.output_json), "_aggregated")
@@ -79,6 +102,9 @@ def main() -> None:
     config = BenchmarkConfig(
         dataset_names=dataset_names,
         estimator_names=estimator_names,
+        use_paper_split_policy=bool(args.paper_split_policy),
+        include_online_uci=not bool(args.offline_uci),
+        paper_uci_strict=bool(args.paper_uci_strict),
         repeats=args.repeats,
         random_state=args.random_state,
     )
@@ -120,6 +146,9 @@ def main() -> None:
                 "estimators": ",".join(estimator_names or []),
                 "repeats": args.repeats,
                 "random_state": args.random_state,
+                "paper_split_policy": bool(args.paper_split_policy),
+                "paper_uci_strict": bool(args.paper_uci_strict),
+                "offline_uci": bool(args.offline_uci),
                 "plot_size_metric": args.plot_size_metric,
                 "error_bar": args.error_bar,
                 "leaderboard_primary_metric": args.leaderboard_primary_metric,
@@ -147,6 +176,9 @@ def main() -> None:
                 "estimators": ",".join(estimator_names or []),
                 "repeats": args.repeats,
                 "random_state": args.random_state,
+                "paper_split_policy": bool(args.paper_split_policy),
+                "paper_uci_strict": bool(args.paper_uci_strict),
+                "offline_uci": bool(args.offline_uci),
                 "plot_size_metric": args.plot_size_metric,
                 "error_bar": args.error_bar,
                 "leaderboard_primary_metric": args.leaderboard_primary_metric,
