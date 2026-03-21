@@ -82,6 +82,67 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 min_samples_leaf=3,
             ),
         ),
+        "wrapper_pittsburgh": EstimatorSpec(
+            name="wrapper_pittsburgh",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="pittsburgh",
+                backend_params={
+                    "max_rules": 5,
+                    "candidate_pool_size": 20,
+                    "beam_width": 6,
+                    "max_iterations": 12,
+                    "validation_fraction": 0.2,
+                    "complexity_penalty": 0.01,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_pittsburgh_fast": EstimatorSpec(
+            name="wrapper_pittsburgh_fast",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="pittsburgh",
+                backend_params={
+                    "max_rules": 4,
+                    "candidate_pool_size": 12,
+                    "beam_width": 4,
+                    "max_iterations": 6,
+                    "validation_fraction": 0.15,
+                    "complexity_penalty": 0.012,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_pittsburgh_strong": EstimatorSpec(
+            name="wrapper_pittsburgh_strong",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="pittsburgh",
+                backend_params={
+                    "max_rules": 6,
+                    "candidate_pool_size": 32,
+                    "beam_width": 10,
+                    "max_iterations": 20,
+                    "validation_fraction": 0.25,
+                    "complexity_penalty": 0.008,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_pittsburgh_diverse": EstimatorSpec(
+            name="wrapper_pittsburgh_diverse",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="pittsburgh",
+                backend_params={
+                    "max_rules": 7,
+                    "min_samples_leaf": 3,
+                    "candidate_pool_size": 36,
+                    "beam_width": 10,
+                    "max_iterations": 18,
+                    "validation_fraction": 0.25,
+                    "complexity_penalty": 0.01,
+                },
+                random_state=0,
+            ),
+        ),
         # GP naming:
         # - `gp` is the recommended strong benchmark default (residual covering).
         # - `gp_fast` keeps the earlier lightweight fast configuration.

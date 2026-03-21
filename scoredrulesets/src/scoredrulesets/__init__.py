@@ -24,6 +24,7 @@ from .benchmarking import (
 from .estimators.gp_native import GeneticScoredRuleSetClassifier
 from .estimators.logicgp import LogicGPClassifier
 from .estimators.native import NativeScoredRuleSetClassifier
+from .estimators.pittsburgh import PittsburghRuleSetClassifier
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
 from .formatting import format_ruleset_table
 from .io import dump_ruleset_json, load_ruleset_json
@@ -42,6 +43,7 @@ __all__ = [
     "GeneticScoredRuleSetClassifier",
     "LogicGPClassifier",
     "NativeScoredRuleSetClassifier",
+    "PittsburghRuleSetClassifier",
     "ScoredRuleSetClassifier",
     "aggregate_benchmark_results",
     "aggregated_results_as_dicts",

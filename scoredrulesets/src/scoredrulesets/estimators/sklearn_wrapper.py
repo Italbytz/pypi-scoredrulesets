@@ -88,6 +88,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "LogicGPClassifier hat kein 'ruleset_' nach fit(). "
                     "Bitte logicgp.py auf Fehler pruefen."
                 )
+        elif backend_lower == "pittsburgh":
+            if hasattr(self.estimator_, "ruleset_"):
+                self.ruleset_ = self.estimator_.ruleset_
+            else:
+                raise RuntimeError(
+                    "PittsburghRuleSetClassifier has no 'ruleset_' after fit(). "
+                    "Please check pittsburgh.py for errors."
+                )
         else:
             # Tree-basierte Transformation (CART, HS)
             transform_cfg = TreeTransformParams(**(self.transform_params or {}))
@@ -99,7 +107,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
             )
 
         # rulekit/exstracs/logicgp: Prediction immer ueber ScoredRuleSet routen
-        self.is_ruleset_mode_ = backend_lower in ("rulekit", "exstracs", "logicgp")
+        self.is_ruleset_mode_ = backend_lower in ("rulekit", "exstracs", "logicgp", "pittsburgh")
         return self
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:
@@ -126,7 +134,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
-        X_valid = check_array(X, dtype=None)
+        X_valid: np.ndarray = np.asarray(check_array(X, dtype=None))
         if self.n_features_in_ is not None and X_valid.shape[1] != self.n_features_in_:
             raise ValueError(
                 f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
@@ -136,11 +144,12 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         if self.is_ruleset_mode_:
             return predict_from_ruleset(self.ruleset_, X_valid)
 
-        return self.estimator_.predict(X_valid)
+        estimator: Any = self.estimator_
+        return estimator.predict(X_valid)
 
     def predict_proba(self, X):
         check_is_fitted(self, "ruleset_")
-        X_valid = check_array(X, dtype=None)
+        X_valid: np.ndarray = np.asarray(check_array(X, dtype=None))
         if self.n_features_in_ is not None and X_valid.shape[1] != self.n_features_in_:
             raise ValueError(
                 f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
@@ -150,8 +159,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         if self.is_ruleset_mode_:
             return predict_proba_from_ruleset(self.ruleset_, X_valid)
 
-        if hasattr(self.estimator_, "predict_proba"):
-            return self.estimator_.predict_proba(X_valid)
+        estimator: Any = self.estimator_
+        if hasattr(estimator, "predict_proba"):
+            return estimator.predict_proba(X_valid)
         return predict_proba_from_ruleset(self.ruleset_, X_valid)
 
     def to_ruleset(self) -> ScoredRuleSet:

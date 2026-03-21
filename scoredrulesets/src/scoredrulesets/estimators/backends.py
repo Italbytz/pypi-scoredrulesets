@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
-import subprocess
+import subprocess as sp
 from typing import Any
 
 from sklearn.tree import DecisionTreeClassifier
@@ -53,8 +53,14 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return logicgp_cls(**params)
 
+    if backend_key == "pittsburgh":
+        pittsburgh_cls = _resolve_pittsburgh_class()
+        if random_state is not None and _supports_kwarg(pittsburgh_cls, "random_state"):
+            params.setdefault("random_state", random_state)
+        return pittsburgh_cls(**params)
+
     raise ValueError(
-        f"Unknown backend '{backend}'. Supported backends: 'cart', 'hs', 'rulekit', 'exstracs', 'logicgp'."
+        f"Unknown backend '{backend}'. Supported backends: 'cart', 'hs', 'rulekit', 'exstracs', 'logicgp', 'pittsburgh'."
     )
 
 
@@ -94,9 +100,8 @@ def _resolve_rulekit_class():
     RuleKit benötigt Java - gebe aussagekräftige Fehlermeldung aus.
     """
     try:
-        import subprocess
         # Überprüfe ob Java installiert ist
-        result = subprocess.run(
+        result = sp.run(
             ["java", "-version"],
             capture_output=True,
             text=True,
@@ -104,7 +109,7 @@ def _resolve_rulekit_class():
         )
         if result.returncode != 0:
             raise RuntimeError("Java nicht gefunden oder nicht lauffähig")
-    except (FileNotFoundError, subprocess.TimeoutExpired, RuntimeError) as e:
+    except (FileNotFoundError, sp.TimeoutExpired, RuntimeError) as e:
         raise ImportError(
             "backend='rulekit' benötigt Java, aber kein Java gefunden oder funktionsfähig. "
             "Bitte installiere Java (JDK 11+). "
@@ -186,6 +191,18 @@ def _resolve_logicgp_class():
         raise ImportError(
             "backend='logicgp' konnte LogicGPClassifier nicht laden. "
             f"Import-Fehler: {e}"
+        ) from e
+
+
+def _resolve_pittsburgh_class():
+    try:
+        from .pittsburgh import PittsburghRuleSetClassifier
+
+        return PittsburghRuleSetClassifier
+    except ImportError as e:
+        raise ImportError(
+            "backend='pittsburgh' could not load PittsburghRuleSetClassifier. "
+            f"Import error: {e}"
         ) from e
 
 

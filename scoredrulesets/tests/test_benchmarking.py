@@ -101,6 +101,44 @@ def test_benchmarking_aggregation_over_repeats():
     assert all(item.f1_macro_error is not None for item in aggregated)
 
 
+def test_benchmarking_smoke_compare_pittsburgh_native_gp():
+    config = BenchmarkConfig(
+        dataset_names=["sklearn_iris"],
+        estimator_names=["wrapper_pittsburgh_fast", "native", "gp"],
+        repeats=1,
+        random_state=0,
+    )
+    results = run_benchmarks(config)
+
+    assert len(results) == 3
+    by_estimator = {result.estimator: result for result in results}
+    assert set(by_estimator) == {"wrapper_pittsburgh_fast", "native", "gp"}
+    assert all(result.status == "ok" for result in results)
+    assert all(result.f1_macro is not None for result in results)
+    assert all(result.n_rules is not None and result.n_rules > 0 for result in results)
+
+
+def test_benchmarking_smoke_compare_pittsburgh_profiles():
+    config = BenchmarkConfig(
+        dataset_names=["sklearn_iris"],
+        estimator_names=["wrapper_pittsburgh_fast", "wrapper_pittsburgh_strong", "wrapper_pittsburgh_diverse"],
+        repeats=1,
+        random_state=0,
+    )
+    results = run_benchmarks(config)
+
+    assert len(results) == 3
+    by_estimator = {result.estimator: result for result in results}
+    assert set(by_estimator) == {
+        "wrapper_pittsburgh_fast",
+        "wrapper_pittsburgh_strong",
+        "wrapper_pittsburgh_diverse",
+    }
+    assert all(result.status == "ok" for result in results)
+    assert all(result.f1_macro is not None for result in results)
+    assert all(result.n_rules is not None and result.n_rules > 0 for result in results)
+
+
 def test_benchmarking_progress_output_is_emitted(capsys):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
