@@ -142,7 +142,7 @@ def test_benchmarking_smoke_compare_pittsburgh_profiles():
 def test_benchmarking_smoke_compare_michigan_native_gp():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_michigan_fast", "native", "gp"],
+        estimator_names=["wrapper_michigan_compact", "native", "gp"],
         repeats=1,
         random_state=0,
     )
@@ -150,7 +150,7 @@ def test_benchmarking_smoke_compare_michigan_native_gp():
 
     assert len(results) == 3
     by_estimator = {result.estimator: result for result in results}
-    assert set(by_estimator) == {"wrapper_michigan_fast", "native", "gp"}
+    assert set(by_estimator) == {"wrapper_michigan_compact", "native", "gp"}
     assert all(result.status == "ok" for result in results)
     assert all(result.f1_macro is not None for result in results)
     assert all(result.n_rules is not None and result.n_rules > 0 for result in results)

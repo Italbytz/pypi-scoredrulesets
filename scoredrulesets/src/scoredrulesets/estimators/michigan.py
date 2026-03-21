@@ -39,6 +39,7 @@ class MichiganRuleSetClassifier(BaseRuleSetEstimator):
         mutation_rate: float = 0.08,
         covering_probability: float = 0.12,
         min_rule_fitness: float = 0.02,
+        max_final_rules: int | None = None,
         random_state: int | None = None,
     ):
         self.aggregation = aggregation
@@ -53,6 +54,7 @@ class MichiganRuleSetClassifier(BaseRuleSetEstimator):
         self.mutation_rate = mutation_rate
         self.covering_probability = covering_probability
         self.min_rule_fitness = min_rule_fitness
+        self.max_final_rules = max_final_rules
         self.random_state = random_state
 
     def fit(self, X, y):
@@ -115,8 +117,11 @@ class MichiganRuleSetClassifier(BaseRuleSetEstimator):
             reverse=True,
         )
 
+        max_final = int(self.max_final_rules) if self.max_final_rules is not None else int(self.population_size)
+        max_final = max(1, max_final)
+
         final_rules: list[Rule] = []
-        for idx, rule in enumerate(kept_rules[: max(1, int(self.population_size))]):
+        for idx, rule in enumerate(kept_rules[:max_final]):
             score_strength = float(max(rule.fitness, 1e-6) * np.log1p(rule.match_count + rule.numerosity))
             scores = [0.0] * n_classes
             scores[rule.class_idx] = score_strength
@@ -154,10 +159,13 @@ class MichiganRuleSetClassifier(BaseRuleSetEstimator):
                 "source": "michigan_lcs",
                 "model_type": "michigan_online_rule_population",
                 "population_size_final": int(len(final_rules)),
+                "selected_rule_count": int(len([r for r in final_rules if r.rule_id != "michigan_default_prior"])),
+                "selected_atom_count": int(sum(len(r.atoms) for r in final_rules if r.rule_id != "michigan_default_prior")),
                 "epochs": int(self.epochs),
                 "covering_probability": float(self.covering_probability),
                 "mutation_rate": float(self.mutation_rate),
                 "learning_rate": float(self.learning_rate),
+                "max_final_rules": None if self.max_final_rules is None else int(self.max_final_rules),
             },
         )
         self.ruleset_.validate()

@@ -189,6 +189,23 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
+        "wrapper_michigan_compact": EstimatorSpec(
+            name="wrapper_michigan_compact",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="michigan",
+                backend_params={
+                    "population_size": 90,
+                    "epochs": 14,
+                    "max_atoms_per_rule": 2,
+                    "learning_rate": 0.07,
+                    "mutation_rate": 0.08,
+                    "covering_probability": 0.14,
+                    "min_rule_fitness": 0.03,
+                    "max_final_rules": 20,
+                },
+                random_state=0,
+            ),
+        ),
         # GP naming:
         # - `gp` is the recommended strong benchmark default (residual covering).
         # - `gp_fast` keeps the earlier lightweight fast configuration.

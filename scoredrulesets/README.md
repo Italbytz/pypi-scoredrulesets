@@ -77,6 +77,7 @@ See `examples/README.md` for runnable Pittsburgh backend demos:
 - direct estimator demo: `examples/example_pittsburgh_backend.py`
 - wrapper backend demo: `examples/example_pittsburgh_wrapper.py`
 - Michigan wrapper demo: `examples/example_michigan_wrapper.py`
+- Michigan direct estimator demo: `examples/example_michigan_backend.py`
 
 ## logicGP-Import
 

@@ -98,11 +98,47 @@ Available profiles:
 - `default`
 - `fast`
 - `strong`
+- `compact`
 
 When to use which profile:
 - `fast`: quickest Michigan sanity checks and CI-smoke style runs
 - `default`: balanced Michigan baseline for normal local experiments
 - `strong`: larger Michigan population/epochs when model quality matters more than runtime
+- `compact`: stronger Michigan training with explicit final rule cap for shorter, more readable models
+
+## Michigan Direct Estimator
+
+File: `examples/example_michigan_backend.py`
+
+What it shows:
+- direct training with `MichiganRuleSetClassifier`
+- metadata and ruleset table output
+- mini comparison against `NativeScoredRuleSetClassifier` and `GeneticScoredRuleSetClassifier`
+
+Run:
+
+```bash
+python examples/example_michigan_backend.py
+```
+
+Run with profile and seed:
+
+```bash
+python examples/example_michigan_backend.py --profile fast --random-state 42
+python examples/example_michigan_backend.py --profile strong --random-state 0
+```
+
+Available profiles:
+- `default`
+- `fast`
+- `strong`
+- `compact`
+
+When to use which profile:
+- `fast`: quickest direct-estimator smoke checks
+- `default`: balanced direct Michigan baseline for local experiments
+- `strong`: larger direct Michigan search budget for quality-focused runs
+- `compact`: quality-oriented direct training with explicit final rule cap
 
 ## Quick smoke check
 

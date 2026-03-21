@@ -87,6 +87,24 @@ def test_benchmarking_estimator_specs_include_michigan_profiles():
     assert "wrapper_michigan" in specs
     assert "wrapper_michigan_fast" in specs
     assert "wrapper_michigan_strong" in specs
+    assert "wrapper_michigan_compact" in specs
+
+
+def test_michigan_estimator_compact_max_final_rules():
+    X, y = load_iris(return_X_y=True)
+    clf = MichiganRuleSetClassifier(
+        population_size=100,
+        epochs=12,
+        max_atoms_per_rule=3,
+        max_final_rules=12,
+        random_state=0,
+    )
+    clf.fit(X, y)
+
+    ruleset = clf.to_ruleset()
+    non_default = [r for r in ruleset.rules if r.rule_id != "michigan_default_prior"]
+    assert len(non_default) <= 12
+    assert ruleset.metadata["max_final_rules"] == 12
 
 
 def test_michigan_wrapper_example_run_demo_smoke():
@@ -112,11 +130,44 @@ def test_michigan_wrapper_example_profile_smoke():
         / "example_michigan_wrapper.py"
     )
     module_globals = runpy.run_path(str(example_path))
-    result = module_globals["run_demo"](random_state=0, profile="strong")
+    result = module_globals["run_demo"](random_state=0, profile="compact")
 
-    assert result["profile"] == "strong"
+    assert result["profile"] == "compact"
     meta = result["wrapper_michigan"]["metadata"]
     assert meta["source"] == "michigan_lcs"
     assert meta["epochs"] >= 8
+    assert meta["max_final_rules"] == 20
+
+
+def test_michigan_example_run_demo_smoke():
+    example_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "example_michigan_backend.py"
+    )
+    module_globals = runpy.run_path(str(example_path))
+    result = module_globals["run_demo"](random_state=0)
+
+    assert result["dataset"] == "sklearn_iris"
+    assert result["profile"] == "default"
+    assert result["michigan"]["metadata"]["source"] == "michigan_lcs"
+    assert result["michigan"]["n_rules"] > 0
+    assert {row["name"] for row in result["comparison"]} == {"native", "gp"}
+
+
+def test_michigan_example_profile_smoke():
+    example_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "example_michigan_backend.py"
+    )
+    module_globals = runpy.run_path(str(example_path))
+    result = module_globals["run_demo"](random_state=0, profile="compact")
+
+    assert result["profile"] == "compact"
+    meta = result["michigan"]["metadata"]
+    assert meta["source"] == "michigan_lcs"
+    assert meta["epochs"] >= 8
+    assert meta["max_final_rules"] == 20
 
 
