@@ -59,8 +59,14 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return pittsburgh_cls(**params)
 
+    if backend_key == "michigan":
+        michigan_cls = _resolve_michigan_class()
+        if random_state is not None and _supports_kwarg(michigan_cls, "random_state"):
+            params.setdefault("random_state", random_state)
+        return michigan_cls(**params)
+
     raise ValueError(
-        f"Unknown backend '{backend}'. Supported backends: 'cart', 'hs', 'rulekit', 'exstracs', 'logicgp', 'pittsburgh'."
+        f"Unknown backend '{backend}'. Supported backends: 'cart', 'hs', 'rulekit', 'exstracs', 'logicgp', 'pittsburgh', 'michigan'."
     )
 
 
@@ -202,6 +208,18 @@ def _resolve_pittsburgh_class():
     except ImportError as e:
         raise ImportError(
             "backend='pittsburgh' could not load PittsburghRuleSetClassifier. "
+            f"Import error: {e}"
+        ) from e
+
+
+def _resolve_michigan_class():
+    try:
+        from .michigan import MichiganRuleSetClassifier
+
+        return MichiganRuleSetClassifier
+    except ImportError as e:
+        raise ImportError(
+            "backend='michigan' could not load MichiganRuleSetClassifier. "
             f"Import error: {e}"
         ) from e
 

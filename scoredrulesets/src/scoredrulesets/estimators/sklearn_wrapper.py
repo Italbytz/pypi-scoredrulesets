@@ -96,6 +96,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "PittsburghRuleSetClassifier has no 'ruleset_' after fit(). "
                     "Please check pittsburgh.py for errors."
                 )
+        elif backend_lower == "michigan":
+            if hasattr(self.estimator_, "ruleset_"):
+                self.ruleset_ = self.estimator_.ruleset_
+            else:
+                raise RuntimeError(
+                    "MichiganRuleSetClassifier has no 'ruleset_' after fit(). "
+                    "Please check michigan.py for errors."
+                )
         else:
             # Tree-basierte Transformation (CART, HS)
             transform_cfg = TreeTransformParams(**(self.transform_params or {}))
@@ -107,7 +115,13 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
             )
 
         # rulekit/exstracs/logicgp: Prediction immer ueber ScoredRuleSet routen
-        self.is_ruleset_mode_ = backend_lower in ("rulekit", "exstracs", "logicgp", "pittsburgh")
+        self.is_ruleset_mode_ = backend_lower in (
+            "rulekit",
+            "exstracs",
+            "logicgp",
+            "pittsburgh",
+            "michigan",
+        )
         return self
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:

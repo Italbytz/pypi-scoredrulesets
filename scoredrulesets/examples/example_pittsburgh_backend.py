@@ -10,6 +10,7 @@ This script demonstrates three things:
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -29,6 +30,55 @@ from scoredrulesets import (
 )
 
 
+PROFILE_BACKEND_PARAMS: dict[str, dict[str, Any]] = {
+    "default": {
+        "max_rules": 5,
+        "candidate_pool_size": 20,
+        "beam_width": 6,
+        "max_iterations": 12,
+        "validation_fraction": 0.2,
+        "complexity_penalty": 0.01,
+    },
+    "fast": {
+        "max_rules": 4,
+        "candidate_pool_size": 12,
+        "beam_width": 4,
+        "max_iterations": 6,
+        "validation_fraction": 0.15,
+        "complexity_penalty": 0.012,
+    },
+    "strong": {
+        "max_rules": 6,
+        "candidate_pool_size": 32,
+        "beam_width": 10,
+        "max_iterations": 20,
+        "validation_fraction": 0.25,
+        "complexity_penalty": 0.008,
+    },
+    "diverse": {
+        "max_rules": 7,
+        "min_samples_leaf": 3,
+        "candidate_pool_size": 36,
+        "beam_width": 10,
+        "max_iterations": 18,
+        "validation_fraction": 0.25,
+        "complexity_penalty": 0.01,
+    },
+}
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the direct Pittsburgh estimator example")
+    parser.add_argument(
+        "--profile",
+        choices=sorted(PROFILE_BACKEND_PARAMS.keys()),
+        default="default",
+        help="Pittsburgh estimator profile to run",
+    )
+    parser.add_argument("--random-state", type=int, default=42)
+    return parser.parse_args()
+
+
 def _evaluate_classifier(name: str, clf, X_train, X_test, y_train, y_test) -> dict[str, object]:
     clf.fit(X_train, y_train)
     y_pred = clf.predict(X_test)
@@ -46,7 +96,12 @@ def _evaluate_classifier(name: str, clf, X_train, X_test, y_train, y_test) -> di
     }
 
 
-def run_demo(random_state: int = 42) -> dict[str, object]:
+def run_demo(random_state: int = 42, profile: str = "default") -> dict[str, object]:
+    if profile not in PROFILE_BACKEND_PARAMS:
+        raise ValueError(
+            f"Unknown profile '{profile}'. Available: {sorted(PROFILE_BACKEND_PARAMS)}"
+        )
+
     iris = load_iris()
     X_train, X_test, y_train, y_test = train_test_split(
         iris.data,
@@ -57,12 +112,7 @@ def run_demo(random_state: int = 42) -> dict[str, object]:
     )
 
     pittsburgh = PittsburghRuleSetClassifier(
-        max_rules=5,
-        candidate_pool_size=20,
-        beam_width=6,
-        max_iterations=12,
-        validation_fraction=0.2,
-        complexity_penalty=0.01,
+        **dict(PROFILE_BACKEND_PARAMS[profile]),
         random_state=random_state,
     )
     pittsburgh_result = _evaluate_classifier(
@@ -103,6 +153,7 @@ def run_demo(random_state: int = 42) -> dict[str, object]:
 
     return {
         "dataset": "sklearn_iris",
+        "profile": profile,
         "train_size": len(y_train),
         "test_size": len(y_test),
         "pittsburgh": pittsburgh_result,
@@ -111,13 +162,15 @@ def run_demo(random_state: int = 42) -> dict[str, object]:
 
 
 def main() -> None:
-    result = run_demo(random_state=42)
+    args = _parse_args()
+    result = run_demo(random_state=args.random_state, profile=args.profile)
     pittsburgh = cast(dict[str, Any], result["pittsburgh"])
 
     print("=" * 80)
     print("Pittsburgh backend example")
     print("=" * 80)
     print(f"Dataset: {result['dataset']}")
+    print(f"Profile: {result['profile']}")
     print(f"Train size: {result['train_size']} | Test size: {result['test_size']}")
     print()
 

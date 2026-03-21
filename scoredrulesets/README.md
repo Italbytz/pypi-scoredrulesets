@@ -70,6 +70,14 @@ ruleset = clf.to_ruleset()
 print(format_ruleset_table(ruleset))
 ```
 
+## Examples
+
+See `examples/README.md` for runnable Pittsburgh backend demos:
+
+- direct estimator demo: `examples/example_pittsburgh_backend.py`
+- wrapper backend demo: `examples/example_pittsburgh_wrapper.py`
+- Michigan wrapper demo: `examples/example_michigan_wrapper.py`
+
 ## logicGP-Import
 
 ```python

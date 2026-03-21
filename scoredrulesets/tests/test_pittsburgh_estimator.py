@@ -118,10 +118,26 @@ def test_pittsburgh_example_run_demo_smoke():
     result = module_globals["run_demo"](random_state=0)
 
     assert result["dataset"] == "sklearn_iris"
+    assert result["profile"] == "default"
     assert result["pittsburgh"]["metadata"]["source"] == "pittsburgh"
     assert result["pittsburgh"]["n_rules"] > 0
     assert len(result["comparison"]) == 2
     assert {row["name"] for row in result["comparison"]} == {"native", "gp"}
+
+
+def test_pittsburgh_example_profile_smoke():
+    example_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "example_pittsburgh_backend.py"
+    )
+    module_globals = runpy.run_path(str(example_path))
+    result = module_globals["run_demo"](random_state=0, profile="strong")
+
+    assert result["profile"] == "strong"
+    meta = result["pittsburgh"]["metadata"]
+    assert meta["source"] == "pittsburgh"
+    assert meta["beam_width"] >= 6
 
 
 def test_pittsburgh_wrapper_example_run_demo_smoke():
@@ -134,9 +150,25 @@ def test_pittsburgh_wrapper_example_run_demo_smoke():
     result = module_globals["run_demo"](random_state=0)
 
     assert result["dataset"] == "sklearn_iris"
+    assert result["profile"] == "default"
     assert result["wrapper_pittsburgh"]["metadata"]["source"] == "pittsburgh"
     assert result["wrapper_pittsburgh"]["n_rules"] > 0
     assert len(result["comparison"]) == 2
     assert {row["name"] for row in result["comparison"]} == {"wrapper_cart_d2", "wrapper_cart_d4"}
+
+
+def test_pittsburgh_wrapper_example_profile_smoke():
+    example_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "example_pittsburgh_wrapper.py"
+    )
+    module_globals = runpy.run_path(str(example_path))
+    result = module_globals["run_demo"](random_state=0, profile="strong")
+
+    assert result["profile"] == "strong"
+    meta = result["wrapper_pittsburgh"]["metadata"]
+    assert meta["source"] == "pittsburgh"
+    assert meta["beam_width"] >= 6
 
 

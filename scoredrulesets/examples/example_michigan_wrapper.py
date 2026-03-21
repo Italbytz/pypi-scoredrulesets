@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Example: Pittsburgh backend via ScoredRuleSetClassifier wrapper.
-
-This script demonstrates:
-1. Training through `ScoredRuleSetClassifier(backend="pittsburgh")`
-2. Inspecting scored-ruleset metadata and a compact rules table
-3. Comparing wrapper-pittsburgh against wrapper-cart and native
-"""
+"""Example: Michigan LCS backend via ScoredRuleSetClassifier wrapper."""
 
 from __future__ import annotations
 
@@ -26,61 +20,46 @@ from scoredrulesets import ScoredRuleSetClassifier, format_ruleset_table
 
 PROFILE_BACKEND_PARAMS: dict[str, dict[str, Any]] = {
     "default": {
-        "max_rules": 5,
-        "candidate_pool_size": 20,
-        "beam_width": 6,
-        "max_iterations": 12,
-        "validation_fraction": 0.2,
-        "complexity_penalty": 0.01,
+        "population_size": 60,
+        "epochs": 8,
+        "max_atoms_per_rule": 2,
+        "learning_rate": 0.08,
+        "mutation_rate": 0.08,
+        "covering_probability": 0.12,
     },
     "fast": {
-        "max_rules": 4,
-        "candidate_pool_size": 12,
-        "beam_width": 4,
-        "max_iterations": 6,
-        "validation_fraction": 0.15,
-        "complexity_penalty": 0.012,
+        "population_size": 36,
+        "epochs": 5,
+        "max_atoms_per_rule": 2,
+        "learning_rate": 0.10,
+        "mutation_rate": 0.05,
+        "covering_probability": 0.10,
     },
     "strong": {
-        "max_rules": 6,
-        "candidate_pool_size": 32,
-        "beam_width": 10,
-        "max_iterations": 20,
-        "validation_fraction": 0.25,
-        "complexity_penalty": 0.008,
-    },
-    "diverse": {
-        "max_rules": 7,
-        "min_samples_leaf": 3,
-        "candidate_pool_size": 36,
-        "beam_width": 10,
-        "max_iterations": 18,
-        "validation_fraction": 0.25,
-        "complexity_penalty": 0.01,
+        "population_size": 100,
+        "epochs": 14,
+        "max_atoms_per_rule": 3,
+        "learning_rate": 0.07,
+        "mutation_rate": 0.10,
+        "covering_probability": 0.15,
+        "min_rule_fitness": 0.015,
     },
 }
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the Pittsburgh wrapper example")
+    parser = argparse.ArgumentParser(description="Run the Michigan wrapper example")
     parser.add_argument(
         "--profile",
         choices=sorted(PROFILE_BACKEND_PARAMS.keys()),
         default="default",
-        help="Pittsburgh backend profile to run",
+        help="Michigan backend profile to run",
     )
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
 
 
-def _evaluate_wrapper(
-    name: str,
-    clf: ScoredRuleSetClassifier,
-    X_train,
-    X_test,
-    y_train,
-    y_test,
-) -> dict[str, Any]:
+def _evaluate_wrapper(name: str, clf: ScoredRuleSetClassifier, X_train, X_test, y_train, y_test) -> dict[str, Any]:
     clf.fit(X_train, y_train)
     y_pred = clf.predict(X_test)
 
@@ -114,14 +93,14 @@ def run_demo(random_state: int = 42, profile: str = "default") -> dict[str, Any]
         stratify=iris.target,
     )
 
-    wrapper_pittsburgh = ScoredRuleSetClassifier(
-        backend="pittsburgh",
+    wrapper_michigan = ScoredRuleSetClassifier(
+        backend="michigan",
         backend_params=dict(PROFILE_BACKEND_PARAMS[profile]),
         random_state=random_state,
     )
-    pittsburgh_result = _evaluate_wrapper(
-        "wrapper_pittsburgh",
-        wrapper_pittsburgh,
+    michigan_result = _evaluate_wrapper(
+        "wrapper_michigan",
+        wrapper_michigan,
         X_train,
         X_test,
         y_train,
@@ -158,7 +137,7 @@ def run_demo(random_state: int = 42, profile: str = "default") -> dict[str, Any]
         "profile": profile,
         "train_size": len(y_train),
         "test_size": len(y_test),
-        "wrapper_pittsburgh": pittsburgh_result,
+        "wrapper_michigan": michigan_result,
         "comparison": comparison_results,
     }
 
@@ -166,35 +145,35 @@ def run_demo(random_state: int = 42, profile: str = "default") -> dict[str, Any]
 def main() -> None:
     args = _parse_args()
     result = run_demo(random_state=args.random_state, profile=args.profile)
-    pittsburgh = result["wrapper_pittsburgh"]
+    michigan = result["wrapper_michigan"]
 
     print("=" * 80)
-    print("Pittsburgh wrapper example")
+    print("Michigan wrapper example")
     print("=" * 80)
     print(f"Dataset: {result['dataset']}")
     print(f"Profile: {result['profile']}")
     print(f"Train size: {result['train_size']} | Test size: {result['test_size']}")
     print()
 
-    print("ScoredRuleSetClassifier(backend='pittsburgh')")
+    print("ScoredRuleSetClassifier(backend='michigan')")
     print("-" * 80)
-    print(f"F1 macro: {pittsburgh['f1_macro']:.4f}")
-    print(f"Rules:    {pittsburgh['n_rules']}")
-    print(f"Atoms:    {pittsburgh['n_atoms']}")
+    print(f"F1 macro: {michigan['f1_macro']:.4f}")
+    print(f"Rules:    {michigan['n_rules']}")
+    print(f"Atoms:    {michigan['n_atoms']}")
     print("Metadata:")
-    for key, value in sorted(pittsburgh["metadata"].items()):
+    for key, value in sorted(michigan["metadata"].items()):
         print(f"  - {key}: {value}")
     print()
     print("Learned ruleset")
     print("-" * 80)
-    print(format_ruleset_table(pittsburgh["ruleset"]))
+    print(format_ruleset_table(michigan["ruleset"]))
     print()
 
     print("Mini wrapper comparison")
     print("-" * 80)
     print(f"{'estimator':20} {'f1_macro':>10} {'rules':>8} {'atoms':>8}")
     print("-" * 80)
-    rows = [pittsburgh] + result["comparison"]
+    rows = [michigan] + result["comparison"]
     for row in rows:
         print(f"{row['name']:20} {row['f1_macro']:10.4f} {row['n_rules']:8d} {row['n_atoms']:8d}")
     print("-" * 80)
@@ -202,5 +181,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 

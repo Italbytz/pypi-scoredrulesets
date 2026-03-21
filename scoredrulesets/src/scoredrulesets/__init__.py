@@ -23,6 +23,7 @@ from .benchmarking import (
 )
 from .estimators.gp_native import GeneticScoredRuleSetClassifier
 from .estimators.logicgp import LogicGPClassifier
+from .estimators.michigan import MichiganRuleSetClassifier
 from .estimators.native import NativeScoredRuleSetClassifier
 from .estimators.pittsburgh import PittsburghRuleSetClassifier
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
@@ -42,6 +43,7 @@ __all__ = [
     "BenchmarkResult",
     "GeneticScoredRuleSetClassifier",
     "LogicGPClassifier",
+    "MichiganRuleSetClassifier",
     "NativeScoredRuleSetClassifier",
     "PittsburghRuleSetClassifier",
     "ScoredRuleSetClassifier",
