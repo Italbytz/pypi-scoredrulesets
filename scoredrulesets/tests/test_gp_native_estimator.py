@@ -98,4 +98,24 @@ def test_gp_native_estimator_score_mode_auto_metadata():
     assert clf.to_ruleset().metadata["score_mode"] == "log_proba"
 
 
+def test_gp_native_estimator_can_sample_between_atoms():
+    X = np.array([[0.0], [1.0], [2.0], [3.0], [4.0], [5.0]])
+    clf = GeneticScoredRuleSetClassifier(random_state=0)
+    clf._rng_ = np.random.default_rng(0)
+    specs = clf._build_feature_specs(X)
+
+    ops = [clf._random_atom(specs).op for _ in range(120)]
+    assert "between" in ops
+
+
+def test_gp_native_estimator_can_sample_in_atoms():
+    X = np.array([["red"], ["blue"], ["green"], ["yellow"]], dtype=object)
+    clf = GeneticScoredRuleSetClassifier(random_state=0)
+    clf._rng_ = np.random.default_rng(1)
+    specs = clf._build_feature_specs(X)
+
+    ops = [clf._random_atom(specs).op for _ in range(120)]
+    assert "in" in ops
+
+
 

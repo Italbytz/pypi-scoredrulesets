@@ -79,6 +79,8 @@ print(clf.predict(X[:3]))
 # NativeScoredRuleSetClassifier(enable_categorical_rules=False)
 ```
 
+Der native Lerner erzeugt je nach Datenlage Atome mit `<=`, `>`, `between`, `==` und `in`.
+
 ## Nativer GP-Estimator
 
 ```python
@@ -97,6 +99,8 @@ gp = GeneticScoredRuleSetClassifier(
 gp.fit(X, y)
 print(gp.predict(X[:3]))
 ```
+
+Der GP-Lerner durchsucht ebenfalls Atome mit `<=`, `>`, `between`, `==` und `in`.
 
 ## JSON-Format (Kurz)
 

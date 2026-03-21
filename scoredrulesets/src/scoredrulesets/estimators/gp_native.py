@@ -167,10 +167,37 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
             if np.issubdtype(arr.dtype, np.number):
                 values = np.unique(arr.astype(float))
                 thresholds = ((values[:-1] + values[1:]) / 2.0).tolist() if values.size >= 2 else []
-                specs.append({"idx": feature_idx, "kind": "num", "thresholds": thresholds})
+                intervals = []
+                if values.size >= 3:
+                    q_points = np.unique(np.quantile(values, [0.15, 0.35, 0.5, 0.65, 0.85]))
+                    for i in range(len(q_points) - 1):
+                        low = float(q_points[i])
+                        high = float(q_points[i + 1])
+                        if low < high:
+                            intervals.append((low, high))
+                specs.append(
+                    {
+                        "idx": feature_idx,
+                        "kind": "num",
+                        "thresholds": thresholds,
+                        "intervals": intervals,
+                    }
+                )
             else:
                 categories = np.unique(np.asarray(col, dtype=object)).tolist()
-                specs.append({"idx": feature_idx, "kind": "cat", "categories": categories})
+                groups = []
+                if len(categories) >= 3:
+                    for i in range(len(categories)):
+                        for j in range(i + 1, len(categories)):
+                            groups.append([categories[i], categories[j]])
+                specs.append(
+                    {
+                        "idx": feature_idx,
+                        "kind": "cat",
+                        "categories": categories,
+                        "groups": groups,
+                    }
+                )
         return specs
 
     def _random_rule_gene(self, specs: list[dict[str, object]]) -> _RuleGene:
@@ -183,13 +210,29 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
     def _random_atom(self, specs: list[dict[str, object]]) -> _AtomGene:
         spec = specs[int(self._rng_.integers(0, len(specs)))]
         feature_idx = int(spec["idx"])
-        if spec["kind"] == "num" and spec["thresholds"]:
-            threshold = spec["thresholds"][int(self._rng_.integers(0, len(spec["thresholds"]))) ]
-            op = "<=" if self._rng_.random() < 0.5 else ">"
-            return _AtomGene(feature_idx=feature_idx, op=op, value=float(threshold))
+        if spec["kind"] == "num":
+            thresholds = spec.get("thresholds", [])
+            intervals = spec.get("intervals", [])
+            ops = []
+            if thresholds:
+                ops.extend(["<=", ">"])
+            if intervals:
+                ops.append("between")
+
+            if ops:
+                op = ops[int(self._rng_.integers(0, len(ops)))]
+                if op in {"<=", ">"}:
+                    threshold = thresholds[int(self._rng_.integers(0, len(thresholds)))]
+                    return _AtomGene(feature_idx=feature_idx, op=op, value=float(threshold))
+                interval = intervals[int(self._rng_.integers(0, len(intervals)))]
+                return _AtomGene(feature_idx=feature_idx, op="between", value=[float(interval[0]), float(interval[1])])
 
         categories = spec.get("categories", [])
+        groups = spec.get("groups", [])
         if categories:
+            if groups and self._rng_.random() < 0.5:
+                value = groups[int(self._rng_.integers(0, len(groups)))]
+                return _AtomGene(feature_idx=feature_idx, op="in", value=list(value))
             value = categories[int(self._rng_.integers(0, len(categories)))]
             return _AtomGene(feature_idx=feature_idx, op="==", value=value)
 
@@ -204,8 +247,14 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 mask &= np.asarray(col, dtype=float) <= float(atom.value)
             elif atom.op == ">":
                 mask &= np.asarray(col, dtype=float) > float(atom.value)
+            elif atom.op == "between":
+                low, high = atom.value
+                num_col = np.asarray(col, dtype=float)
+                mask &= (num_col >= float(low)) & (num_col <= float(high))
             elif atom.op == "==":
                 mask &= np.asarray(col, dtype=object) == atom.value
+            elif atom.op == "in":
+                mask &= np.isin(np.asarray(col, dtype=object), list(atom.value))
         return mask
 
     def _fitness(self, gene: _RuleGene, X: np.ndarray, y_idx: np.ndarray, n_classes: int) -> float:
@@ -266,7 +315,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 Atom(
                     feature=str(self.feature_names_in_[a.feature_idx]),
                     op=a.op,
-                    value=float(a.value) if a.op in {"<=", ">"} else a.value,
+                    value=self._atom_value_to_schema(a),
                 )
                 for a in gene.atoms
             ]
@@ -297,7 +346,27 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     @staticmethod
     def _gene_key(gene: _RuleGene) -> tuple[tuple[int, str, str], ...]:
-        as_tuples = [(a.feature_idx, a.op, str(a.value)) for a in gene.atoms]
+        as_tuples = []
+        for atom in gene.atoms:
+            if atom.op == "between":
+                low, high = atom.value
+                value_repr = f"{float(low):.12g}:{float(high):.12g}"
+            elif atom.op == "in":
+                value_repr = "|".join(sorted(str(v) for v in atom.value))
+            else:
+                value_repr = str(atom.value)
+            as_tuples.append((atom.feature_idx, atom.op, value_repr))
         return tuple(sorted(as_tuples))
+
+    @staticmethod
+    def _atom_value_to_schema(atom: _AtomGene):
+        if atom.op in {"<=", ">"}:
+            return float(atom.value)
+        if atom.op == "between":
+            low, high = atom.value
+            return [float(low), float(high)]
+        if atom.op == "in":
+            return list(atom.value)
+        return atom.value
 
 

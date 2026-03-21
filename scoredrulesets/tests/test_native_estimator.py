@@ -81,3 +81,32 @@ def test_native_estimator_can_disable_categorical_rules():
     assert not any(atom.op == "==" for rule in ruleset.rules for atom in rule.atoms)
 
 
+def test_native_estimator_learns_between_rules_for_numeric_intervals():
+    X = np.array([[0.0], [1.0], [2.0], [3.0], [4.0], [5.0], [6.0], [7.0], [8.0], [9.0]])
+    y = np.array([0, 0, 0, 1, 1, 1, 1, 0, 0, 0])
+
+    clf = NativeScoredRuleSetClassifier(max_rules=8, min_samples_leaf=1)
+    clf.fit(X, y)
+    ruleset = clf.to_ruleset()
+
+    assert any(atom.op == "between" for rule in ruleset.rules for atom in rule.atoms)
+
+
+def test_native_estimator_learns_in_rules_for_category_groups():
+    X = np.array(
+        [["red"], ["blue"], ["green"], ["yellow"], ["red"], ["blue"], ["green"], ["yellow"]],
+        dtype=object,
+    )
+    y = np.array([1, 1, 0, 0, 1, 1, 0, 0])
+
+    clf = NativeScoredRuleSetClassifier(
+        enable_categorical_rules=True,
+        max_rules=8,
+        min_samples_leaf=1,
+    )
+    clf.fit(X, y)
+    ruleset = clf.to_ruleset()
+
+    assert any(atom.op == "in" for rule in ruleset.rules for atom in rule.atoms)
+
+
