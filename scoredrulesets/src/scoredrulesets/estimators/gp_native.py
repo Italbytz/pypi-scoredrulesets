@@ -328,6 +328,8 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         train_idx: np.ndarray,
         val_idx: np.ndarray | None,
         context_genes: list[_RuleGene] | None = None,
+        context_cache_train: dict[str, object] | None = None,
+        context_cache_val: dict[str, object] | None = None,
     ) -> float:
         if self._resolved_evolution_fitness_mode_ == "residual_covering":
             train_score = self._contextual_quality(
@@ -337,6 +339,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 n_classes,
                 train_idx,
                 context_genes or [],
+                context_cache=context_cache_train,
             )
             if train_score <= -1e8:
                 return train_score
@@ -351,6 +354,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 n_classes,
                 val_idx,
                 context_genes or [],
+                context_cache=context_cache_val,
             )
             if val_score <= -1e8:
                 return val_score
@@ -390,6 +394,22 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
             return -1e9
 
         counts = np.bincount(y_idx[subset_idx][mask], minlength=n_classes).astype(float)
+        return self._quality_from_counts(
+            counts=counts,
+            support=support,
+            subset_size=subset_idx.size,
+            n_classes=n_classes,
+            complexity=len(gene.atoms),
+        )
+
+    def _quality_from_counts(
+        self,
+        counts: np.ndarray,
+        support: int,
+        subset_size: int,
+        n_classes: int,
+        complexity: int,
+    ) -> float:
         total = max(np.sum(counts), 1.0)
         probs = counts / total
         top_idx = int(np.argmax(probs))
@@ -397,8 +417,8 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         top_two = np.partition(probs, -2)[-2:] if probs.size >= 2 else np.asarray([top_prob, 0.0])
         margin = float(top_two[-1] - top_two[-2])
 
-        coverage = float(support / subset_idx.size)
-        complexity = self.complexity_penalty * len(gene.atoms)
+        coverage = float(support / max(subset_size, 1))
+        complexity_penalty = self.complexity_penalty * complexity
 
         class_prior = float(self._class_prior_[top_idx]) if hasattr(self, "_class_prior_") else (1.0 / max(n_classes, 1))
         lift = top_prob - class_prior
@@ -409,7 +429,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
             + 0.5 * margin
             + self.class_balance_weight * lift
             + 0.3 * coverage
-            - complexity
+            - complexity_penalty
         )
 
         # Regeln, die kaum besser als Prior sind, explizit abwerten.
@@ -426,31 +446,27 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         n_classes: int,
         subset_idx: np.ndarray,
         context_genes: list[_RuleGene],
+        context_cache: dict[str, object] | None = None,
     ) -> float:
         if subset_idx.size == 0:
             return -1e9
 
-        single_quality = self._subset_quality(gene, X, y_idx, n_classes, subset_idx)
-        if single_quality <= -1e8:
-            return single_quality
+        cache = context_cache or self._build_context_cache(context_genes, X, y_idx, n_classes, subset_idx)
+        eval_item = self._cached_gene_eval(gene, cache, n_classes)
+        if eval_item is None:
+            return -1e9
+        candidate_mask, _, candidate_rule_scores, single_quality = eval_item
 
-        base_scores = self._scores_from_genes(context_genes, X, y_idx, n_classes, subset_idx)
-        y_subset = y_idx[subset_idx]
-        base_f1 = self._macro_f1_from_scores(base_scores, y_subset)
+        base_scores = cache["base_scores"]
+        y_subset = cache["y_subset"]
+        base_f1 = float(cache["base_f1"])
 
         candidate_scores = base_scores.copy()
-        candidate_mask = self._rule_mask(gene, X[subset_idx])
-        if int(candidate_mask.sum()) < self.min_samples_leaf:
-            return -1e9
-        candidate_rule_scores = np.asarray(
-            self._rule_scores_from_gene(gene, X, y_idx, n_classes),
-            dtype=float,
-        )
         candidate_scores[candidate_mask] += candidate_rule_scores
         candidate_f1 = self._macro_f1_from_scores(candidate_scores, y_subset)
         delta_f1 = candidate_f1 - base_f1
 
-        residual_mask = np.argmax(base_scores, axis=1) != y_subset
+        residual_mask = cache["residual_mask"]
         residual_gain = 0.0
         if int(residual_mask.sum()) > 0:
             focused = candidate_mask & residual_mask
@@ -460,12 +476,10 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 residual_gain = float(np.max(residual_counts) / residual_total) * float(focused.sum() / residual_mask.sum())
 
         overlap_penalty = 0.0
-        if context_genes:
+        context_masks = cache["context_masks"]
+        if context_masks:
             candidate_support_mask = candidate_mask
-            overlaps = [
-                self._mask_jaccard(candidate_support_mask, self._rule_mask(ctx_gene, X[subset_idx]))
-                for ctx_gene in context_genes
-            ]
+            overlaps = [self._mask_jaccard(candidate_support_mask, ctx_mask) for ctx_mask in context_masks]
             overlap_penalty = self.diversity_penalty * max(overlaps)
 
         return float(
@@ -474,6 +488,64 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
             + self.residual_focus_weight * residual_gain
             - overlap_penalty
         )
+
+    def _build_context_cache(
+        self,
+        context_genes: list[_RuleGene],
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        subset_idx: np.ndarray,
+    ) -> dict[str, object]:
+        base_scores = self._scores_from_genes(context_genes, X, y_idx, n_classes, subset_idx)
+        y_subset = y_idx[subset_idx]
+        base_f1 = self._macro_f1_from_scores(base_scores, y_subset)
+        residual_mask = np.argmax(base_scores, axis=1) != y_subset
+        X_subset = X[subset_idx]
+        context_masks = [self._rule_mask(gene, X_subset) for gene in context_genes]
+        return {
+            "subset_idx": subset_idx,
+            "X_subset": X_subset,
+            "y_subset": y_subset,
+            "base_scores": base_scores,
+            "base_f1": float(base_f1),
+            "residual_mask": residual_mask,
+            "context_masks": context_masks,
+            "gene_eval_cache": {},
+        }
+
+    def _cached_gene_eval(
+        self,
+        gene: _RuleGene,
+        context_cache: dict[str, object],
+        n_classes: int,
+    ) -> tuple[np.ndarray, int, np.ndarray, float] | None:
+        cache = context_cache["gene_eval_cache"]
+        key = self._gene_key(gene)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        X_subset = context_cache["X_subset"]
+        y_subset = context_cache["y_subset"]
+        mask = self._rule_mask(gene, X_subset)
+        support = int(mask.sum())
+        if support < self.min_samples_leaf:
+            cache[key] = None
+            return None
+
+        counts = np.bincount(y_subset[mask], minlength=n_classes).astype(float)
+        rule_scores = np.asarray(self._distribution_to_scores(counts), dtype=float)
+        single_quality = self._quality_from_counts(
+            counts=counts,
+            support=support,
+            subset_size=int(X_subset.shape[0]),
+            n_classes=n_classes,
+            complexity=len(gene.atoms),
+        )
+        value = (mask, support, rule_scores, float(single_quality))
+        cache[key] = value
+        return value
 
     def _train_val_indices(self, y_idx: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         n_samples = y_idx.shape[0]
@@ -837,9 +909,26 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         val_idx: np.ndarray | None,
         context_genes: list[_RuleGene] | None = None,
     ) -> list[tuple[float, int, _RuleGene]]:
+        context_cache_train = None
+        context_cache_val = None
+        if self._resolved_evolution_fitness_mode_ == "residual_covering":
+            context_cache_train = self._build_context_cache(context_genes or [], X, y_idx, n_classes, train_idx)
+            if val_idx is not None:
+                context_cache_val = self._build_context_cache(context_genes or [], X, y_idx, n_classes, val_idx)
+
         scored = []
         for ind in population:
-            quality = self._fitness(ind, X, y_idx, n_classes, train_idx, val_idx, context_genes=context_genes)
+            quality = self._fitness(
+                ind,
+                X,
+                y_idx,
+                n_classes,
+                train_idx,
+                val_idx,
+                context_genes=context_genes,
+                context_cache_train=context_cache_train,
+                context_cache_val=context_cache_val,
+            )
             complexity = len(ind.atoms)
             scored.append((float(quality), int(complexity), ind))
         return scored
