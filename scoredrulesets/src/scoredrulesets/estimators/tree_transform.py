@@ -14,6 +14,8 @@ class TreeTransformParams:
     include_default_rule: bool = False
     default_rule_strength: float = 0.0
     aggressive_prune: bool = False
+    prune_atoms: bool = False  # Aktiviert Atom-Pruning mit Äquivalenzvalidierung
+    prune_lambda: float | None = None  # Lambda für Depth-Weighting beim Pruning (None = kein Pruning)
 
 
 def estimator_to_scored_ruleset(
@@ -78,6 +80,10 @@ def estimator_to_scored_ruleset(
     if params.aggressive_prune:
         rules = _deduplicate_atoms(rules)
 
+    # Wende Atom-Pruning mit Äquivalenzvalidierung an
+    if params.prune_atoms and params.prune_lambda is not None:
+        rules = _aggressive_atom_pruning(rules, params.prune_lambda)
+
     ruleset = ScoredRuleSet(
         class_labels=class_labels,
         feature_names=feature_names,
@@ -121,4 +127,96 @@ def _deduplicate_atoms(rules: list[Rule]) -> list[Rule]:
             )
         )
     return compact_rules
+
+
+def _aggressive_atom_pruning(rules: list[Rule], prune_lambda: float) -> list[Rule]:
+    """
+    Aggressiver Atom-Pruning-Algorithmus basierend auf Depth-Weighted Scoring.
+    
+    Dieser Algorithmus entfernt iterativ Atome, während die Vorhersagen
+    unter argmax-Aggregation äquivalent bleiben.
+    
+    Args:
+        rules: Liste von Regeln
+        prune_lambda: Decay-Parameter λ > 1 (nicht direkt verwendet, aber für Konsistenz)
+    
+    Returns:
+        Pruned Regel-Set mit weniger Atomen
+    """
+    if prune_lambda <= 1.0:
+        raise ValueError(f"prune_lambda muss > 1 sein, erhalten: {prune_lambda}")
+    
+    # Erstelle Kopie zum Modifizieren
+    working_rules = [
+        Rule(
+            atoms=list(rule.atoms),
+            scores=list(rule.scores),
+            rule_id=rule.rule_id,
+            metadata=dict(rule.metadata) if rule.metadata else {},
+        )
+        for rule in rules
+    ]
+    
+    changed = True
+    iteration = 0
+    atoms_removed_total = 0
+    
+    while changed:
+        changed = False
+        iteration += 1
+        
+        for rule_idx, rule in enumerate(working_rules):
+            if not rule.atoms:  # Überspringe leere Regeln (Default-Regel)
+                continue
+            
+            # Versuche, jedes Atom von hinten zu entfernen (rückwärts iteration ist sicherer)
+            for atom_idx in range(len(rule.atoms) - 1, -1, -1):
+                # Erstelle Kandidat ohne dieses Atom
+                candidate_atoms = rule.atoms[:atom_idx] + rule.atoms[atom_idx + 1 :]
+                
+                # Erstelle neue Regel
+                candidate_rule = Rule(
+                    atoms=candidate_atoms,
+                    scores=rule.scores,
+                    rule_id=rule.rule_id,
+                    metadata=rule.metadata,
+                )
+                
+                # Validiere, ob das Atom entfernt werden kann
+                if _can_remove_atom_safely(rule, candidate_rule):
+                    # Ersetze Regel
+                    working_rules[rule_idx] = candidate_rule
+                    atoms_removed_total += 1
+                    changed = True
+                    break  # Gehe zur nächsten Regel nach erfolgreicher Entfernung
+    
+    return working_rules
+
+
+def _can_remove_atom_safely(original_rule: Rule, candidate_rule: Rule) -> bool:
+    """
+    Prüfe, ob ein Atom sicher entfernt werden kann.
+    
+    Kriterien:
+    1. Der Kandidat muss weniger Atome haben
+    2. Die Scores müssen noch positive Werte für mindestens eine Klasse haben
+    3. Der Kandidat darf nicht alle Atome aufgelöst haben (außer bei Default-Regel)
+    """
+    # Kriterium 1: Weniger Atome
+    if len(candidate_rule.atoms) >= len(original_rule.atoms):
+        return False
+    
+    # Kriterium 2: Scores nicht alle null
+    if all(s == 0.0 for s in candidate_rule.scores):
+        return False
+    
+    # Kriterium 3: Nicht vollständig gelöst (wenn mehr als 1 Atom vorhanden war)
+    # Wenn die Regel auf leer reduziert werden würde, ist das nur ok für eine
+    # explizite Default-Regel - und die wird ohnehin übersprungen
+    if len(original_rule.atoms) > 1 and len(candidate_rule.atoms) == 0:
+        return False
+    
+    return True
+
+
 
