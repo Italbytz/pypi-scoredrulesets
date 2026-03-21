@@ -47,8 +47,14 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return exstracs_cls(**params)
 
+    if backend_key == "logicgp":
+        logicgp_cls = _resolve_logicgp_class()
+        if random_state is not None and _supports_kwarg(logicgp_cls, "random_state"):
+            params.setdefault("random_state", random_state)
+        return logicgp_cls(**params)
+
     raise ValueError(
-        f"Unknown backend '{backend}'. Supported backends: 'cart', 'hs', 'rulekit', 'exstracs'."
+        f"Unknown backend '{backend}'. Supported backends: 'cart', 'hs', 'rulekit', 'exstracs', 'logicgp'."
     )
 
 
@@ -169,6 +175,18 @@ def _supports_kwarg(cls: type[Any], param_name: str) -> bool:
     except (TypeError, ValueError):
         return False
     return param_name in signature.parameters
+
+
+def _resolve_logicgp_class():
+    """Laedt die LogicGPClassifier-Klasse aus dem Projekt selbst."""
+    try:
+        from .logicgp import LogicGPClassifier
+        return LogicGPClassifier
+    except ImportError as e:
+        raise ImportError(
+            "backend='logicgp' konnte LogicGPClassifier nicht laden. "
+            f"Import-Fehler: {e}"
+        ) from e
 
 
 def _rulekit_jvm_hint() -> str:

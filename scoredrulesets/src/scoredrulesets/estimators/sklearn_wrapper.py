@@ -71,13 +71,22 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 class_labels=self.classes_.tolist(),
                 feature_names=self.feature_names_in_,
             )
-            
+
             # Wende ExSTraCS Shrinking an (falls konfiguriert)
             if self.exstracs_params:
                 self.ruleset_ = self._apply_exstracs_shrinking(
                     self.ruleset_,
                     X_valid,
                     y_valid,
+                )
+        elif backend_lower == "logicgp":
+            # logicGP verwaltet sein ScoredRuleSet intern – direkt uebernehmen.
+            if hasattr(self.estimator_, "ruleset_"):
+                self.ruleset_ = self.estimator_.ruleset_
+            else:
+                raise RuntimeError(
+                    "LogicGPClassifier hat kein 'ruleset_' nach fit(). "
+                    "Bitte logicgp.py auf Fehler pruefen."
                 )
         else:
             # Tree-basierte Transformation (CART, HS)
@@ -88,11 +97,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 feature_names=self.feature_names_in_,
                 params=transform_cfg,
             )
-        
-        # rulekit/exstracs: native predict gibt float-Labels zurueck, die als
-        # String nicht mit int-Labels uebereinstimmen -> Prediction immer ueber
-        # das ScoredRuleSet routen, damit Klassen-Labels korrekt sind.
-        self.is_ruleset_mode_ = backend_lower in ("rulekit", "exstracs")
+
+        # rulekit/exstracs/logicgp: Prediction immer ueber ScoredRuleSet routen
+        self.is_ruleset_mode_ = backend_lower in ("rulekit", "exstracs", "logicgp")
         return self
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:

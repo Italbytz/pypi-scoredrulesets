@@ -233,4 +233,87 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
+        "wrapper_logicgp": EstimatorSpec(
+            name="wrapper_logicgp",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="logicgp",
+                backend_params={
+                    "trainer": "flcw_macro",
+                    "max_generations": 50,
+                    "stagnation_generations": 20,
+                    "population_size": 30,
+                    "n_adaptations_per_gen": 6,
+                    "n_bins": 5,
+                    "random_state": 0,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_logicgp_fast": EstimatorSpec(
+            name="wrapper_logicgp_fast",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="logicgp",
+                backend_params={
+                    "trainer": "flcw_macro",
+                    "max_generations": 20,
+                    "stagnation_generations": 10,
+                    "population_size": 15,
+                    "n_adaptations_per_gen": 6,
+                    "n_bins": 4,
+                    "random_state": 0,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_logicgp_rlcw_macro": EstimatorSpec(
+            name="wrapper_logicgp_rlcw_macro",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="logicgp",
+                backend_params={
+                    "trainer": "rlcw_macro",
+                    "max_generations": 500,
+                    "stagnation_generations": 100,
+                    "population_size": 50,
+                    "n_adaptations_per_gen": 12,
+                    "n_bins": 5,
+                    "min_max_weight": 0.1,
+                    "random_state": 0,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_logicgp_rlcw_micro": EstimatorSpec(
+            name="wrapper_logicgp_rlcw_micro",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="logicgp",
+                backend_params={
+                    "trainer": "rlcw_micro",
+                    "max_generations": 500,
+                    "stagnation_generations": 100,
+                    "population_size": 50,
+                    "n_adaptations_per_gen": 12,
+                    "n_bins": 5,
+                    "min_max_weight": 0.1,
+                    "random_state": 0,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_logicgp_rlcw_fast": EstimatorSpec(
+            name="wrapper_logicgp_rlcw_fast",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="logicgp",
+                backend_params={
+                    "trainer": "rlcw_macro",
+                    "max_generations": 100,
+                    "stagnation_generations": 30,
+                    "population_size": 30,
+                    "n_adaptations_per_gen": 12,
+                    "n_bins": 4,
+                    "min_max_weight": 0.2,
+                    "random_state": 0,
+                },
+                random_state=0,
+            ),
+        ),
     }

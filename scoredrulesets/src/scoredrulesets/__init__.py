@@ -21,6 +21,7 @@ from .benchmarking import (
     run_benchmarks,
 )
 from .estimators.gp_native import GeneticScoredRuleSetClassifier
+from .estimators.logicgp import LogicGPClassifier
 from .estimators.native import NativeScoredRuleSetClassifier
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
 from .formatting import format_ruleset_table
@@ -38,6 +39,7 @@ __all__ = [
     "BenchmarkConfig",
     "BenchmarkResult",
     "GeneticScoredRuleSetClassifier",
+    "LogicGPClassifier",
     "NativeScoredRuleSetClassifier",
     "ScoredRuleSetClassifier",
     "aggregate_benchmark_results",
