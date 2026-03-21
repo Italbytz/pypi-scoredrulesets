@@ -71,6 +71,25 @@ print(clf.predict(X[:3]))
 # NativeScoredRuleSetClassifier(enable_categorical_rules=False)
 ```
 
+## Nativer GP-Estimator
+
+```python
+from sklearn.datasets import load_iris
+from scoredrulesets import GeneticScoredRuleSetClassifier
+
+X, y = load_iris(return_X_y=True)
+
+gp = GeneticScoredRuleSetClassifier(
+    population_size=40,
+    generations=20,
+    max_rules=6,
+    score_mode="auto",  # "auto" | "log_proba" | "proba"
+    random_state=0,
+)
+gp.fit(X, y)
+print(gp.predict(X[:3]))
+```
+
 ## JSON-Format (Kurz)
 
 ```json
