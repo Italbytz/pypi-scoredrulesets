@@ -7,7 +7,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from ..schema import ScoredRuleSet
 
 
-class BaseRuleSetEstimator(BaseEstimator, ClassifierMixin, ABC):
+class BaseRuleSetEstimator(ClassifierMixin, BaseEstimator, ABC):
     """Erweiterungspunkt fuer kuenftige native Scored-Rule-Set-Schaetzer."""
 
     @abstractmethod

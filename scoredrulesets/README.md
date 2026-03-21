@@ -64,6 +64,11 @@ X, y = load_iris(return_X_y=True)
 clf = NativeScoredRuleSetClassifier()
 clf.fit(X, y)
 print(clf.predict(X[:3]))
+
+# Optional: einfache native Regelkomplexitaet steuern
+# NativeScoredRuleSetClassifier(max_rules=6, min_samples_leaf=5)
+# Optional: kategoriale Regelgenerierung abschalten
+# NativeScoredRuleSetClassifier(enable_categorical_rules=False)
 ```
 
 ## JSON-Format (Kurz)
@@ -92,5 +97,11 @@ Optionaler Integrationstest fuer HS:
 
 ```bash
 pytest -q -m hs
+```
+
+Sklearn-Kompatibilitaet (Estimator-Checks) pruefen:
+
+```bash
+pytest -q tests/test_estimator_checks.py
 ```
 

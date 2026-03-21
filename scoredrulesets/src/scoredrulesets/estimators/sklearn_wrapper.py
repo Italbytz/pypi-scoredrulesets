@@ -36,6 +36,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
+        self.n_features_in_ = X_valid.shape[1]
         self.feature_names_in_ = self._infer_feature_names(X_valid)
 
         if self.estimator is not None:
@@ -63,6 +64,11 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
         X_valid = check_array(X, dtype=None)
+        if self.n_features_in_ is not None and X_valid.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
+                f"is expecting {self.n_features_in_} features as input"
+            )
 
         if self.is_ruleset_mode_:
             return predict_from_ruleset(self.ruleset_, X_valid)
@@ -72,6 +78,11 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     def predict_proba(self, X):
         check_is_fitted(self, "ruleset_")
         X_valid = check_array(X, dtype=None)
+        if self.n_features_in_ is not None and X_valid.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
+                f"is expecting {self.n_features_in_} features as input"
+            )
 
         if self.is_ruleset_mode_:
             return predict_proba_from_ruleset(self.ruleset_, X_valid)
@@ -94,6 +105,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         model.ruleset_ = load_ruleset_json(path)
         model.classes_ = np.asarray(model.ruleset_.class_labels)
         model.feature_names_in_ = model.ruleset_.feature_names
+        model.n_features_in_ = cls._infer_ruleset_n_features(model.ruleset_)
         model.transform_params = asdict(TreeTransformParams())
         model.estimator_ = None
         model.is_ruleset_mode_ = True
@@ -102,4 +114,17 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     @staticmethod
     def _infer_feature_names(X: np.ndarray) -> list[str]:
         return [f"f{i}" for i in range(X.shape[1])]
+
+    @staticmethod
+    def _infer_ruleset_n_features(ruleset: ScoredRuleSet) -> int | None:
+        if ruleset.feature_names:
+            return len(ruleset.feature_names)
+        max_idx = -1
+        for rule in ruleset.rules:
+            for atom in rule.atoms:
+                if isinstance(atom.feature, int):
+                    max_idx = max(max_idx, atom.feature)
+        if max_idx >= 0:
+            return max_idx + 1
+        return None
 
