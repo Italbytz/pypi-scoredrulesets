@@ -30,10 +30,10 @@ def build_backend_estimator(
 
 def _resolve_hs_class():
     candidate_locations = [
-        ("imodels", "HSTreeClassifierCV"),
         ("imodels", "HSTreeClassifier"),
-        ("imodels.tree.hierarchical_shrinkage", "HSTreeClassifierCV"),
+        ("imodels", "HSTreeClassifierCV"),
         ("imodels.tree.hierarchical_shrinkage", "HSTreeClassifier"),
+        ("imodels.tree.hierarchical_shrinkage", "HSTreeClassifierCV"),
     ]
 
     tried: list[str] = []

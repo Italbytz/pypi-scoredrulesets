@@ -44,6 +44,14 @@ ruleset = clf.to_ruleset()
 dump_ruleset_json(ruleset, "iris_ruleset.json")
 ```
 
+Konsolenlesbare Tabellen-Ausgabe:
+
+```python
+from scoredrulesets import format_ruleset_table
+
+print(format_ruleset_table(ruleset))
+```
+
 ## logicGP-Import
 
 ```python
