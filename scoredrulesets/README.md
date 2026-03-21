@@ -94,6 +94,9 @@ gp = GeneticScoredRuleSetClassifier(
     generations=20,
     max_rules=6,
     score_mode="auto",  # "auto" | "log_proba" | "proba"
+    selection_mode="fitness",  # "fitness" | "pareto"
+    validation_fraction=0.2,
+    early_stopping_rounds=5,
     random_state=0,
 )
 gp.fit(X, y)

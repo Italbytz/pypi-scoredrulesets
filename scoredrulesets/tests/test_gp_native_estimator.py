@@ -98,6 +98,66 @@ def test_gp_native_estimator_score_mode_auto_metadata():
     assert clf.to_ruleset().metadata["score_mode"] == "log_proba"
 
 
+def test_gp_native_estimator_reports_validation_and_generations_ran():
+    X, y = load_iris(return_X_y=True)
+    clf = GeneticScoredRuleSetClassifier(
+        population_size=18,
+        generations=25,
+        early_stopping_rounds=2,
+        validation_fraction=0.25,
+        random_state=4,
+    )
+    clf.fit(X, y)
+
+    meta = clf.to_ruleset().metadata
+    assert meta["used_validation"] is True
+    assert 1 <= meta["generations_ran"] <= 25
+    assert isinstance(meta["early_stopped"], bool)
+
+
+def test_gp_native_estimator_without_validation_fraction_uses_train_only():
+    X, y = load_iris(return_X_y=True)
+    clf = GeneticScoredRuleSetClassifier(
+        generations=5,
+        validation_fraction=0.0,
+        random_state=5,
+    )
+    clf.fit(X, y)
+    assert clf.to_ruleset().metadata["used_validation"] is False
+
+
+def test_gp_native_estimator_selection_mode_pareto_metadata():
+    X, y = load_iris(return_X_y=True)
+    clf = GeneticScoredRuleSetClassifier(
+        selection_mode="pareto",
+        generations=6,
+        random_state=9,
+    )
+    clf.fit(X, y)
+    assert clf.to_ruleset().metadata["selection_mode"] == "pareto"
+
+
+def test_gp_native_estimator_invalid_selection_mode_raises():
+    X, y = load_iris(return_X_y=True)
+    clf = GeneticScoredRuleSetClassifier(selection_mode="invalid", random_state=0)
+    with pytest.raises(ValueError, match="Invalid selection_mode"):
+        clf.fit(X, y)
+
+
+def test_pareto_front_ranks_helper():
+    objectives = [
+        (0.90, 3),
+        (0.85, 1),
+        (0.80, 4),
+        (0.88, 3),
+    ]
+    ranks = GeneticScoredRuleSetClassifier._pareto_front_ranks(objectives)
+    assert ranks[0] == 0
+    assert ranks[1] == 0
+    assert ranks[3] == 1
+    assert ranks[2] >= 1
+
+
 def test_gp_native_estimator_can_sample_between_atoms():
     X = np.array([[0.0], [1.0], [2.0], [3.0], [4.0], [5.0]])
     clf = GeneticScoredRuleSetClassifier(random_state=0)

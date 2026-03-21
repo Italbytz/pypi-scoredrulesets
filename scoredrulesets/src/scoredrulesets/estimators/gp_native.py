@@ -32,6 +32,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         aggregation: str = "softmax_sum",
         temperature: float = 1.0,
         score_mode: str = "auto",
+        selection_mode: str = "fitness",
         include_default_rule: bool = True,
         population_size: int = 40,
         generations: int = 20,
@@ -42,11 +43,14 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         tournament_size: int = 3,
         min_samples_leaf: int = 3,
         complexity_penalty: float = 0.01,
+        validation_fraction: float = 0.2,
+        early_stopping_rounds: int = 5,
         random_state: int | None = None,
     ):
         self.aggregation = aggregation
         self.temperature = temperature
         self.score_mode = score_mode
+        self.selection_mode = selection_mode
         self.include_default_rule = include_default_rule
         self.population_size = population_size
         self.generations = generations
@@ -57,11 +61,14 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         self.tournament_size = tournament_size
         self.min_samples_leaf = min_samples_leaf
         self.complexity_penalty = complexity_penalty
+        self.validation_fraction = validation_fraction
+        self.early_stopping_rounds = early_stopping_rounds
         self.random_state = random_state
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
         self._resolved_score_mode_ = self._resolve_score_mode()
+        self._resolved_selection_mode_ = self._resolve_selection_mode()
         self.n_features_in_ = X_valid.shape[1]
         self.feature_names_in_ = np.asarray([f"f{i}" for i in range(self.n_features_in_)], dtype=object)
         self.classes_ = unique_labels(y_valid)
@@ -70,6 +77,8 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         class_to_idx = {label: idx for idx, label in enumerate(self.classes_)}
         y_idx = np.asarray([class_to_idx[val] for val in y_valid], dtype=int)
         n_classes = len(self.classes_)
+        train_idx, val_idx = self._train_val_indices(y_idx)
+        self._used_validation_ = val_idx is not None
 
         feature_specs = self._build_feature_specs(X_valid)
         population = [
@@ -77,28 +86,46 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
             for _ in range(max(2, int(self.population_size)))
         ]
 
-        hall_of_fame: list[tuple[float, _RuleGene]] = []
-        for _ in range(max(1, int(self.generations))):
-            scored = [
-                (self._fitness(ind, X_valid, y_idx, n_classes), ind)
-                for ind in population
-            ]
-            scored.sort(key=lambda item: item[0], reverse=True)
-            hall_of_fame.extend(scored[: max(1, int(self.max_rules))])
+        hall_of_fame: list[tuple[int, float, int, _RuleGene]] = []
+        max_generations = max(1, int(self.generations))
+        best_generation_score = -np.inf
+        no_improvement_rounds = 0
+        generations_ran = 0
+        for generation_idx in range(max_generations):
+            scored = self._score_population(
+                population,
+                X_valid,
+                y_idx,
+                n_classes,
+                train_idx,
+                val_idx,
+            )
+            ranked = self._rank_scored_population(scored)
+            generations_ran = generation_idx + 1
+            hall_of_fame.extend(ranked[: max(1, int(self.max_rules))])
 
-            next_population: list[_RuleGene] = [scored[0][1]]
+            top_score = float(ranked[0][1])
+            if top_score > best_generation_score + 1e-12:
+                best_generation_score = top_score
+                no_improvement_rounds = 0
+            else:
+                no_improvement_rounds += 1
+                if no_improvement_rounds >= max(1, int(self.early_stopping_rounds)):
+                    break
+
+            next_population: list[_RuleGene] = [ranked[0][3]]
             while len(next_population) < len(population):
-                parent_a = self._tournament_select(scored)
-                parent_b = self._tournament_select(scored)
+                parent_a = self._tournament_select(ranked)
+                parent_b = self._tournament_select(ranked)
                 child = self._crossover(parent_a, parent_b)
                 child = self._mutate(child, feature_specs)
                 next_population.append(child)
             population = next_population
 
-        hall_of_fame.sort(key=lambda item: item[0], reverse=True)
+        hall_of_fame.sort(key=lambda item: (item[0], -item[1], item[2]))
         best_genes: list[_RuleGene] = []
         seen = set()
-        for _, gene in hall_of_fame:
+        for _, _, _, gene in hall_of_fame:
             key = self._gene_key(gene)
             if key in seen:
                 continue
@@ -129,7 +156,12 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 "model_type": "genetic_programming",
                 "population_size": int(self.population_size),
                 "generations": int(self.generations),
+                "generations_ran": int(generations_ran),
+                "early_stopped": bool(generations_ran < max_generations),
+                "used_validation": bool(self._used_validation_),
+                "validation_fraction": float(self.validation_fraction),
                 "score_mode": self._resolved_score_mode_,
+                "selection_mode": self._resolved_selection_mode_,
             },
         )
         self.ruleset_.validate()
@@ -257,23 +289,85 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 mask &= np.isin(np.asarray(col, dtype=object), list(atom.value))
         return mask
 
-    def _fitness(self, gene: _RuleGene, X: np.ndarray, y_idx: np.ndarray, n_classes: int) -> float:
-        mask = self._rule_mask(gene, X)
+    def _fitness(
+        self,
+        gene: _RuleGene,
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        train_idx: np.ndarray,
+        val_idx: np.ndarray | None,
+    ) -> float:
+        train_score = self._subset_quality(gene, X, y_idx, n_classes, train_idx)
+        if train_score <= -1e8:
+            return train_score
+
+        if val_idx is None:
+            return train_score
+
+        val_score = self._subset_quality(gene, X, y_idx, n_classes, val_idx)
+        if val_score <= -1e8:
+            return val_score
+
+        # Leichte Strafung, wenn der Trainingsscore den Val-Score deutlich uebersteigt.
+        overfit_penalty = max(0.0, train_score - val_score) * 0.2
+        return val_score - overfit_penalty
+
+    def _subset_quality(
+        self,
+        gene: _RuleGene,
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        subset_idx: np.ndarray,
+    ) -> float:
+        if subset_idx.size == 0:
+            return -1e9
+
+        mask = self._rule_mask(gene, X[subset_idx])
         support = int(mask.sum())
         if support < self.min_samples_leaf:
             return -1e9
 
-        counts = np.bincount(y_idx[mask], minlength=n_classes).astype(float)
+        counts = np.bincount(y_idx[subset_idx][mask], minlength=n_classes).astype(float)
         purity = float(np.max(counts) / max(np.sum(counts), 1.0))
-        coverage = float(support / X.shape[0])
+        coverage = float(support / subset_idx.size)
         complexity = self.complexity_penalty * len(gene.atoms)
         return purity * (1.0 + coverage) - complexity
 
-    def _tournament_select(self, scored: list[tuple[float, _RuleGene]]) -> _RuleGene:
+    def _train_val_indices(self, y_idx: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+        n_samples = y_idx.shape[0]
+        if n_samples < 4 or self.validation_fraction <= 0.0:
+            return np.arange(n_samples), None
+
+        train_parts: list[np.ndarray] = []
+        val_parts: list[np.ndarray] = []
+        for class_idx in np.unique(y_idx):
+            cls_indices = np.where(y_idx == class_idx)[0]
+            if cls_indices.size <= 1:
+                train_parts.append(cls_indices)
+                continue
+
+            shuffled = cls_indices[self._rng_.permutation(cls_indices.size)]
+            n_val = int(round(cls_indices.size * float(self.validation_fraction)))
+            n_val = max(1, min(cls_indices.size - 1, n_val))
+            val_parts.append(shuffled[:n_val])
+            train_parts.append(shuffled[n_val:])
+
+        train_idx = np.concatenate(train_parts) if train_parts else np.arange(n_samples)
+        if not val_parts:
+            return train_idx, None
+
+        val_idx = np.concatenate(val_parts)
+        if val_idx.size == 0:
+            return train_idx, None
+        return train_idx, val_idx
+
+    def _tournament_select(self, scored: list[tuple[int, float, int, _RuleGene]]) -> _RuleGene:
         k = min(max(1, int(self.tournament_size)), len(scored))
         idx = self._rng_.choice(len(scored), size=k, replace=False)
-        winner = max((scored[int(i)] for i in idx), key=lambda item: item[0])
-        return winner[1]
+        winner = min((scored[int(i)] for i in idx), key=lambda item: (item[0], -item[1], item[2]))
+        return winner[3]
 
     def _crossover(self, a: _RuleGene, b: _RuleGene) -> _RuleGene:
         if self._rng_.random() >= self.crossover_rate or not a.atoms or not b.atoms:
@@ -343,6 +437,84 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         raise ValueError(
             "Invalid score_mode. Expected one of: 'auto', 'log_proba', 'proba'."
         )
+
+    def _resolve_selection_mode(self) -> str:
+        if self.selection_mode in {"fitness", "pareto"}:
+            return self.selection_mode
+        raise ValueError(
+            "Invalid selection_mode. Expected one of: 'fitness', 'pareto'."
+        )
+
+    def _score_population(
+        self,
+        population: list[_RuleGene],
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        train_idx: np.ndarray,
+        val_idx: np.ndarray | None,
+    ) -> list[tuple[float, int, _RuleGene]]:
+        scored = []
+        for ind in population:
+            quality = self._fitness(ind, X, y_idx, n_classes, train_idx, val_idx)
+            complexity = len(ind.atoms)
+            scored.append((float(quality), int(complexity), ind))
+        return scored
+
+    def _rank_scored_population(
+        self,
+        scored: list[tuple[float, int, _RuleGene]],
+    ) -> list[tuple[int, float, int, _RuleGene]]:
+        if self._resolved_selection_mode_ == "fitness":
+            ordered = sorted(scored, key=lambda item: item[0], reverse=True)
+            return [(0, quality, complexity, gene) for quality, complexity, gene in ordered]
+
+        objectives = [(quality, complexity) for quality, complexity, _ in scored]
+        ranks = self._pareto_front_ranks(objectives)
+        ranked = [
+            (ranks[idx], scored[idx][0], scored[idx][1], scored[idx][2])
+            for idx in range(len(scored))
+        ]
+        ranked.sort(key=lambda item: (item[0], -item[1], item[2]))
+        return ranked
+
+    @staticmethod
+    def _pareto_front_ranks(objectives: list[tuple[float, int]]) -> list[int]:
+        # Maximiert quality, minimiert complexity.
+        n = len(objectives)
+        dominates = [set() for _ in range(n)]
+        dominated_count = [0 for _ in range(n)]
+        ranks = [0 for _ in range(n)]
+
+        def _dominates(a: tuple[float, int], b: tuple[float, int]) -> bool:
+            q_a, c_a = a
+            q_b, c_b = b
+            not_worse = (q_a >= q_b) and (c_a <= c_b)
+            strictly_better = (q_a > q_b) or (c_a < c_b)
+            return not_worse and strictly_better
+
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                if _dominates(objectives[i], objectives[j]):
+                    dominates[i].add(j)
+                elif _dominates(objectives[j], objectives[i]):
+                    dominated_count[i] += 1
+
+        current_front = [i for i in range(n) if dominated_count[i] == 0]
+        front_rank = 0
+        while current_front:
+            next_front: list[int] = []
+            for idx in current_front:
+                ranks[idx] = front_rank
+                for j in dominates[idx]:
+                    dominated_count[j] -= 1
+                    if dominated_count[j] == 0:
+                        next_front.append(j)
+            front_rank += 1
+            current_front = next_front
+        return ranks
 
     @staticmethod
     def _gene_key(gene: _RuleGene) -> tuple[tuple[int, str, str], ...]:
