@@ -28,6 +28,18 @@ Fuer Entwicklung/Tests:
 pip install -e '.[dev]'
 ```
 
+Fuer Benchmarking:
+
+```bash
+pip install -e '.[benchmark]'
+```
+
+Optional fuer lokale UCI-CSV-Benchmarks:
+
+```bash
+pip install -e '.[benchmark-uci]'
+```
+
 ## Schnellstart
 
 ```python
@@ -104,6 +116,54 @@ print(gp.predict(X[:3]))
 ```
 
 Der GP-Lerner durchsucht ebenfalls Atome mit `<=`, `>`, `between`, `==` und `in`.
+
+## Benchmarking
+
+Benchmarking vergleicht die Estimatoren ueber:
+
+- `f1_macro`
+- Modellgroesse (`n_rules`, `n_atoms`, `ruleset_json_bytes`)
+- Laufzeit (`fit_seconds`, `predict_seconds`)
+
+Datensaetze:
+
+- Standard: `sklearn_iris`, `sklearn_wine`, `sklearn_breast_cancer`
+- Optional lokal: CSV-Dateien aus `SCORERULESETS_UCI_DIR` (letzte Spalte = Ziel)
+
+Beispielaufruf:
+
+```bash
+python examples/benchmark_runner.py \
+  --datasets sklearn_iris,sklearn_wine \
+  --estimators wrapper_cart,native,gp,wrapper_hs \
+  --repeats 2 \
+  --aggregate-repeats \
+  --error-bar std \
+  --leaderboard-primary-metric f1_macro_mean \
+  --output-markdown benchmark_leaderboard.md \
+  --output-csv benchmark_results.csv \
+  --output-json benchmark_results.json \
+  --output-plot-base benchmark_results \
+  --plot-size-metric n_rules
+```
+
+Dabei werden standardmaessig folgende Dateien geschrieben:
+
+- `benchmark_results.csv`
+- `benchmark_results.json`
+- `benchmark_results_aggregated.csv` (bei `--aggregate-repeats`)
+- `benchmark_results_aggregated.json` (bei `--aggregate-repeats`)
+- `benchmark_leaderboard.md` (bei `--aggregate-repeats`)
+- `benchmark_results.png`
+- `benchmark_results.pdf`
+
+Der Plot zeigt `f1_macro` gegen eine gewaehlte Modellgroessenmetrik (`n_rules`, `n_atoms` oder `ruleset_json_bytes`); die Farbe kodiert die Fit-Zeit.
+Mit `--aggregate-repeats` zeigt der Plot Mittelwerte pro `(dataset, estimator)` und Fehlerbalken (`std` oder `sem`).
+Das Leaderboard sortiert aggregierte Ergebnisse standardmaessig nach `f1_macro_mean`.
+`--output-markdown` erzeugt einen kompakten Markdown-Report mit Konfiguration, Artefaktverweisen und eingebettetem Leaderboard.
+Zusaetzlich enthaelt der Report eine globale "Top per Dataset"-Uebersicht vor dem Gesamt-Leaderboard.
+Pro Datensatz enthaelt der Report zusaetzlich automatische Summary-Punkte fuer bestes Modell, kleinste Modellgroesse und schnellstes Modell.
+Der Report enthaelt zusaetzlich eine kurze Summary mit Top-1-Modell, eine eingebettete Plot-Vorschau und separate Abschnitte pro Datensatz.
 
 ## JSON-Format (Kurz)
 
