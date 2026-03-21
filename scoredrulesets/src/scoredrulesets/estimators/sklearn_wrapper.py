@@ -89,7 +89,10 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 params=transform_cfg,
             )
         
-        self.is_ruleset_mode_ = False
+        # rulekit/exstracs: native predict gibt float-Labels zurueck, die als
+        # String nicht mit int-Labels uebereinstimmen -> Prediction immer ueber
+        # das ScoredRuleSet routen, damit Klassen-Labels korrekt sind.
+        self.is_ruleset_mode_ = backend_lower in ("rulekit", "exstracs")
         return self
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:

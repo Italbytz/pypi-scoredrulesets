@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import inspect
+import os
 import subprocess
 from typing import Any
 
@@ -27,12 +29,22 @@ def build_backend_estimator(
 
     if backend_key == "rulekit":
         rulekit_cls = _resolve_rulekit_class()
-        params.setdefault("random_state", random_state)
-        return rulekit_cls(**params)
+        if random_state is not None and _supports_kwarg(rulekit_cls, "random_state"):
+            params.setdefault("random_state", random_state)
+        try:
+            return rulekit_cls(**params)
+        except FileNotFoundError as e:
+            jvm_hint = _rulekit_jvm_hint()
+            raise ImportError(
+                "backend='rulekit' konnte die JVM nicht starten. "
+                "Pruefe JAVA_HOME und den JPype-JVM-Pfad. "
+                f"{jvm_hint} Fehler: {e}"
+            ) from e
 
     if backend_key == "exstracs":
         exstracs_cls = _resolve_exstracs_class()
-        params.setdefault("random_state", random_state)
+        if random_state is not None and _supports_kwarg(exstracs_cls, "random_state"):
+            params.setdefault("random_state", random_state)
         return exstracs_cls(**params)
 
     raise ValueError(
@@ -93,17 +105,31 @@ def _resolve_rulekit_class():
             f"Fehler: {e}"
         ) from e
 
-    # Versuche rulekit zu importieren
-    try:
-        from rulekit.classifier import RuleKit
-        return RuleKit
-    except ImportError as e:
-        raise ImportError(
-            "backend='rulekit' braucht das 'rulekit' Paket. "
-            "Installiere mit: pip install rulekit. "
-            "Beachte: RuleKit benötigt Java (JDK 11+). "
-            f"Import-Fehler: {e}"
-        ) from e
+    candidate_locations = [
+        ("rulekit.classification", "RuleClassifier"),
+        ("rulekit.classifier", "RuleKit"),
+    ]
+
+    tried: list[str] = []
+    for module_name, class_name in candidate_locations:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            tried.append(f"{module_name}.{class_name}")
+            continue
+
+        cls = getattr(module, class_name, None)
+        if cls is not None:
+            return cls
+        tried.append(f"{module_name}.{class_name}")
+
+    raise ImportError(
+        "backend='rulekit' braucht das 'rulekit' Paket. "
+        "Installiere mit: pip install rulekit. "
+        "Beachte: RuleKit benötigt Java (JDK 11+). "
+        "Geprueft wurden: "
+        + ", ".join(tried)
+    )
 
 
 def _resolve_exstracs_class():
@@ -111,13 +137,49 @@ def _resolve_exstracs_class():
     Versuche ExSTraCS-Klasse zu laden.
     ExSTraCS wird durch skExSTraCS bereitgestellt.
     """
+    candidate_locations = [
+        ("skExSTraCS", "ExSTraCS"),
+        ("skexstracs", "ExSTraCSClassifier"),
+    ]
+
+    tried: list[str] = []
+    for module_name, class_name in candidate_locations:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            tried.append(f"{module_name}.{class_name}")
+            continue
+
+        cls = getattr(module, class_name, None)
+        if cls is not None:
+            return cls
+        tried.append(f"{module_name}.{class_name}")
+
+    raise ImportError(
+        "backend='exstracs' braucht scikit-exstracs (Importnamen: skExSTraCS oder skexstracs). "
+        "Installiere mit: pip install scikit-exstracs. "
+        "Geprueft wurden: "
+        + ", ".join(tried)
+    )
+
+
+def _supports_kwarg(cls: type[Any], param_name: str) -> bool:
     try:
-        from skexstracs import ExSTraCSClassifier
-        return ExSTraCSClassifier
-    except ImportError as e:
-        raise ImportError(
-            "backend='exstracs' braucht das 'skexstracs' Paket. "
-            "Installiere mit: pip install scikit-exstracs. "
-            f"Import-Fehler: {e}"
-        ) from e
+        signature = inspect.signature(cls)
+    except (TypeError, ValueError):
+        return False
+    return param_name in signature.parameters
+
+
+def _rulekit_jvm_hint() -> str:
+    java_home = os.environ.get("JAVA_HOME", "<unset>")
+    hint = f"JAVA_HOME={java_home}."
+    try:
+        import jpype
+
+        hint += f" jpype.getDefaultJVMPath()={jpype.getDefaultJVMPath()}."
+    except Exception:
+        hint += " jpype.getDefaultJVMPath()=<unavailable>."
+    return hint
+
 
