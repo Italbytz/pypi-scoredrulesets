@@ -23,6 +23,7 @@ class BenchmarkConfig:
     paper_uci_strict: bool = False
     repeats: int = 1
     random_state: int = 0
+    show_progress: bool = False
 
 
 @dataclass
@@ -77,11 +78,24 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
     _validate_names("dataset", dataset_names, dataset_registry)
     _validate_names("estimator", estimator_names, estimator_registry)
 
+    total_repeats = max(1, int(config.repeats))
+    total_runs = len(dataset_names) * len(estimator_names) * total_repeats
+    overall_start = perf_counter()
+    completed_runs = 0
+
+    if config.show_progress:
+        _print_progress_header(
+            dataset_names=dataset_names,
+            estimator_names=estimator_names,
+            total_repeats=total_repeats,
+            total_runs=total_runs,
+        )
+
     results: list[BenchmarkResult] = []
     for dataset_name in dataset_names:
         bundle = dataset_registry[dataset_name]
         test_size = _resolve_test_size(bundle, config)
-        for repeat in range(max(1, int(config.repeats))):
+        for repeat in range(total_repeats):
             split_seed = int(config.random_state + repeat)
             X_train, X_test, y_train, y_test = train_test_split(
                 bundle.X,
@@ -93,6 +107,19 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
 
             for estimator_name in estimator_names:
                 spec = estimator_registry[estimator_name]
+                run_number = completed_runs + 1
+                run_started = perf_counter()
+                if config.show_progress:
+                    _print_progress_start(
+                        run_number=run_number,
+                        total_runs=total_runs,
+                        dataset_name=dataset_name,
+                        repeat=repeat + 1,
+                        total_repeats=total_repeats,
+                        estimator_name=spec.name,
+                        n_train=len(y_train),
+                        n_test=len(y_test),
+                    )
                 result = _run_single(
                     estimator_name=spec.name,
                     estimator_factory=spec.factory,
@@ -104,6 +131,16 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                     y_test=y_test,
                 )
                 results.append(result)
+                completed_runs += 1
+                if config.show_progress:
+                    _print_progress_end(
+                        result=result,
+                        run_number=run_number,
+                        total_runs=total_runs,
+                        run_elapsed=perf_counter() - run_started,
+                        total_elapsed=perf_counter() - overall_start,
+                        completed_runs=completed_runs,
+                    )
     return results
 
 
@@ -325,5 +362,102 @@ def _metric_error(results: list[BenchmarkResult], attr: str, error_bar: str) -> 
     if error_bar == "std":
         return std
     return float(std / np.sqrt(len(values)))
+
+
+def _print_progress_header(
+    dataset_names: list[str],
+    estimator_names: list[str],
+    total_repeats: int,
+    total_runs: int,
+) -> None:
+    slow_estimators = [
+        name
+        for name in estimator_names
+        if name.startswith("gp") or "logicgp" in name or "exstracs" in name
+    ]
+    print(
+        "[progress] Benchmark gestartet: "
+        f"datasets={len(dataset_names)}, estimators={len(estimator_names)}, "
+        f"repeats={total_repeats}, total_runs={total_runs}",
+        flush=True,
+    )
+    if slow_estimators:
+        print(
+            "[progress] Potenziell langsame Estimatoren erkannt: "
+            + ", ".join(slow_estimators),
+            flush=True,
+        )
+
+
+def _print_progress_start(
+    run_number: int,
+    total_runs: int,
+    dataset_name: str,
+    repeat: int,
+    total_repeats: int,
+    estimator_name: str,
+    n_train: int,
+    n_test: int,
+) -> None:
+    print(
+        f"[progress {run_number}/{total_runs}] START "
+        f"dataset={dataset_name} repeat={repeat}/{total_repeats} "
+        f"estimator={estimator_name} train={n_train} test={n_test}",
+        flush=True,
+    )
+
+
+def _print_progress_end(
+    result: BenchmarkResult,
+    run_number: int,
+    total_runs: int,
+    run_elapsed: float,
+    total_elapsed: float,
+    completed_runs: int,
+) -> None:
+    remaining_runs = max(0, total_runs - completed_runs)
+    avg_run_seconds = total_elapsed / max(1, completed_runs)
+    eta_seconds = remaining_runs * avg_run_seconds
+    status = result.status.upper()
+
+    parts = [
+        f"[progress {run_number}/{total_runs}] DONE status={status}",
+        f"run={_format_duration(run_elapsed)}",
+        f"total={_format_duration(total_elapsed)}",
+        f"eta={_format_duration(eta_seconds)}",
+    ]
+    if result.status == "ok":
+        parts.extend(
+            [
+                f"f1={float(result.f1_macro):.4f}",
+                f"fit={_format_duration(float(result.fit_seconds or 0.0))}",
+                f"predict={_format_duration(float(result.predict_seconds or 0.0))}",
+                f"rules={int(result.n_rules or 0)}",
+                f"atoms={int(result.n_atoms or 0)}",
+            ]
+        )
+    elif result.skip_reason:
+        parts.append(f"reason={result.skip_reason}")
+    if result.error:
+        parts.append(f"error={_shorten_text(result.error, max_len=160)}")
+    print(" | ".join(parts), flush=True)
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{int(minutes)}m {sec:04.1f}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{int(hours)}h {int(minutes):02d}m {sec:04.1f}s"
+
+
+def _shorten_text(value: str, max_len: int = 120) -> str:
+    normalized = " ".join(str(value).split())
+    if len(normalized) <= max_len:
+        return normalized
+    return normalized[: max_len - 1] + "…"
 
 

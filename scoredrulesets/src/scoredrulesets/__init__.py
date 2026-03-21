@@ -17,6 +17,7 @@ from .benchmarking import (
     format_benchmark_report_html,
     format_benchmark_report_markdown,
     load_aggregated_results_json,
+    plot_benchmark_heatmap,
     plot_benchmark_results,
     run_benchmarks,
 )
@@ -60,6 +61,7 @@ __all__ = [
     "import_logicgp_json",
     "load_aggregated_results_json",
     "load_ruleset_json",
+    "plot_benchmark_heatmap",
     "plot_benchmark_results",
     "run_benchmarks",
 ]

@@ -14,7 +14,7 @@ from .reporting import (
 	format_benchmark_leaderboard_markdown,
 	format_benchmark_leaderboard_table,
 )
-from .plotting import plot_benchmark_results
+from .plotting import plot_benchmark_heatmap, plot_benchmark_results
 from .runner import (
 	AggregatedBenchmarkResult,
 	BenchmarkConfig,
@@ -44,6 +44,7 @@ __all__ = [
 	"format_benchmark_report_markdown",
 	"format_benchmark_leaderboard_table",
 	"load_aggregated_results_json",
+	"plot_benchmark_heatmap",
 	"plot_benchmark_results",
 	"run_benchmarks",
 ]

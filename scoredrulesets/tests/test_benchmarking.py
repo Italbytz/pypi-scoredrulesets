@@ -12,6 +12,7 @@ from scoredrulesets.benchmarking import (
     format_benchmark_report_html,
     format_benchmark_report_markdown,
     format_benchmark_leaderboard_table,
+    plot_benchmark_heatmap,
     plot_benchmark_results,
     run_benchmarks,
 )
@@ -100,6 +101,24 @@ def test_benchmarking_aggregation_over_repeats():
     assert all(item.f1_macro_error is not None for item in aggregated)
 
 
+def test_benchmarking_progress_output_is_emitted(capsys):
+    config = BenchmarkConfig(
+        dataset_names=["sklearn_iris"],
+        estimator_names=["wrapper_cart"],
+        repeats=1,
+        random_state=0,
+        show_progress=True,
+    )
+
+    results = run_benchmarks(config)
+    captured = capsys.readouterr()
+
+    assert len(results) == 1
+    assert "[progress] Benchmark gestartet:" in captured.out
+    assert "[progress 1/1] START" in captured.out
+    assert "[progress 1/1] DONE status=OK" in captured.out
+
+
 def test_benchmark_plot_aggregated_is_written_as_png_and_pdf(tmp_path: Path):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
@@ -117,6 +136,48 @@ def test_benchmark_plot_aggregated_is_written_as_png_and_pdf(tmp_path: Path):
         aggregate_repeats=True,
         error_bar="std",
     )
+
+    assert png_path.exists()
+    assert pdf_path.exists()
+    assert png_path.stat().st_size > 0
+    assert pdf_path.stat().st_size > 0
+
+
+def test_benchmark_plot_multiple_datasets_is_written_as_png_and_pdf(tmp_path: Path):
+    config = BenchmarkConfig(
+        dataset_names=["sklearn_iris", "sklearn_wine"],
+        estimator_names=["wrapper_cart", "native"],
+        repeats=2,
+        random_state=0,
+    )
+    results = run_benchmarks(config)
+
+    base = tmp_path / "benchmark_plot_multi_dataset"
+    png_path, pdf_path = plot_benchmark_results(
+        results,
+        base,
+        size_metric="n_rules",
+        aggregate_repeats=True,
+        error_bar="std",
+    )
+
+    assert png_path.exists()
+    assert pdf_path.exists()
+    assert png_path.stat().st_size > 0
+    assert pdf_path.stat().st_size > 0
+
+
+def test_benchmark_heatmap_is_written_as_png_and_pdf(tmp_path: Path):
+    config = BenchmarkConfig(
+        dataset_names=["sklearn_iris", "sklearn_wine"],
+        estimator_names=["wrapper_cart", "native"],
+        repeats=2,
+        random_state=0,
+    )
+    results = run_benchmarks(config)
+
+    base = tmp_path / "benchmark_heatmap"
+    png_path, pdf_path = plot_benchmark_heatmap(results, base, error_bar="std")
 
     assert png_path.exists()
     assert pdf_path.exists()

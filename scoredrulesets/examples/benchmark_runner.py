@@ -13,6 +13,7 @@ from scoredrulesets.benchmarking import (
     format_benchmark_report_markdown,
     format_benchmark_report_html,
     format_benchmark_leaderboard_table,
+    plot_benchmark_heatmap,
     plot_benchmark_results,
     run_benchmarks,
 )
@@ -114,6 +115,8 @@ def main() -> None:
     leaderboard = None
     markdown_path = None
     html_path = None
+    heatmap_png_path = None
+    heatmap_pdf_path = None
     if args.aggregate_repeats:
         aggregated = aggregate_benchmark_results(results, error_bar=args.error_bar)
         leaderboard = build_benchmark_leaderboard(
@@ -136,8 +139,28 @@ def main() -> None:
         error_bar=args.error_bar,
     )
     if aggregated_payload is not None:
+        heatmap_base = Path(args.output_plot_base).with_name(
+            f"{Path(args.output_plot_base).name}_heatmap"
+        )
+        heatmap_png_path, heatmap_pdf_path = plot_benchmark_heatmap(
+            results,
+            output_base=heatmap_base,
+            error_bar=args.error_bar,
+        )
+    if aggregated_payload is not None:
         aggregated_csv_name = aggregated_csv.name
         aggregated_json_name = aggregated_json.name
+        artifact_paths = {
+            "raw_csv": Path(args.output_csv).name,
+            "raw_json": Path(args.output_json).name,
+            "aggregated_csv": aggregated_csv_name,
+            "aggregated_json": aggregated_json_name,
+            "plot_png": png_path.name,
+            "plot_pdf": pdf_path.name,
+        }
+        if heatmap_png_path and heatmap_pdf_path:
+            artifact_paths["heatmap_png"] = heatmap_png_path.name
+            artifact_paths["heatmap_pdf"] = heatmap_pdf_path.name
         report = format_benchmark_report_markdown(
             leaderboard or [],
             title="ScoredRuleSets Benchmark Report",
@@ -153,21 +176,27 @@ def main() -> None:
                 "error_bar": args.error_bar,
                 "leaderboard_primary_metric": args.leaderboard_primary_metric,
             },
-            artifact_paths={
-                "raw_csv": Path(args.output_csv).name,
-                "raw_json": Path(args.output_json).name,
-                "aggregated_csv": aggregated_csv_name,
-                "aggregated_json": aggregated_json_name,
-                "plot_png": png_path.name,
-                "plot_pdf": pdf_path.name,
-            },
+            artifact_paths=artifact_paths,
             notes=[
                 "Leaderboard ist ueber aggregierte Ergebnisse sortiert.",
+                "Plot ist nach Datensaetzen in einzelne Panels aufgeteilt.",
                 "Plot zeigt Mittelwerte pro (dataset, estimator) mit Fehlerbalken, wenn --aggregate-repeats aktiv ist.",
+                "Die Heatmap bietet eine kompakte Gesamtansicht fuer mittlere F1-Werte und Fit-Zeiten.",
             ],
         )
         markdown_path.write_text(report, encoding="utf-8")
         html_path = Path(args.output_html) if args.output_html else _sibling_output(Path(args.output_json), "_leaderboard").with_suffix(".html")
+        html_artifact_paths = {
+            "raw_csv": Path(args.output_csv).name,
+            "raw_json": Path(args.output_json).name,
+            "aggregated_csv": aggregated_csv.name,
+            "aggregated_json": aggregated_json.name,
+            "plot_png": png_path.name,
+            "plot_pdf": pdf_path.name,
+        }
+        if heatmap_png_path and heatmap_pdf_path:
+            html_artifact_paths["heatmap_png"] = heatmap_png_path.name
+            html_artifact_paths["heatmap_pdf"] = heatmap_pdf_path.name
         html_report = format_benchmark_report_html(
             leaderboard or [],
             title="ScoredRuleSets Benchmark Report",
@@ -183,17 +212,12 @@ def main() -> None:
                 "error_bar": args.error_bar,
                 "leaderboard_primary_metric": args.leaderboard_primary_metric,
             },
-            artifact_paths={
-                "raw_csv": Path(args.output_csv).name,
-                "raw_json": Path(args.output_json).name,
-                "aggregated_csv": aggregated_csv.name,
-                "aggregated_json": aggregated_json.name,
-                "plot_png": png_path.name,
-                "plot_pdf": pdf_path.name,
-            },
+            artifact_paths=html_artifact_paths,
             notes=[
                 "Leaderboard ist ueber aggregierte Ergebnisse sortiert.",
+                "Plot ist nach Datensaetzen in einzelne Panels aufgeteilt.",
                 "Plot zeigt Mittelwerte pro (dataset, estimator) mit Fehlerbalken, wenn --aggregate-repeats aktiv ist.",
+                "Die Heatmap bietet eine kompakte Gesamtansicht fuer mittlere F1-Werte und Fit-Zeiten.",
             ],
         )
         html_path.write_text(html_report, encoding="utf-8")
@@ -209,6 +233,9 @@ def main() -> None:
         print(f"JSON (aggregated): {aggregated_json}")
         print(f"Markdown (report): {markdown_path}")
         print(f"HTML (report): {html_path}")
+        if heatmap_png_path and heatmap_pdf_path:
+            print(f"PNG (heatmap): {heatmap_png_path}")
+            print(f"PDF (heatmap): {heatmap_pdf_path}")
     print(f"PNG: {png_path}")
     print(f"PDF: {pdf_path}")
 
