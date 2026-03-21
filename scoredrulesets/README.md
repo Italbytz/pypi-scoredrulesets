@@ -141,6 +141,7 @@ python examples/benchmark_runner.py \
   --error-bar std \
   --leaderboard-primary-metric f1_macro_mean \
   --output-markdown benchmark_leaderboard.md \
+  --output-html benchmark_report.html \
   --output-csv benchmark_results.csv \
   --output-json benchmark_results.json \
   --output-plot-base benchmark_results \
@@ -154,6 +155,7 @@ Dabei werden standardmaessig folgende Dateien geschrieben:
 - `benchmark_results_aggregated.csv` (bei `--aggregate-repeats`)
 - `benchmark_results_aggregated.json` (bei `--aggregate-repeats`)
 - `benchmark_leaderboard.md` (bei `--aggregate-repeats`)
+- `benchmark_report.html` (optional)
 - `benchmark_results.png`
 - `benchmark_results.pdf`
 
@@ -164,6 +166,26 @@ Das Leaderboard sortiert aggregierte Ergebnisse standardmaessig nach `f1_macro_m
 Zusaetzlich enthaelt der Report eine globale "Top per Dataset"-Uebersicht vor dem Gesamt-Leaderboard.
 Pro Datensatz enthaelt der Report zusaetzlich automatische Summary-Punkte fuer bestes Modell, kleinste Modellgroesse und schnellstes Modell.
 Der Report enthaelt zusaetzlich eine kurze Summary mit Top-1-Modell, eine eingebettete Plot-Vorschau und separate Abschnitte pro Datensatz.
+
+Direkter Vergleich zweier aggregierter Benchmark-Laeufe:
+
+```bash
+python examples/benchmark_compare.py \
+  --core-aggregated-json benchmarks/2026-03-core/benchmark_results_aggregated.json \
+  --compare-aggregated-json benchmarks/2026-03-hs-compare/benchmark_results_aggregated.json \
+  --output-markdown benchmarks/2026-03-core-vs-hs/benchmark_comparison_report.md \
+  --output-html benchmarks/2026-03-core-vs-hs/benchmark_comparison_report.html
+```
+
+Kombinierter Meta-Report ueber beide Laeufe und ihren Vergleich:
+
+```bash
+python examples/benchmark_meta_report.py \
+  --core-aggregated-json benchmarks/2026-03-core/benchmark_results_aggregated.json \
+  --compare-aggregated-json benchmarks/2026-03-hs-compare/benchmark_results_aggregated.json \
+  --output-markdown benchmarks/2026-03-meta/benchmark_meta_report.md \
+  --output-html benchmarks/2026-03-meta/benchmark_meta_report.html
+```
 
 ## JSON-Format (Kurz)
 

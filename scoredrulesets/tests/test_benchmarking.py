@@ -5,7 +5,9 @@ from scoredrulesets.benchmarking import (
     BenchmarkConfig,
     aggregate_benchmark_results,
     build_benchmark_leaderboard,
+    format_benchmark_leaderboard_html,
     format_benchmark_leaderboard_markdown,
+    format_benchmark_report_html,
     format_benchmark_report_markdown,
     format_benchmark_leaderboard_table,
     plot_benchmark_results,
@@ -176,5 +178,52 @@ def test_benchmark_report_markdown_contains_sections_and_artifacts():
     assert "**fastest_model**" in report
     assert "| rank | dataset | estimator |" in report
     assert report.index("## Top per Dataset") < report.index("## Leaderboard")
+
+
+def test_benchmark_report_html_contains_sections_and_preview():
+    config = BenchmarkConfig(
+        dataset_names=["sklearn_iris"],
+        estimator_names=["wrapper_cart", "native"],
+        repeats=2,
+        random_state=0,
+    )
+    results = run_benchmarks(config)
+    aggregated = aggregate_benchmark_results(results, error_bar="std")
+    leaderboard = build_benchmark_leaderboard(aggregated, primary_metric="f1_macro_mean")
+
+    html = format_benchmark_report_html(
+        leaderboard,
+        title="Unit Test Report",
+        config={"repeats": 2, "error_bar": "std"},
+        artifact_paths={"plot_png": "benchmark.png", "plot_pdf": "benchmark.pdf"},
+        notes=["synthetic unit test"],
+    )
+
+    assert "<!doctype html>" in html
+    assert "<h1>Unit Test Report</h1>" in html
+    assert "<h2>Summary</h2>" in html
+    assert "<h2>Plot Preview</h2>" in html
+    assert "<img src='benchmark.png' alt='Benchmark plot'>" in html
+    assert "<h2>Top per Dataset</h2>" in html
+    assert "<h2>Leaderboard</h2>" in html
+    assert "<h2>Dataset: sklearn_iris</h2>" in html
+    assert "<table>" in html
+
+
+def test_benchmark_leaderboard_html_contains_table():
+    config = BenchmarkConfig(
+        dataset_names=["sklearn_iris"],
+        estimator_names=["wrapper_cart", "native"],
+        repeats=2,
+        random_state=0,
+    )
+    results = run_benchmarks(config)
+    aggregated = aggregate_benchmark_results(results, error_bar="std")
+    leaderboard = build_benchmark_leaderboard(aggregated, primary_metric="f1_macro_mean")
+
+    html = format_benchmark_leaderboard_html(leaderboard)
+    assert "<table>" in html
+    assert "<th>dataset</th>" in html
+    assert leaderboard[0].dataset in html
 
 

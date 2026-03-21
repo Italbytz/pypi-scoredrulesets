@@ -11,6 +11,7 @@ from scoredrulesets.benchmarking import (
     aggregated_results_as_dicts,
     build_benchmark_leaderboard,
     format_benchmark_report_markdown,
+    format_benchmark_report_html,
     format_benchmark_leaderboard_table,
     plot_benchmark_results,
     run_benchmarks,
@@ -64,6 +65,7 @@ def parse_args() -> argparse.Namespace:
         ],
     )
     parser.add_argument("--output-markdown", type=str, default="")
+    parser.add_argument("--output-html", type=str, default="")
     return parser.parse_args()
 
 
@@ -83,6 +85,7 @@ def main() -> None:
     aggregated_payload = None
     leaderboard = None
     markdown_path = None
+    html_path = None
     if args.aggregate_repeats:
         aggregated = aggregate_benchmark_results(results, error_bar=args.error_bar)
         leaderboard = build_benchmark_leaderboard(
@@ -133,6 +136,33 @@ def main() -> None:
             ],
         )
         markdown_path.write_text(report, encoding="utf-8")
+        html_path = Path(args.output_html) if args.output_html else _sibling_output(Path(args.output_json), "_leaderboard").with_suffix(".html")
+        html_report = format_benchmark_report_html(
+            leaderboard or [],
+            title="ScoredRuleSets Benchmark Report",
+            config={
+                "datasets": ",".join(dataset_names or []),
+                "estimators": ",".join(estimator_names or []),
+                "repeats": args.repeats,
+                "random_state": args.random_state,
+                "plot_size_metric": args.plot_size_metric,
+                "error_bar": args.error_bar,
+                "leaderboard_primary_metric": args.leaderboard_primary_metric,
+            },
+            artifact_paths={
+                "raw_csv": Path(args.output_csv).name,
+                "raw_json": Path(args.output_json).name,
+                "aggregated_csv": aggregated_csv.name,
+                "aggregated_json": aggregated_json.name,
+                "plot_png": png_path.name,
+                "plot_pdf": pdf_path.name,
+            },
+            notes=[
+                "Leaderboard ist ueber aggregierte Ergebnisse sortiert.",
+                "Plot zeigt Mittelwerte pro (dataset, estimator) mit Fehlerbalken, wenn --aggregate-repeats aktiv ist.",
+            ],
+        )
+        html_path.write_text(html_report, encoding="utf-8")
 
     print(_render_console_table(payload))
     if aggregated_payload is not None:
@@ -144,6 +174,7 @@ def main() -> None:
         print(f"CSV (aggregated): {aggregated_csv}")
         print(f"JSON (aggregated): {aggregated_json}")
         print(f"Markdown (report): {markdown_path}")
+        print(f"HTML (report): {html_path}")
     print(f"PNG: {png_path}")
     print(f"PDF: {pdf_path}")
 

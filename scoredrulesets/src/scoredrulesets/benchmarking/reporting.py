@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from .runner import AggregatedBenchmarkResult
@@ -79,6 +80,28 @@ def format_benchmark_leaderboard_markdown(
     return "\n".join(lines)
 
 
+def format_benchmark_leaderboard_html(
+    results: list[AggregatedBenchmarkResult],
+) -> str:
+    headers = ["rank", "dataset", "estimator", "repeats", "f1_mean", "f1_err", "fit_s", "rules", "atoms"]
+    rows = []
+    for rank, result in enumerate(results, start=1):
+        rows.append(
+            [
+                str(rank),
+                result.dataset,
+                result.estimator,
+                str(result.n_repeats),
+                _fmt_float(result.f1_macro_mean),
+                _fmt_float(result.f1_macro_error),
+                _fmt_float(result.fit_seconds_mean),
+                _fmt_float(result.n_rules_mean),
+                _fmt_float(result.n_atoms_mean),
+            ]
+        )
+    return _html_table(headers, rows)
+
+
 def format_benchmark_report_markdown(
     results: list[AggregatedBenchmarkResult],
     *,
@@ -122,6 +145,70 @@ def format_benchmark_report_markdown(
     if results:
         sections.extend(_dataset_sections(results))
     return "\n".join(sections)
+
+
+def format_benchmark_report_html(
+    results: list[AggregatedBenchmarkResult],
+    *,
+    title: str = "Benchmark Report",
+    config: dict[str, object] | None = None,
+    artifact_paths: dict[str, str | Path] | None = None,
+    notes: list[str] | None = None,
+) -> str:
+    sections: list[str] = []
+
+    if results:
+        top = results[0]
+        sections.append(
+            _html_section(
+                "Summary",
+                _html_kv_list(
+                    [
+                        ("datasets", str(len({result.dataset for result in results}))),
+                        ("estimators", str(len({result.estimator for result in results}))),
+                        (
+                            "top_1_model",
+                            f"{top.dataset} / {top.estimator} (f1={_fmt_float(top.f1_macro_mean)}, rules={_fmt_float(top.n_rules_mean)}, fit_s={_fmt_float(top.fit_seconds_mean)})",
+                        ),
+                    ]
+                ),
+            )
+        )
+
+    if config:
+        sections.append(
+            _html_section(
+                "Configuration",
+                _html_kv_list([(key, str(value)) for key, value in config.items()]),
+            )
+        )
+
+    if artifact_paths:
+        artifact_items = []
+        for label, path in artifact_paths.items():
+            path_text = str(path)
+            artifact_items.append((label, _html_link(path_text, path_text)))
+        sections.append(_html_section("Artifacts", _html_kv_list(artifact_items, escape_values=False)))
+        plot_png = artifact_paths.get("plot_png")
+        if plot_png:
+            sections.append(_html_section("Plot Preview", _html_image(str(plot_png), "Benchmark plot")))
+
+    if notes:
+        sections.append(_html_section("Notes", _html_list(notes)))
+
+    if results:
+        sections.append(_html_section("Top per Dataset", _dataset_overview_html(results)))
+        sections.append(_html_section("Leaderboard", format_benchmark_leaderboard_html(results)))
+        seen: set[str] = set()
+        for result in results:
+            dataset = result.dataset
+            if dataset in seen:
+                continue
+            seen.add(dataset)
+            dataset_results = [item for item in results if item.dataset == dataset]
+            sections.append(_dataset_section_html(dataset, dataset_results))
+
+    return _html_document(title, sections)
 
 
 def _summary_section(results: list[AggregatedBenchmarkResult]) -> list[str]:
@@ -200,6 +287,43 @@ def _dataset_overview_section(results: list[AggregatedBenchmarkResult]) -> list[
     return lines
 
 
+def _dataset_overview_html(results: list[AggregatedBenchmarkResult]) -> str:
+    grouped: dict[str, list[AggregatedBenchmarkResult]] = {}
+    for result in results:
+        grouped.setdefault(result.dataset, []).append(result)
+
+    blocks = []
+    seen: set[str] = set()
+    for result in results:
+        dataset = result.dataset
+        if dataset in seen:
+            continue
+        seen.add(dataset)
+        summary = _select_dataset_summary(grouped[dataset])
+        blocks.append(
+            "<div class='dataset-card'>"
+            f"<h3>{html.escape(dataset)}</h3>"
+            + _html_kv_list(
+                [
+                    (
+                        "best_model",
+                        f"{summary['best'].estimator} (f1={_fmt_float(summary['best'].f1_macro_mean)}, rules={_fmt_float(summary['best'].n_rules_mean)}, fit_s={_fmt_float(summary['best'].fit_seconds_mean)})",
+                    ),
+                    (
+                        "smallest_model",
+                        f"{summary['smallest'].estimator} (rules={_fmt_float(summary['smallest'].n_rules_mean)}, atoms={_fmt_float(summary['smallest'].n_atoms_mean)}, f1={_fmt_float(summary['smallest'].f1_macro_mean)})",
+                    ),
+                    (
+                        "fastest_model",
+                        f"{summary['fastest'].estimator} (fit_s={_fmt_float(summary['fastest'].fit_seconds_mean)}, f1={_fmt_float(summary['fastest'].f1_macro_mean)}, rules={_fmt_float(summary['fastest'].n_rules_mean)})",
+                    ),
+                ]
+            )
+            + "</div>"
+        )
+    return "".join(blocks)
+
+
 def _dataset_summary_section(results: list[AggregatedBenchmarkResult]) -> list[str]:
     summary = _select_dataset_summary(results)
     best = summary["best"]
@@ -215,6 +339,32 @@ def _dataset_summary_section(results: list[AggregatedBenchmarkResult]) -> list[s
         f"`{fastest.estimator}` (fit_s={_fmt_float(fastest.fit_seconds_mean)}, f1={_fmt_float(fastest.f1_macro_mean)}, rules={_fmt_float(fastest.n_rules_mean)})",
         "",
     ]
+
+
+def _dataset_section_html(dataset: str, results: list[AggregatedBenchmarkResult]) -> str:
+    summary = _select_dataset_summary(results)
+    return (
+        f"<section data-dataset='{html.escape(dataset, quote=True)}'>"
+        f"<h2>Dataset: {html.escape(dataset)}</h2>"
+        + _html_kv_list(
+            [
+                (
+                    "best_model",
+                    f"{summary['best'].estimator} (f1={_fmt_float(summary['best'].f1_macro_mean)}, rules={_fmt_float(summary['best'].n_rules_mean)}, fit_s={_fmt_float(summary['best'].fit_seconds_mean)})",
+                ),
+                (
+                    "smallest_model",
+                    f"{summary['smallest'].estimator} (rules={_fmt_float(summary['smallest'].n_rules_mean)}, atoms={_fmt_float(summary['smallest'].n_atoms_mean)}, f1={_fmt_float(summary['smallest'].f1_macro_mean)})",
+                ),
+                (
+                    "fastest_model",
+                    f"{summary['fastest'].estimator} (fit_s={_fmt_float(summary['fastest'].fit_seconds_mean)}, f1={_fmt_float(summary['fastest'].f1_macro_mean)}, rules={_fmt_float(summary['fastest'].n_rules_mean)})",
+                ),
+            ]
+        )
+        + format_benchmark_leaderboard_html(results)
+        + "</section>"
+    )
 
 
 def _select_dataset_summary(
@@ -271,3 +421,56 @@ def _fmt_float(value: float | None) -> str:
         return ""
     return f"{value:.4f}"
 
+
+def _html_document(title: str, sections: list[str]) -> str:
+    escaped_title = html.escape(title)
+    return (
+        "<!doctype html><html lang='de'><head><meta charset='utf-8'>"
+        f"<title>{escaped_title}</title>"
+        "<style>"
+        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.45;margin:2rem;max-width:1200px;}"
+        "h1,h2,h3{margin-top:1.4rem;}"
+        "table{border-collapse:collapse;width:100%;margin:1rem 0;}"
+        "th,td{border:1px solid #d0d7de;padding:0.45rem 0.6rem;text-align:left;}"
+        "th{background:#f6f8fa;}"
+        "code{background:#f6f8fa;padding:0.1rem 0.25rem;border-radius:4px;}"
+        "ul{padding-left:1.25rem;}"
+        "img{max-width:100%;height:auto;border:1px solid #d0d7de;border-radius:6px;}"
+        ".dataset-card{border:1px solid #d0d7de;border-radius:6px;padding:0.75rem 1rem;margin:0.75rem 0;background:#fafbfc;}"
+        "</style></head><body>"
+        f"<h1>{escaped_title}</h1>"
+        + "".join(sections)
+        + "</body></html>"
+    )
+
+
+def _html_section(title: str, body: str) -> str:
+    return f"<section><h2>{html.escape(title)}</h2>{body}</section>"
+
+
+def _html_kv_list(items: list[tuple[str, str]], *, escape_values: bool = True) -> str:
+    rows = []
+    for key, value in items:
+        safe_value = html.escape(value) if escape_values else value
+        rows.append(f"<li><strong>{html.escape(key)}</strong>: {safe_value}</li>")
+    return "<ul>" + "".join(rows) + "</ul>"
+
+
+def _html_list(items: list[str]) -> str:
+    return "<ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in items) + "</ul>"
+
+
+def _html_table(headers: list[str], rows: list[list[str]]) -> str:
+    thead = "<thead><tr>" + "".join(f"<th>{html.escape(h)}</th>" for h in headers) + "</tr></thead>"
+    body_rows = []
+    for row in rows:
+        body_rows.append("<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in row) + "</tr>")
+    return "<table>" + thead + "<tbody>" + "".join(body_rows) + "</tbody></table>"
+
+
+def _html_link(href: str, label: str) -> str:
+    return f"<a href='{html.escape(href, quote=True)}'>{html.escape(label)}</a>"
+
+
+def _html_image(src: str, alt: str) -> str:
+    return f"<img src='{html.escape(src, quote=True)}' alt='{html.escape(alt, quote=True)}'>"
