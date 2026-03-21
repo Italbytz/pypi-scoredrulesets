@@ -15,6 +15,7 @@ from ..schema import ScoredRuleSet
 from .backends import build_backend_estimator
 from .base import BaseRuleSetEstimator
 from .tree_transform import TreeTransformParams, estimator_to_scored_ruleset
+from .ruleset_transform import rulekit_to_scored_ruleset, exstracs_to_scored_ruleset
 
 
 class ScoredRuleSetClassifier(BaseRuleSetEstimator):
@@ -51,13 +52,30 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         self.estimator_.fit(X_valid, y_valid)
         self.classes_ = np.asarray(getattr(self.estimator_, "classes_", np.unique(y_valid)))
 
-        transform_cfg = TreeTransformParams(**(self.transform_params or {}))
-        self.ruleset_ = estimator_to_scored_ruleset(
-            estimator=self.estimator_,
-            class_labels=self.classes_.tolist(),
-            feature_names=self.feature_names_in_,
-            params=transform_cfg,
-        )
+        # Wähle passende Transformation basierend auf Backend
+        backend_lower = self.backend.lower()
+        
+        if backend_lower == "rulekit":
+            self.ruleset_ = rulekit_to_scored_ruleset(
+                estimator=self.estimator_,
+                class_labels=self.classes_.tolist(),
+                feature_names=self.feature_names_in_,
+            )
+        elif backend_lower == "exstracs":
+            self.ruleset_ = exstracs_to_scored_ruleset(
+                estimator=self.estimator_,
+                class_labels=self.classes_.tolist(),
+                feature_names=self.feature_names_in_,
+            )
+        else:
+            # Tree-basierte Transformation (CART, HS)
+            transform_cfg = TreeTransformParams(**(self.transform_params or {}))
+            self.ruleset_ = estimator_to_scored_ruleset(
+                estimator=self.estimator_,
+                class_labels=self.classes_.tolist(),
+                feature_names=self.feature_names_in_,
+                params=transform_cfg,
+            )
         self.is_ruleset_mode_ = False
         return self
 

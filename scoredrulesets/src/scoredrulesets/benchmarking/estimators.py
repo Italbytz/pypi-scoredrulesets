@@ -94,6 +94,22 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
+        "wrapper_rulekit": EstimatorSpec(
+            name="wrapper_rulekit",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulekit",
+                backend_params={},
+                random_state=0,
+            ),
+        ),
+        "wrapper_exstracs": EstimatorSpec(
+            name="wrapper_exstracs",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="exstracs",
+                backend_params={},
+                random_state=0,
+            ),
+        ),
     }
 
 
