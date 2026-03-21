@@ -116,10 +116,10 @@ def format_benchmark_comparison_report_markdown(
     lines.append("")
 
     lines.extend(["## Interpretation", ""])
-    lines.append("- `compare_minus_core_best_f1 > 0` bedeutet: der beste Lauf im Vergleichsset war besser als der beste Lauf im Core-Set.")
-    lines.append("- `focus_minus_baseline_f1 > 0` bedeutet: der Fokus-Estimator (z. B. `wrapper_hs`) war auf diesem Datensatz besser als der Baseline-Estimator (z. B. `wrapper_cart`).")
-    lines.append("- Positive `focus_minus_baseline_fit_seconds` bedeuten, dass der Fokus-Estimator langsamer war.")
-    lines.append("- Positive `focus_minus_baseline_rules` bedeuten, dass der Fokus-Estimator mehr Regeln erzeugt hat.")
+    lines.append("- `compare_minus_core_best_f1 > 0` means: the best run in the comparison set outperformed the best run in the core set.")
+    lines.append("- `focus_minus_baseline_f1 > 0` means: the focus estimator (e.g. `wrapper_hs`) performed better on this dataset than the baseline estimator (e.g. `wrapper_cart`).")
+    lines.append("- Positive `focus_minus_baseline_fit_seconds` means that the focus estimator was slower.")
+    lines.append("- Positive `focus_minus_baseline_rules` means that the focus estimator produced more rules.")
     lines.append("")
     return "\n".join(lines)
 
@@ -155,10 +155,10 @@ def format_benchmark_comparison_report_html(
             "Interpretation",
             _html_kv_list(
                 [
-                    ("delta_best", "compare_minus_core_best_f1 > 0 => Vergleichsset besser als Core-Set"),
-                    ("focus_vs_baseline", "focus_minus_baseline_f1 > 0 => Fokus-Estimator besser als Baseline"),
-                    ("delta_fit_s", "positive Werte => Fokus-Estimator langsamer"),
-                    ("delta_rules", "positive Werte => Fokus-Estimator groesser"),
+                    ("delta_best", "compare_minus_core_best_f1 > 0 => comparison set beats core set"),
+                    ("focus_vs_baseline", "focus_minus_baseline_f1 > 0 => focus estimator beats baseline"),
+                    ("delta_fit_s", "positive values => focus estimator is slower"),
+                    ("delta_rules", "positive values => focus estimator is larger"),
                 ]
             ),
         )

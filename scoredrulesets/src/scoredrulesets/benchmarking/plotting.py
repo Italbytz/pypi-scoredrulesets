@@ -20,12 +20,12 @@ def plot_benchmark_results(
     aggregate_repeats: bool = False,
     error_bar: str = "std",
 ) -> tuple[Path, Path]:
-    """Erzeugt einen Scatter-Plot fuer Benchmark-Ergebnisse und speichert PNG/PDF.
+    """Create a scatter plot for benchmark results and save it as PNG/PDF.
 
-    x-Achse: Modellgroesse (`n_rules`, `n_atoms`, `ruleset_json_bytes`)
-    y-Achse: `f1_macro`
-    Farbe: `fit_seconds`
-    Punktlabel: `<dataset>/<estimator>#<repeat>`
+    x-axis: model size (`n_rules`, `n_atoms`, `ruleset_json_bytes`)
+    y-axis: `f1_macro`
+    color: `fit_seconds`
+    point label: `<dataset>/<estimator>#<repeat>`
     """
     valid_size_metrics = {"n_rules", "n_atoms", "ruleset_json_bytes"}
     if size_metric not in valid_size_metrics:
@@ -43,14 +43,14 @@ def plot_benchmark_results(
         dataset_names = sorted({result.dataset for result in aggregated_results})
         fit_values = [float(result.fit_seconds_mean or 0.0) for result in aggregated_results]
         title = (
-            f"Benchmark (aggregiert, pro Datensatz): F1 vs Modellgroesse "
-            f"(Farbe = Fit-Zeit, Fehler = {error_bar})"
+            f"Benchmark (aggregated, per dataset): F1 vs model size "
+            f"(color = fit time, error = {error_bar})"
         )
     else:
         aggregated_results = None
         dataset_names = sorted({result.dataset for result in ok_results})
         fit_values = [float(result.fit_seconds or 0.0) for result in ok_results]
-        title = "Benchmark (pro Datensatz): F1 vs Modellgroesse (Farbe = Fit-Zeit)"
+        title = "Benchmark (per dataset): F1 vs model size (color = fit time)"
 
     fig, axes = _build_dataset_axes(len(dataset_names))
     fig.suptitle(title)
@@ -101,12 +101,12 @@ def plot_benchmark_heatmap(
     output_base: str | Path,
     error_bar: str = "std",
 ) -> tuple[Path, Path]:
-    """Erzeugt eine Heatmap fuer aggregierte Benchmark-Ergebnisse.
+    """Create a heatmap for aggregated benchmark results.
 
-    Zeilen: Datensaetze
-    Spalten: Estimatoren
-    Farbe: mittlere F1-Macro
-    Annotation: `f1±err` und mittlere Fit-Zeit
+    rows: datasets
+    columns: estimators
+    color: mean F1-macro
+    annotation: `f1±err` and mean fit time
     """
     raw_results = list(results)
     ok_results = [result for result in raw_results if result.status == "ok"]
@@ -142,11 +142,11 @@ def plot_benchmark_heatmap(
     cmap.set_bad(color="#e5e7eb")
     im = ax.imshow(np.ma.masked_invalid(matrix), cmap=cmap, vmin=0.0, vmax=1.0, aspect="auto")
 
-    ax.set_title("Benchmark-Vergleich (Heatmap): mittlere F1-Macro pro Datensatz/Estimator")
+    ax.set_title("Benchmark comparison (heatmap): mean F1-macro per dataset/estimator")
     ax.set_xticks(range(len(estimator_names)), estimator_names, rotation=45, ha="right")
     ax.set_yticks(range(len(dataset_names)), dataset_names)
     ax.set_xlabel("Estimator")
-    ax.set_ylabel("Datensatz")
+    ax.set_ylabel("Dataset")
 
     for row_idx in range(len(dataset_names)):
         for col_idx in range(len(estimator_names)):

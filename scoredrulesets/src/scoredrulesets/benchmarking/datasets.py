@@ -130,10 +130,10 @@ def load_sklearn_datasets() -> dict[str, DatasetBundle]:
 
 
 def load_local_uci_datasets() -> dict[str, DatasetBundle]:
-    """Laedt optionale UCI-Datensaetze aus SCORERULESETS_UCI_DIR als CSV.
+    """Load optional UCI datasets from `SCORERULESETS_UCI_DIR` as CSV files.
 
-    Erwartetes Format je Datei: letzte Spalte ist Zielvariable.
-    Dateiname wird zu Dataset-Namen `uci_<stem>`.
+    Expected format per file: the last column is the target variable.
+    The filename is converted to the dataset name `uci_<stem>`.
     """
     root = os.environ.get("SCORERULESETS_UCI_DIR")
     if not root:
@@ -149,9 +149,9 @@ def load_local_uci_datasets() -> dict[str, DatasetBundle]:
         if raw.ndim != 2 or raw.shape[1] < 2:
             continue
 
-        # Optionaler Header: wenn letzte Spalte nicht in Label kodierbar, skippt load.
+        # Optional header: if the last column cannot be label-encoded, skip loading.
         try:
-            # Entfernt optionale Headerzeile, falls vorhanden.
+            # Remove an optional header row if present.
             if _looks_like_header(raw[0]):
                 raw = raw[1:]
             X_raw = raw[:, :-1]
@@ -322,7 +322,7 @@ def resolve_dataset_names(
 
 
 def resolve_paper_uci_dataset_names(registry: dict[str, DatasetBundle], *, strict: bool = False) -> list[str]:
-    """Waehlt verfuegbare Datensaetze aus dem im Paper verwendeten UCI-Katalog."""
+    """Select available datasets from the UCI catalog used in the paper."""
     selected: list[str] = []
     for _, candidates in PAPER_UCI_DATASET_CANDIDATES.items():
         chosen = next((cand for cand in candidates if cand in registry), None)

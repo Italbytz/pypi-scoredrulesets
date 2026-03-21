@@ -82,10 +82,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 min_samples_leaf=3,
             ),
         ),
-        # GP-Nomenklatur:
-        # - `gp` ist der empfohlene starke Default fuer Benchmarks (residual covering).
-        # - `gp_fast` behaelt die fruehere, schnelle Light-Konfiguration.
-        # - `gp_diverse` behaelt den vorherigen starken Default mit diverser Endauswahl.
+        # GP naming:
+        # - `gp` is the recommended strong benchmark default (residual covering).
+        # - `gp_fast` keeps the earlier lightweight fast configuration.
+        # - `gp_diverse` keeps the previous strong default with diverse final selection.
         "gp_fast": EstimatorSpec(
             name="gp_fast",
             factory=lambda: GeneticScoredRuleSetClassifier(

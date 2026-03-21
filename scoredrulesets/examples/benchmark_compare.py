@@ -12,7 +12,7 @@ from scoredrulesets.benchmarking import (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Vergleicht zwei aggregierte Benchmark-Laeufe")
+    parser = argparse.ArgumentParser(description="Compare two aggregated benchmark runs")
     parser.add_argument("--core-aggregated-json", required=True, type=str)
     parser.add_argument("--compare-aggregated-json", required=True, type=str)
     parser.add_argument("--output-markdown", required=True, type=str)
