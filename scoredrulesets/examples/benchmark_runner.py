@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
         "--estimators",
         type=str,
         default="",
-        help="Kommagetrennte Liste, z.B. wrapper_cart,native,gp,wrapper_hs",
+        help="Kommagetrennte Liste, z.B. wrapper_cart,native,gp,gp_fast,wrapper_hs",
     )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--random-state", type=int, default=0)
@@ -73,6 +73,8 @@ def main() -> None:
     args = parse_args()
     dataset_names = [x.strip() for x in args.datasets.split(",") if x.strip()] or None
     estimator_names = [x.strip() for x in args.estimators.split(",") if x.strip()] or None
+    aggregated_csv = _sibling_output(Path(args.output_csv), "_aggregated")
+    aggregated_json = _sibling_output(Path(args.output_json), "_aggregated")
 
     config = BenchmarkConfig(
         dataset_names=dataset_names,
@@ -97,8 +99,6 @@ def main() -> None:
     _write_csv(Path(args.output_csv), payload)
     Path(args.output_json).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     if aggregated_payload is not None:
-        aggregated_csv = _sibling_output(Path(args.output_csv), "_aggregated")
-        aggregated_json = _sibling_output(Path(args.output_json), "_aggregated")
         _write_csv(aggregated_csv, aggregated_payload)
         aggregated_json.write_text(json.dumps(aggregated_payload, indent=2), encoding="utf-8")
         markdown_path = Path(args.output_markdown) if args.output_markdown else _sibling_output(Path(args.output_json), "_leaderboard").with_suffix(".md")
@@ -110,6 +110,8 @@ def main() -> None:
         error_bar=args.error_bar,
     )
     if aggregated_payload is not None:
+        aggregated_csv_name = aggregated_csv.name
+        aggregated_json_name = aggregated_json.name
         report = format_benchmark_report_markdown(
             leaderboard or [],
             title="ScoredRuleSets Benchmark Report",
@@ -125,8 +127,8 @@ def main() -> None:
             artifact_paths={
                 "raw_csv": Path(args.output_csv).name,
                 "raw_json": Path(args.output_json).name,
-                "aggregated_csv": aggregated_csv.name,
-                "aggregated_json": aggregated_json.name,
+                "aggregated_csv": aggregated_csv_name,
+                "aggregated_json": aggregated_json_name,
                 "plot_png": png_path.name,
                 "plot_pdf": pdf_path.name,
             },

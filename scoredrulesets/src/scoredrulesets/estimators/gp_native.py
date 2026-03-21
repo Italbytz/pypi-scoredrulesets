@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from sklearn.metrics import f1_score
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
@@ -33,6 +34,8 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         temperature: float = 1.0,
         score_mode: str = "auto",
         selection_mode: str = "fitness",
+        final_rule_selection: str = "fitness",
+        evolution_fitness_mode: str = "single_rule",
         include_default_rule: bool = True,
         population_size: int = 40,
         generations: int = 20,
@@ -46,11 +49,18 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         validation_fraction: float = 0.2,
         early_stopping_rounds: int = 5,
         random_state: int | None = None,
+        class_balance_weight: float = 0.25,
+        diversity_penalty: float = 0.35,
+        class_diversity_bonus: float = 0.08,
+        evolution_context_size: int = 3,
+        residual_focus_weight: float = 0.35,
     ):
         self.aggregation = aggregation
         self.temperature = temperature
         self.score_mode = score_mode
         self.selection_mode = selection_mode
+        self.final_rule_selection = final_rule_selection
+        self.evolution_fitness_mode = evolution_fitness_mode
         self.include_default_rule = include_default_rule
         self.population_size = population_size
         self.generations = generations
@@ -64,11 +74,18 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         self.validation_fraction = validation_fraction
         self.early_stopping_rounds = early_stopping_rounds
         self.random_state = random_state
+        self.class_balance_weight = class_balance_weight
+        self.diversity_penalty = diversity_penalty
+        self.class_diversity_bonus = class_diversity_bonus
+        self.evolution_context_size = evolution_context_size
+        self.residual_focus_weight = residual_focus_weight
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
         self._resolved_score_mode_ = self._resolve_score_mode()
         self._resolved_selection_mode_ = self._resolve_selection_mode()
+        self._resolved_final_rule_selection_ = self._resolve_final_rule_selection()
+        self._resolved_evolution_fitness_mode_ = self._resolve_evolution_fitness_mode()
         self.n_features_in_ = X_valid.shape[1]
         self.feature_names_in_ = np.asarray([f"f{i}" for i in range(self.n_features_in_)], dtype=object)
         self.classes_ = unique_labels(y_valid)
@@ -79,6 +96,10 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         n_classes = len(self.classes_)
         train_idx, val_idx = self._train_val_indices(y_idx)
         self._used_validation_ = val_idx is not None
+        # Klassenprior fuer prior-aware Fitness (verhindert Majority-Kollaps).
+        train_counts = np.bincount(y_idx[train_idx], minlength=n_classes).astype(float)
+        self._class_prior_ = train_counts / max(train_counts.sum(), 1.0)
+        self._default_rule_scores_ = np.asarray(self._distribution_to_scores(train_counts), dtype=float)
 
         feature_specs = self._build_feature_specs(X_valid)
         population = [
@@ -92,6 +113,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         no_improvement_rounds = 0
         generations_ran = 0
         for generation_idx in range(max_generations):
+            context_genes = self._context_genes_from_hall_of_fame(hall_of_fame)
             scored = self._score_population(
                 population,
                 X_valid,
@@ -99,6 +121,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 n_classes,
                 train_idx,
                 val_idx,
+                context_genes,
             )
             ranked = self._rank_scored_population(scored)
             generations_ran = generation_idx + 1
@@ -122,17 +145,14 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 next_population.append(child)
             population = next_population
 
-        hall_of_fame.sort(key=lambda item: (item[0], -item[1], item[2]))
-        best_genes: list[_RuleGene] = []
-        seen = set()
-        for _, _, _, gene in hall_of_fame:
-            key = self._gene_key(gene)
-            if key in seen:
-                continue
-            seen.add(key)
-            best_genes.append(gene)
-            if len(best_genes) >= max(0, int(self.max_rules)):
-                break
+        selection_idx = val_idx if val_idx is not None else train_idx
+        best_genes = self._select_final_genes(
+            hall_of_fame,
+            X_valid,
+            y_idx,
+            selection_idx,
+            n_classes,
+        )
 
         rules = self._genes_to_rules(best_genes, X_valid, y_idx, n_classes)
         if self.include_default_rule:
@@ -162,6 +182,9 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                 "validation_fraction": float(self.validation_fraction),
                 "score_mode": self._resolved_score_mode_,
                 "selection_mode": self._resolved_selection_mode_,
+                "final_rule_selection": self._resolved_final_rule_selection_,
+                "evolution_fitness_mode": self._resolved_evolution_fitness_mode_,
+                "evolution_context_size": int(self.evolution_context_size),
             },
         )
         self.ruleset_.validate()
@@ -198,7 +221,14 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
             arr = np.asarray(col)
             if np.issubdtype(arr.dtype, np.number):
                 values = np.unique(arr.astype(float))
-                thresholds = ((values[:-1] + values[1:]) / 2.0).tolist() if values.size >= 2 else []
+                if values.size >= 2:
+                    if values.size <= 20:
+                        thresholds = ((values[:-1] + values[1:]) / 2.0).tolist()
+                    else:
+                        q = np.unique(np.quantile(values, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]))
+                        thresholds = q.astype(float).tolist()
+                else:
+                    thresholds = []
                 intervals = []
                 if values.size >= 3:
                     q_points = np.unique(np.quantile(values, [0.15, 0.35, 0.5, 0.65, 0.85]))
@@ -297,7 +327,37 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         n_classes: int,
         train_idx: np.ndarray,
         val_idx: np.ndarray | None,
+        context_genes: list[_RuleGene] | None = None,
     ) -> float:
+        if self._resolved_evolution_fitness_mode_ == "residual_covering":
+            train_score = self._contextual_quality(
+                gene,
+                X,
+                y_idx,
+                n_classes,
+                train_idx,
+                context_genes or [],
+            )
+            if train_score <= -1e8:
+                return train_score
+
+            if val_idx is None:
+                return train_score
+
+            val_score = self._contextual_quality(
+                gene,
+                X,
+                y_idx,
+                n_classes,
+                val_idx,
+                context_genes or [],
+            )
+            if val_score <= -1e8:
+                return val_score
+
+            overfit_penalty = max(0.0, train_score - val_score) * 0.2
+            return val_score - overfit_penalty
+
         train_score = self._subset_quality(gene, X, y_idx, n_classes, train_idx)
         if train_score <= -1e8:
             return train_score
@@ -330,10 +390,90 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
             return -1e9
 
         counts = np.bincount(y_idx[subset_idx][mask], minlength=n_classes).astype(float)
-        purity = float(np.max(counts) / max(np.sum(counts), 1.0))
+        total = max(np.sum(counts), 1.0)
+        probs = counts / total
+        top_idx = int(np.argmax(probs))
+        top_prob = float(probs[top_idx])
+        top_two = np.partition(probs, -2)[-2:] if probs.size >= 2 else np.asarray([top_prob, 0.0])
+        margin = float(top_two[-1] - top_two[-2])
+
         coverage = float(support / subset_idx.size)
         complexity = self.complexity_penalty * len(gene.atoms)
-        return purity * (1.0 + coverage) - complexity
+
+        class_prior = float(self._class_prior_[top_idx]) if hasattr(self, "_class_prior_") else (1.0 / max(n_classes, 1))
+        lift = top_prob - class_prior
+
+        # Prior-aware Ziel: gute, trennscharfe Regeln ueber Klassen hinweg.
+        quality = (
+            top_prob
+            + 0.5 * margin
+            + self.class_balance_weight * lift
+            + 0.3 * coverage
+            - complexity
+        )
+
+        # Regeln, die kaum besser als Prior sind, explizit abwerten.
+        if lift < 0.02:
+            quality -= (0.02 - lift) * 0.8
+
+        return float(quality)
+
+    def _contextual_quality(
+        self,
+        gene: _RuleGene,
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        subset_idx: np.ndarray,
+        context_genes: list[_RuleGene],
+    ) -> float:
+        if subset_idx.size == 0:
+            return -1e9
+
+        single_quality = self._subset_quality(gene, X, y_idx, n_classes, subset_idx)
+        if single_quality <= -1e8:
+            return single_quality
+
+        base_scores = self._scores_from_genes(context_genes, X, y_idx, n_classes, subset_idx)
+        y_subset = y_idx[subset_idx]
+        base_f1 = self._macro_f1_from_scores(base_scores, y_subset)
+
+        candidate_scores = base_scores.copy()
+        candidate_mask = self._rule_mask(gene, X[subset_idx])
+        if int(candidate_mask.sum()) < self.min_samples_leaf:
+            return -1e9
+        candidate_rule_scores = np.asarray(
+            self._rule_scores_from_gene(gene, X, y_idx, n_classes),
+            dtype=float,
+        )
+        candidate_scores[candidate_mask] += candidate_rule_scores
+        candidate_f1 = self._macro_f1_from_scores(candidate_scores, y_subset)
+        delta_f1 = candidate_f1 - base_f1
+
+        residual_mask = np.argmax(base_scores, axis=1) != y_subset
+        residual_gain = 0.0
+        if int(residual_mask.sum()) > 0:
+            focused = candidate_mask & residual_mask
+            if int(focused.sum()) > 0:
+                residual_counts = np.bincount(y_subset[focused], minlength=n_classes).astype(float)
+                residual_total = max(float(residual_counts.sum()), 1.0)
+                residual_gain = float(np.max(residual_counts) / residual_total) * float(focused.sum() / residual_mask.sum())
+
+        overlap_penalty = 0.0
+        if context_genes:
+            candidate_support_mask = candidate_mask
+            overlaps = [
+                self._mask_jaccard(candidate_support_mask, self._rule_mask(ctx_gene, X[subset_idx]))
+                for ctx_gene in context_genes
+            ]
+            overlap_penalty = self.diversity_penalty * max(overlaps)
+
+        return float(
+            single_quality
+            + 1.5 * delta_f1
+            + self.residual_focus_weight * residual_gain
+            - overlap_penalty
+        )
 
     def _train_val_indices(self, y_idx: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         n_samples = y_idx.shape[0]
@@ -445,6 +585,248 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
             "Invalid selection_mode. Expected one of: 'fitness', 'pareto'."
         )
 
+    def _resolve_final_rule_selection(self) -> str:
+        if self.final_rule_selection in {"fitness", "diverse", "contribution"}:
+            return self.final_rule_selection
+        raise ValueError(
+            "Invalid final_rule_selection. Expected one of: 'fitness', 'diverse', 'contribution'."
+        )
+
+    def _resolve_evolution_fitness_mode(self) -> str:
+        if self.evolution_fitness_mode in {"single_rule", "residual_covering"}:
+            return self.evolution_fitness_mode
+        raise ValueError(
+            "Invalid evolution_fitness_mode. Expected one of: 'single_rule', 'residual_covering'."
+        )
+
+    def _context_genes_from_hall_of_fame(
+        self,
+        hall_of_fame: list[tuple[int, float, int, _RuleGene]],
+    ) -> list[_RuleGene]:
+        if not hall_of_fame or int(self.evolution_context_size) <= 0:
+            return []
+
+        context: list[_RuleGene] = []
+        seen = set()
+        for _, _, _, gene in sorted(hall_of_fame, key=lambda cand: (cand[0], -cand[1], cand[2])):
+            key = self._gene_key(gene)
+            if key in seen:
+                continue
+            seen.add(key)
+            context.append(gene)
+            if len(context) >= int(self.evolution_context_size):
+                break
+        return context
+
+    def _select_final_genes(
+        self,
+        hall_of_fame: list[tuple[int, float, int, _RuleGene]],
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        selection_idx: np.ndarray,
+        n_classes: int,
+    ) -> list[_RuleGene]:
+        unique_ranked = []
+        seen = set()
+        for item in sorted(hall_of_fame, key=lambda cand: (cand[0], -cand[1], cand[2])):
+            gene = item[3]
+            key = self._gene_key(gene)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_ranked.append(item)
+
+        limit = max(0, int(self.max_rules))
+        if self._resolved_final_rule_selection_ == "fitness":
+            return [gene for _, _, _, gene in unique_ranked[:limit]]
+        if self._resolved_final_rule_selection_ == "contribution":
+            return self._select_final_genes_by_contribution(
+                unique_ranked,
+                X,
+                y_idx,
+                selection_idx,
+                n_classes,
+                limit,
+            )
+
+        selected: list[_RuleGene] = []
+        selected_masks: list[np.ndarray] = []
+        covered_classes: set[int] = set()
+        remaining = list(unique_ranked)
+
+        while remaining and len(selected) < limit:
+            best_idx = 0
+            best_score = -np.inf
+            for idx, (rank, quality, complexity, gene) in enumerate(remaining):
+                mask = self._rule_mask(gene, X[selection_idx])
+                support = int(mask.sum())
+                if support < self.min_samples_leaf:
+                    candidate_score = -1e9
+                else:
+                    overlap_penalty = 0.0
+                    if selected_masks:
+                        overlaps = [self._mask_jaccard(mask, prev_mask) for prev_mask in selected_masks]
+                        overlap_penalty = self.diversity_penalty * max(overlaps)
+
+                    dominant_class = self._dominant_class_on_subset(gene, X, y_idx, selection_idx, n_classes)
+                    class_bonus = self.class_diversity_bonus if dominant_class not in covered_classes else 0.0
+                    candidate_score = quality + class_bonus - overlap_penalty - 0.01 * complexity - 0.001 * rank
+
+                if candidate_score > best_score:
+                    best_score = candidate_score
+                    best_idx = idx
+
+            _, _, _, gene = remaining.pop(best_idx)
+            selected.append(gene)
+            mask = self._rule_mask(gene, X[selection_idx])
+            selected_masks.append(mask)
+            covered_classes.add(self._dominant_class_on_subset(gene, X, y_idx, selection_idx, n_classes))
+
+        return selected
+
+    def _select_final_genes_by_contribution(
+        self,
+        unique_ranked: list[tuple[int, float, int, _RuleGene]],
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        selection_idx: np.ndarray,
+        n_classes: int,
+        limit: int,
+    ) -> list[_RuleGene]:
+        if limit <= 0 or selection_idx.size == 0:
+            return []
+
+        selected: list[_RuleGene] = []
+        selected_masks: list[np.ndarray] = []
+        covered_classes: set[int] = set()
+        remaining = list(unique_ranked)
+
+        selection_y = y_idx[selection_idx]
+        base_scores = np.zeros((selection_idx.size, n_classes), dtype=float)
+        if self.include_default_rule:
+            prior_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
+            base_scores += np.asarray(self._distribution_to_scores(prior_counts), dtype=float)
+
+        current_scores = base_scores.copy()
+        current_f1 = self._macro_f1_from_scores(current_scores, selection_y)
+
+        while remaining and len(selected) < limit:
+            best_idx = None
+            best_score = -np.inf
+            best_scores = None
+            best_mask = None
+            best_class = None
+
+            for idx, (rank, quality, complexity, gene) in enumerate(remaining):
+                mask = self._rule_mask(gene, X[selection_idx])
+                if int(mask.sum()) < self.min_samples_leaf:
+                    continue
+
+                rule_scores = self._rule_scores_from_gene(gene, X, y_idx, n_classes)
+                candidate_scores = current_scores.copy()
+                candidate_scores[mask] += np.asarray(rule_scores, dtype=float)
+                candidate_f1 = self._macro_f1_from_scores(candidate_scores, selection_y)
+                delta_f1 = candidate_f1 - current_f1
+
+                overlap_penalty = 0.0
+                if selected_masks:
+                    overlap_penalty = self.diversity_penalty * max(
+                        self._mask_jaccard(mask, prev_mask) for prev_mask in selected_masks
+                    )
+
+                dominant_class = self._dominant_class_on_subset(gene, X, y_idx, selection_idx, n_classes)
+                class_bonus = self.class_diversity_bonus if dominant_class not in covered_classes else 0.0
+                candidate_score = (
+                    delta_f1
+                    + 0.05 * quality
+                    + class_bonus
+                    - overlap_penalty
+                    - 0.002 * complexity
+                    - 0.0005 * rank
+                )
+
+                if candidate_score > best_score:
+                    best_score = candidate_score
+                    best_idx = idx
+                    best_scores = candidate_scores
+                    best_mask = mask
+                    best_class = dominant_class
+
+            if best_idx is None or best_scores is None or best_mask is None or best_class is None:
+                break
+            if best_score <= 1e-9 and selected:
+                break
+
+            _, _, _, gene = remaining.pop(best_idx)
+            selected.append(gene)
+            current_scores = best_scores
+            current_f1 = self._macro_f1_from_scores(current_scores, selection_y)
+            selected_masks.append(best_mask)
+            covered_classes.add(best_class)
+
+        return selected
+
+    @staticmethod
+    def _macro_f1_from_scores(scores: np.ndarray, y_true: np.ndarray) -> float:
+        pred_idx = np.argmax(scores, axis=1)
+        return float(f1_score(y_true, pred_idx, average="macro", zero_division=0))
+
+    def _scores_from_genes(
+        self,
+        genes: list[_RuleGene],
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        subset_idx: np.ndarray,
+    ) -> np.ndarray:
+        scores = np.zeros((subset_idx.size, n_classes), dtype=float)
+        if self.include_default_rule:
+            scores += self._default_rule_scores_
+        if not genes:
+            return scores
+
+        X_subset = X[subset_idx]
+        for gene in genes:
+            mask = self._rule_mask(gene, X_subset)
+            if int(mask.sum()) < self.min_samples_leaf:
+                continue
+            rule_scores = np.asarray(self._rule_scores_from_gene(gene, X, y_idx, n_classes), dtype=float)
+            scores[mask] += rule_scores
+        return scores
+
+    def _rule_scores_from_gene(
+        self,
+        gene: _RuleGene,
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+    ) -> list[float]:
+        mask = self._rule_mask(gene, X)
+        counts = np.bincount(y_idx[mask], minlength=n_classes).astype(float)
+        return self._distribution_to_scores(counts)
+
+    def _dominant_class_on_subset(
+        self,
+        gene: _RuleGene,
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        subset_idx: np.ndarray,
+        n_classes: int,
+    ) -> int:
+        mask = self._rule_mask(gene, X[subset_idx])
+        if int(mask.sum()) == 0:
+            return 0
+        counts = np.bincount(y_idx[subset_idx][mask], minlength=n_classes)
+        return int(np.argmax(counts))
+
+    @staticmethod
+    def _mask_jaccard(a: np.ndarray, b: np.ndarray) -> float:
+        union = np.logical_or(a, b).sum()
+        if union == 0:
+            return 0.0
+        intersection = np.logical_and(a, b).sum()
+        return float(intersection / union)
+
     def _score_population(
         self,
         population: list[_RuleGene],
@@ -453,10 +835,11 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         n_classes: int,
         train_idx: np.ndarray,
         val_idx: np.ndarray | None,
+        context_genes: list[_RuleGene] | None = None,
     ) -> list[tuple[float, int, _RuleGene]]:
         scored = []
         for ind in population:
-            quality = self._fitness(ind, X, y_idx, n_classes, train_idx, val_idx)
+            quality = self._fitness(ind, X, y_idx, n_classes, train_idx, val_idx, context_genes=context_genes)
             complexity = len(ind.atoms)
             scored.append((float(quality), int(complexity), ind))
         return scored
@@ -540,5 +923,4 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         if atom.op == "in":
             return list(atom.value)
         return atom.value
-
 

@@ -137,11 +137,66 @@ def test_gp_native_estimator_selection_mode_pareto_metadata():
     assert clf.to_ruleset().metadata["selection_mode"] == "pareto"
 
 
+def test_gp_native_estimator_final_rule_selection_diverse_metadata():
+    X, y = load_iris(return_X_y=True)
+    clf = GeneticScoredRuleSetClassifier(
+        final_rule_selection="diverse",
+        generations=6,
+        random_state=12,
+    )
+    clf.fit(X, y)
+    assert clf.to_ruleset().metadata["final_rule_selection"] == "diverse"
+
+
+def test_gp_native_estimator_final_rule_selection_contribution_metadata():
+    X, y = load_iris(return_X_y=True)
+    clf = GeneticScoredRuleSetClassifier(
+        final_rule_selection="contribution",
+        generations=6,
+        random_state=13,
+    )
+    clf.fit(X, y)
+    assert clf.to_ruleset().metadata["final_rule_selection"] == "contribution"
+
+
+def test_gp_native_estimator_evolution_fitness_mode_residual_metadata():
+    X, y = load_iris(return_X_y=True)
+    clf = GeneticScoredRuleSetClassifier(
+        evolution_fitness_mode="residual_covering",
+        generations=6,
+        random_state=14,
+    )
+    clf.fit(X, y)
+    meta = clf.to_ruleset().metadata
+    assert meta["evolution_fitness_mode"] == "residual_covering"
+    assert meta["evolution_context_size"] >= 0
+
+
 def test_gp_native_estimator_invalid_selection_mode_raises():
     X, y = load_iris(return_X_y=True)
     clf = GeneticScoredRuleSetClassifier(selection_mode="invalid", random_state=0)
     with pytest.raises(ValueError, match="Invalid selection_mode"):
         clf.fit(X, y)
+
+
+def test_gp_native_estimator_invalid_final_rule_selection_raises():
+    X, y = load_iris(return_X_y=True)
+    clf = GeneticScoredRuleSetClassifier(final_rule_selection="invalid", random_state=0)
+    with pytest.raises(ValueError, match="Invalid final_rule_selection"):
+        clf.fit(X, y)
+
+
+def test_gp_native_estimator_invalid_evolution_fitness_mode_raises():
+    X, y = load_iris(return_X_y=True)
+    clf = GeneticScoredRuleSetClassifier(evolution_fitness_mode="invalid", random_state=0)
+    with pytest.raises(ValueError, match="Invalid evolution_fitness_mode"):
+        clf.fit(X, y)
+
+
+def test_gp_native_estimator_mask_jaccard_helper():
+    a = np.array([True, True, False, False])
+    b = np.array([True, False, True, False])
+    assert np.isclose(GeneticScoredRuleSetClassifier._mask_jaccard(a, b), 1 / 3)
 
 
 def test_pareto_front_ranks_helper():

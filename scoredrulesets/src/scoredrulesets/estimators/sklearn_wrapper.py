@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 from sklearn.base import clone
+from sklearn.model_selection import train_test_split
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
 from ..io import dump_ruleset_json, load_ruleset_json
@@ -16,6 +17,7 @@ from .backends import build_backend_estimator
 from .base import BaseRuleSetEstimator
 from .tree_transform import TreeTransformParams, estimator_to_scored_ruleset
 from .ruleset_transform import rulekit_to_scored_ruleset, exstracs_to_scored_ruleset
+from .exstracs_shrinking import ExSTraCSPruningParams, exstracs_apply_all_shrinking
 
 
 class ScoredRuleSetClassifier(BaseRuleSetEstimator):
@@ -26,12 +28,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         backend: str = "hs",
         backend_params: dict[str, Any] | None = None,
         transform_params: dict[str, Any] | None = None,
+        exstracs_params: dict[str, Any] | None = None,
         estimator: Any | None = None,
         random_state: int | None = None,
     ):
         self.backend = backend
         self.backend_params = backend_params
         self.transform_params = transform_params
+        self.exstracs_params = exstracs_params
         self.estimator = estimator
         self.random_state = random_state
 
@@ -67,6 +71,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 class_labels=self.classes_.tolist(),
                 feature_names=self.feature_names_in_,
             )
+            
+            # Wende ExSTraCS Shrinking an (falls konfiguriert)
+            if self.exstracs_params:
+                self.ruleset_ = self._apply_exstracs_shrinking(
+                    self.ruleset_,
+                    X_valid,
+                    y_valid,
+                )
         else:
             # Tree-basierte Transformation (CART, HS)
             transform_cfg = TreeTransformParams(**(self.transform_params or {}))
@@ -76,8 +88,31 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 feature_names=self.feature_names_in_,
                 params=transform_cfg,
             )
+        
         self.is_ruleset_mode_ = False
         return self
+
+    def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:
+        """Wende ExSTraCS Shrinking-Parameter an"""
+        params = ExSTraCSPruningParams(**(self.exstracs_params or {}))
+        
+        # Für aggressive Pruning: Split Trainings-Daten
+        X_train_split = X
+        y_train_split = y
+        X_val_split = None
+        y_val_split = None
+        
+        if params.aggressive_prune:
+            X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
+                X, y, test_size=0.2, random_state=self.random_state
+            )
+        
+        return exstracs_apply_all_shrinking(
+            ruleset,
+            X_val=X_val_split,
+            y_val=y_val_split,
+            params=params,
+        )
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")

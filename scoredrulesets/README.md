@@ -59,7 +59,13 @@ dump_ruleset_json(ruleset, "iris_ruleset.json")
 Konsolenlesbare Tabellen-Ausgabe:
 
 ```python
-from scoredrulesets import format_ruleset_table
+from scoredrulesets import ScoredRuleSetClassifier, format_ruleset_table
+from sklearn.datasets import load_iris
+
+X, y = load_iris(return_X_y=True)
+clf = ScoredRuleSetClassifier(backend="cart")
+clf.fit(X, y)
+ruleset = clf.to_ruleset()
 
 print(format_ruleset_table(ruleset))
 ```
@@ -107,6 +113,7 @@ gp = GeneticScoredRuleSetClassifier(
     max_rules=6,
     score_mode="auto",  # "auto" | "log_proba" | "proba"
     selection_mode="fitness",  # "fitness" | "pareto"
+    final_rule_selection="fitness",  # "fitness" | "diverse"
     validation_fraction=0.2,
     early_stopping_rounds=5,
     random_state=0,
@@ -116,6 +123,12 @@ print(gp.predict(X[:3]))
 ```
 
 Der GP-Lerner durchsucht ebenfalls Atome mit `<=`, `>`, `between`, `==` und `in`.
+
+Fuer das Benchmarking gilt jetzt folgende Nomenklatur:
+
+- `gp`: staerkeres, robusteres Default-Profil fuer Benchmarks (residual covering)
+- `gp_fast`: fruehere schnelle Light-Variante fuer Smoke-Tests
+- `gp_diverse`: vorheriger starker GP-Default mit diverser Endauswahl
 
 ## Benchmarking
 
@@ -135,7 +148,7 @@ Beispielaufruf:
 ```bash
 python examples/benchmark_runner.py \
   --datasets sklearn_iris,sklearn_wine \
-  --estimators wrapper_cart,native,gp,wrapper_hs \
+  --estimators wrapper_cart,native,gp,gp_diverse,gp_fast,wrapper_hs \
   --repeats 2 \
   --aggregate-repeats \
   --error-bar std \
@@ -147,6 +160,29 @@ python examples/benchmark_runner.py \
   --output-plot-base benchmark_results \
   --plot-size-metric n_rules
 ```
+
+Wenn du nur die GP-Profile gegeneinander vergleichen willst:
+
+```bash
+python examples/benchmark_runner.py \
+  --datasets sklearn_iris,sklearn_wine,sklearn_breast_cancer \
+  --estimators gp,gp_diverse,gp_fast,native,wrapper_cart \
+  --repeats 3 \
+  --aggregate-repeats \
+  --output-markdown benchmarks/2026-03-gp-final/benchmark_report.md \
+  --output-csv benchmarks/2026-03-gp-final/benchmark_results.csv \
+  --output-json benchmarks/2026-03-gp-final/benchmark_results.json
+```
+
+Aktueller Referenzstand fuer GP-Vergleiche:
+
+- `benchmarks/2026-03-gp-final/`
+
+Archivierte, aeltere GP-Laeufe (nur zur historischen Einordnung):
+
+- `benchmarks/2026-03-gp-default-check/`
+- `benchmarks/2026-03-gp-full/`
+- `benchmarks/2026-03-gp-tune/`
 
 Dabei werden standardmaessig folgende Dateien geschrieben:
 
