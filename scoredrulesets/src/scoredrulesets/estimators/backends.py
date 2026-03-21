@@ -65,6 +65,14 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return michigan_cls(**params)
 
+    if backend_key == "rulefit":
+        try:
+            from rulefit import RuleFit
+        except ImportError as e:
+            raise ImportError("backend='rulefit' benötigt das Paket 'sklearn-rulefit'. Installiere mit: pip install sklearn-rulefit.") from e
+        params.setdefault("random_state", random_state)
+        return RuleFit(**params)
+
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: 'cart', 'hs', 'rulekit', 'exstracs', 'logicgp', 'pittsburgh', 'michigan'."
     )

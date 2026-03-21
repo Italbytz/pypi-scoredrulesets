@@ -65,6 +65,13 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 class_labels=self.classes_.tolist(),
                 feature_names=self.feature_names_in_,
             )
+        elif backend_lower == "rulefit":
+            from .ruleset_transform import rulefit_to_scored_ruleset
+            self.ruleset_ = rulefit_to_scored_ruleset(
+                estimator=self.estimator_,
+                class_labels=self.classes_.tolist(),
+                feature_names=self.feature_names_in_,
+            )
         elif backend_lower == "exstracs":
             self.ruleset_ = exstracs_to_scored_ruleset(
                 estimator=self.estimator_,
