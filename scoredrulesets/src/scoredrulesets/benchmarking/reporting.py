@@ -6,6 +6,12 @@ from pathlib import Path
 from .runner import AggregatedBenchmarkResult
 
 
+HEATMAP_PREVIEW_NOTE = (
+    "Heatmap add-on: compact overview of aggregated F1 values and fit times "
+    "per dataset/estimator."
+)
+
+
 def format_benchmark_leaderboard_table(
     results: list[AggregatedBenchmarkResult],
 ) -> str:
@@ -128,9 +134,21 @@ def format_benchmark_report_markdown(
             sections.append(f"- **{label}**: [{path_text}]({path_text})")
         sections.append("")
         plot_png = artifact_paths.get("plot_png")
-        if plot_png:
-            plot_text = str(plot_png)
-            sections.extend(["## Plot Preview", "", f"![Benchmark plot]({plot_text})", ""])
+        heatmap_png = artifact_paths.get("heatmap_png")
+        if plot_png or heatmap_png:
+            sections.extend(["## Plot Preview", ""])
+            if plot_png:
+                plot_text = str(plot_png)
+                sections.append(f"![Benchmark plot]({plot_text})")
+                sections.append("")
+            if heatmap_png:
+                heatmap_text = str(heatmap_png)
+                sections.append(
+                    f"_{HEATMAP_PREVIEW_NOTE}_"
+                )
+                sections.append("")
+                sections.append(f"![Benchmark heatmap]({heatmap_text})")
+                sections.append("")
 
     if notes:
         sections.extend(["## Notes", ""])
@@ -190,8 +208,17 @@ def format_benchmark_report_html(
             artifact_items.append((label, _html_link(path_text, path_text)))
         sections.append(_html_section("Artifacts", _html_kv_list(artifact_items, escape_values=False)))
         plot_png = artifact_paths.get("plot_png")
-        if plot_png:
-            sections.append(_html_section("Plot Preview", _html_image(str(plot_png), "Benchmark plot")))
+        heatmap_png = artifact_paths.get("heatmap_png")
+        if plot_png or heatmap_png:
+            preview_parts: list[str] = []
+            if plot_png:
+                preview_parts.append(_html_image(str(plot_png), "Benchmark plot"))
+            if heatmap_png:
+                preview_parts.append(
+                    f"<p><em>{html.escape(HEATMAP_PREVIEW_NOTE)}</em></p>"
+                )
+                preview_parts.append(_html_image(str(heatmap_png), "Benchmark heatmap"))
+            sections.append(_html_section("Plot Preview", "".join(preview_parts)))
 
     if notes:
         sections.append(_html_section("Notes", _html_list(notes)))
@@ -425,7 +452,7 @@ def _fmt_float(value: float | None) -> str:
 def _html_document(title: str, sections: list[str]) -> str:
     escaped_title = html.escape(title)
     return (
-        "<!doctype html><html lang='de'><head><meta charset='utf-8'>"
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         f"<title>{escaped_title}</title>"
         "<style>"
         "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.45;margin:2rem;max-width:1200px;}"

@@ -114,7 +114,7 @@ def test_benchmarking_progress_output_is_emitted(capsys):
     captured = capsys.readouterr()
 
     assert len(results) == 1
-    assert "[progress] Benchmark gestartet:" in captured.out
+    assert "[progress] Benchmark started:" in captured.out
     assert "[progress 1/1] START" in captured.out
     assert "[progress 1/1] DONE status=OK" in captured.out
 
@@ -221,7 +221,12 @@ def test_benchmark_report_markdown_contains_sections_and_artifacts():
         leaderboard,
         title="Unit Test Report",
         config={"repeats": 2, "error_bar": "std"},
-        artifact_paths={"plot_png": "benchmark.png", "plot_pdf": "benchmark.pdf"},
+        artifact_paths={
+            "plot_png": "benchmark.png",
+            "plot_pdf": "benchmark.pdf",
+            "heatmap_png": "benchmark_heatmap.png",
+            "heatmap_pdf": "benchmark_heatmap.pdf",
+        },
         notes=["synthetic unit test"],
     )
 
@@ -230,6 +235,7 @@ def test_benchmark_report_markdown_contains_sections_and_artifacts():
     assert "## Configuration" in report
     assert "## Artifacts" in report
     assert "## Plot Preview" in report
+    assert "## Heatmap Preview" not in report
     assert "## Notes" in report
     assert "## Top per Dataset" in report
     assert "### sklearn_iris" in report
@@ -237,6 +243,9 @@ def test_benchmark_report_markdown_contains_sections_and_artifacts():
     assert "## Dataset: sklearn_iris" in report
     assert "[benchmark.png](benchmark.png)" in report
     assert "![Benchmark plot](benchmark.png)" in report
+    assert "_Heatmap add-on: compact overview of aggregated F1 values and fit times per dataset/estimator._" in report
+    assert "![Benchmark heatmap](benchmark_heatmap.png)" in report
+    assert report.index("![Benchmark plot](benchmark.png)") < report.index("![Benchmark heatmap](benchmark_heatmap.png)")
     assert "**top_1_model**" in report
     assert "**best_model**" in report
     assert "**smallest_model**" in report
@@ -260,7 +269,12 @@ def test_benchmark_report_html_contains_sections_and_preview():
         leaderboard,
         title="Unit Test Report",
         config={"repeats": 2, "error_bar": "std"},
-        artifact_paths={"plot_png": "benchmark.png", "plot_pdf": "benchmark.pdf"},
+        artifact_paths={
+            "plot_png": "benchmark.png",
+            "plot_pdf": "benchmark.pdf",
+            "heatmap_png": "benchmark_heatmap.png",
+            "heatmap_pdf": "benchmark_heatmap.pdf",
+        },
         notes=["synthetic unit test"],
     )
 
@@ -268,7 +282,11 @@ def test_benchmark_report_html_contains_sections_and_preview():
     assert "<h1>Unit Test Report</h1>" in html
     assert "<h2>Summary</h2>" in html
     assert "<h2>Plot Preview</h2>" in html
+    assert "<h2>Heatmap Preview</h2>" not in html
     assert "<img src='benchmark.png' alt='Benchmark plot'>" in html
+    assert "Heatmap add-on: compact overview of aggregated F1 values and fit times per dataset/estimator." in html
+    assert "<img src='benchmark_heatmap.png' alt='Benchmark heatmap'>" in html
+    assert html.index("<img src='benchmark.png' alt='Benchmark plot'>") < html.index("<img src='benchmark_heatmap.png' alt='Benchmark heatmap'>")
     assert "<h2>Top per Dataset</h2>" in html
     assert "<h2>Leaderboard</h2>" in html
     assert "<h2>Dataset: sklearn_iris</h2>" in html

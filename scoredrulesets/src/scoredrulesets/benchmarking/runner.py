@@ -376,14 +376,14 @@ def _print_progress_header(
         if name.startswith("gp") or "logicgp" in name or "exstracs" in name
     ]
     print(
-        "[progress] Benchmark gestartet: "
+        "[progress] Benchmark started: "
         f"datasets={len(dataset_names)}, estimators={len(estimator_names)}, "
         f"repeats={total_repeats}, total_runs={total_runs}",
         flush=True,
     )
     if slow_estimators:
         print(
-            "[progress] Potenziell langsame Estimatoren erkannt: "
+            "[progress] Potentially slow estimators detected: "
             + ", ".join(slow_estimators),
             flush=True,
         )

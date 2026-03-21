@@ -21,40 +21,40 @@ from scoredrulesets.benchmarking.runner import results_as_dicts
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark fuer Scored Rule Set Estimatoren")
+    parser = argparse.ArgumentParser(description="Benchmark for Scored Rule Set estimators")
     parser.add_argument(
         "--datasets",
         type=str,
         default="",
-        help="Kommagetrennte Liste, z.B. sklearn_iris,sklearn_wine oder paper_uci",
+        help="Comma-separated list, e.g. sklearn_iris,sklearn_wine or paper_uci",
     )
     parser.add_argument(
         "--paper-uci",
         action="store_true",
-        help="Fuegt den Paper-UCI-Katalog als Dataset-Auswahl hinzu (Alias: paper_uci).",
+        help="Adds the paper UCI catalog as dataset selection (alias: paper_uci).",
     )
     parser.add_argument(
         "--paper-uci-strict",
         action="store_true",
-        help="Fehlschlag, wenn bei paper_uci nicht alle Paper-Datensaetze verfuegbar sind.",
+        help="Fail if not all paper_uci datasets are available.",
     )
     parser.add_argument(
         "--offline-uci",
         action="store_true",
-        help="Deaktiviert Online-UCI-Loader (ucimlrepo/OpenML) und nutzt nur lokale Registry-Quellen.",
+        help="Disables online UCI loaders (ucimlrepo/OpenML) and uses local registry sources only.",
     )
     parser.add_argument(
         "--estimators",
         type=str,
         default="",
-        help="Kommagetrennte Liste, z.B. wrapper_cart,native,gp,gp_fast,wrapper_hs",
+        help="Comma-separated list, e.g. wrapper_cart,native,gp,gp_fast,wrapper_hs",
     )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--random-state", type=int, default=0)
     parser.add_argument(
         "--paper-split-policy",
         action="store_true",
-        help="Aktiviert die im Paper verwendete Split-Policy (n<500:0.30, 500-4999:0.25, >=5000:0.20).",
+        help="Enables the split policy used in the paper (n<500:0.30, 500-4999:0.25, >=5000:0.20).",
     )
     parser.add_argument("--output-csv", type=str, default="benchmark_results.csv")
     parser.add_argument("--output-json", type=str, default="benchmark_results.json")
@@ -178,10 +178,10 @@ def main() -> None:
             },
             artifact_paths=artifact_paths,
             notes=[
-                "Leaderboard ist ueber aggregierte Ergebnisse sortiert.",
-                "Plot ist nach Datensaetzen in einzelne Panels aufgeteilt.",
-                "Plot zeigt Mittelwerte pro (dataset, estimator) mit Fehlerbalken, wenn --aggregate-repeats aktiv ist.",
-                "Die Heatmap bietet eine kompakte Gesamtansicht fuer mittlere F1-Werte und Fit-Zeiten.",
+                "Leaderboard is sorted over aggregated results.",
+                "The plot is split into separate panels per dataset.",
+                "The plot shows means per (dataset, estimator) with error bars when --aggregate-repeats is enabled.",
+                "The heatmap provides a compact global view of mean F1 values and fit times.",
             ],
         )
         markdown_path.write_text(report, encoding="utf-8")
@@ -214,10 +214,10 @@ def main() -> None:
             },
             artifact_paths=html_artifact_paths,
             notes=[
-                "Leaderboard ist ueber aggregierte Ergebnisse sortiert.",
-                "Plot ist nach Datensaetzen in einzelne Panels aufgeteilt.",
-                "Plot zeigt Mittelwerte pro (dataset, estimator) mit Fehlerbalken, wenn --aggregate-repeats aktiv ist.",
-                "Die Heatmap bietet eine kompakte Gesamtansicht fuer mittlere F1-Werte und Fit-Zeiten.",
+                "Leaderboard is sorted over aggregated results.",
+                "The plot is split into separate panels per dataset.",
+                "The plot shows means per (dataset, estimator) with error bars when --aggregate-repeats is enabled.",
+                "The heatmap provides a compact global view of mean F1 values and fit times.",
             ],
         )
         html_path.write_text(html_report, encoding="utf-8")
