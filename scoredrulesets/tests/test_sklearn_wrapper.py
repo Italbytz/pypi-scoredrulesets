@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 import warnings
 
+import numpy as np
 from sklearn.datasets import load_iris
 
 from scoredrulesets import ScoredRuleSetClassifier, format_ruleset_table
+from scoredrulesets.schema import AggregationSpec, Rule, ScoredRuleSet
 
 
 def test_cart_backend_and_ruleset_reload(tmp_path: Path):
@@ -103,3 +105,47 @@ def test_cart_pruned_keeps_non_empty_rules_on_iris():
     # Regression guard: pruning must not collapse all non-default rules to atoms=[]
     assert n_atoms > 0
     assert all(len(rule.atoms) > 0 for rule in ruleset.rules)
+
+
+def test_rulekit_wrapper_passes_training_labels_to_transform(monkeypatch):
+    captured: dict[str, np.ndarray] = {}
+
+    class _FakeRuleKitEstimator:
+        def fit(self, X, y):
+            self.classes_ = np.unique(y)
+            return self
+
+    def _fake_build_backend_estimator(*, backend, backend_params, random_state):
+        assert backend == "rulekit"
+        return _FakeRuleKitEstimator()
+
+    def _fake_rulekit_to_scored_ruleset(estimator, class_labels, feature_names, y_train=None):
+        assert estimator is not None
+        captured["y_train"] = np.asarray(y_train)
+        return ScoredRuleSet(
+            class_labels=class_labels,
+            feature_names=feature_names,
+            rules=[
+                Rule(atoms=[], scores=[1.0 / len(class_labels)] * len(class_labels), rule_id="default")
+            ],
+            aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
+        )
+
+    monkeypatch.setattr(
+        "scoredrulesets.estimators.sklearn_wrapper.build_backend_estimator",
+        _fake_build_backend_estimator,
+    )
+    monkeypatch.setattr(
+        "scoredrulesets.estimators.sklearn_wrapper.rulekit_to_scored_ruleset",
+        _fake_rulekit_to_scored_ruleset,
+    )
+
+    X = np.array([[0.0], [1.0], [2.0], [3.0]])
+    y = np.array([0, 0, 1, 1])
+    clf = ScoredRuleSetClassifier(backend="rulekit", random_state=0)
+    clf.fit(X, y)
+
+    assert "y_train" in captured
+    np.testing.assert_array_equal(captured["y_train"], y)
+
+

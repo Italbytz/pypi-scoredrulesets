@@ -62,9 +62,10 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         
         if backend_lower == "rulekit":
             self.ruleset_ = rulekit_to_scored_ruleset(
-                estimator=self.estimator_,
-                class_labels=self.classes_.tolist(),
-                feature_names=self.feature_names_in_,
+                self.estimator_,
+                self.classes_.tolist(),
+                self.feature_names_in_,
+                y_valid,
             )
         elif backend_lower == "rulefit":
             # RuleFitClassifier verwaltet sein ScoredRuleSet intern

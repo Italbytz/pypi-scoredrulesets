@@ -16,6 +16,7 @@ def rulekit_to_scored_ruleset(
     estimator: Any,
     class_labels: list[Any],
     feature_names: list[str],
+    y_train: np.ndarray | None = None,
 ) -> ScoredRuleSet:
     """
     Transformiere RuleKit Rule-Liste zu Scored Rule Set.
@@ -44,23 +45,17 @@ def rulekit_to_scored_ruleset(
             # Extrahiere Conditions aus der Regel
             if hasattr(rule, "conditions"):
                 for condition in rule.conditions:
-                    atom = _condition_to_atom(condition, feature_names)
-                    if atom is not None:
-                        atoms.append(atom)
+                    atoms.extend(_condition_to_atoms(condition, feature_names))
             elif hasattr(rule, "premise"):
                 # Alternative Struktur
                 for condition in rule.premise:
-                    atom = _condition_to_atom(condition, feature_names)
-                    if atom is not None:
-                        atoms.append(atom)
+                    atoms.extend(_condition_to_atoms(condition, feature_names))
             elif hasattr(rule, "_java_object") and hasattr(rule._java_object, "getPremise"):
                 premise = rule._java_object.getPremise()
                 subconditions = premise.getSubconditions() if premise is not None else None
                 if subconditions is not None:
                     for idx in range(subconditions.size()):
-                        atom = _condition_to_atom(subconditions.get(idx), feature_names)
-                        if atom is not None:
-                            atoms.append(atom)
+                        atoms.extend(_condition_to_atoms(subconditions.get(idx), feature_names))
             
             # Extrahiere Zielklasse
             class_idx = 0
@@ -79,30 +74,38 @@ def rulekit_to_scored_ruleset(
             elif hasattr(rule, "decision_class"):
                 class_idx = _resolve_class_index(rule.decision_class, class_labels)
             
-            # Erstelle Score-Vektor (1.0 für Zielklasse, 0 sonst)
+            # Nutze RuleKit-nahe Gewichtung statt reinem One-Hot.
+            rule_strength = _extract_rulekit_rule_strength(rule)
             scores = [0.0] * n_classes
-            scores[class_idx] = 1.0
+            scores[class_idx] = rule_strength
             
             rules.append(
                 Rule(
                     atoms=atoms,
                     scores=scores,
                     rule_id=f"rulekit_{rule_idx}",
-                    metadata={"source": "rulekit", "class_label": class_labels[class_idx]},
+                    metadata={
+                        "source": "rulekit",
+                        "class_label": class_labels[class_idx],
+                        "rule_strength": rule_strength,
+                    },
                 )
             )
         
         # Füge Default-Regel hinzu (falls nicht vorhanden)
         if not any(len(r.atoms) == 0 for r in rules):
-            # Berechne Häufigkeiten für Default-Regel
-            default_scores = [1.0 / n_classes] * n_classes
+            default_scores = _rulekit_default_scores(
+                estimator=estimator,
+                class_labels=class_labels,
+                y_train=y_train,
+            )
             rules.insert(
                 0,
                 Rule(
                     atoms=[],
                     scores=default_scores,
                     rule_id="default",
-                    metadata={"source": "rulekit_default"},
+                    metadata={"source": "rulekit_default", "prior_based": True},
                 ),
             )
         
@@ -340,12 +343,13 @@ def exstracs_to_scored_ruleset(
 
 
 
-def _condition_to_atom(condition: Any, feature_names: list[str]) -> Atom | None:
+def _condition_to_atoms(condition: Any, feature_names: list[str]) -> list[Atom]:
     """
-    Transformiere RuleKit Condition zu Atom.
+    Transformiere RuleKit Condition zu Atom(en).
     
     RuleKit Conditions können verschiedene Formate haben.
     """
+    atoms: list[Atom] = []
     try:
         # RuleKit-Java-Objektpfad: ElementaryCondition mit ValueSet
         if hasattr(condition, "getAttribute") and hasattr(condition, "getValueSet"):
@@ -357,7 +361,7 @@ def _condition_to_atom(condition: Any, feature_names: list[str]) -> Atom | None:
 
             value_set = condition.getValueSet()
             if value_set is None:
-                return None
+                return []
 
             if hasattr(value_set, "getLeft") and hasattr(value_set, "getRight"):
                 left = float(value_set.getLeft())
@@ -369,23 +373,29 @@ def _condition_to_atom(condition: Any, feature_names: list[str]) -> Atom | None:
                 right_inf = not math.isfinite(right) or right >= 1e300
 
                 if left_inf and not right_inf:
-                    return Atom(feature=str(feature_name), op=right_sign, value=right)
+                    op = _normalize_rulekit_bound_op(right_sign, is_left=False)
+                    return [Atom(feature=str(feature_name), op=op, value=right)]
                 if right_inf and not left_inf:
-                    return Atom(feature=str(feature_name), op=left_sign, value=left)
+                    op = _normalize_rulekit_bound_op(left_sign, is_left=True)
+                    return [Atom(feature=str(feature_name), op=op, value=left)]
                 if not left_inf and not right_inf:
-                    # Bei endlichen Intervallen nutzen wir ein zwischen-Atom.
-                    return Atom(feature=str(feature_name), op="between", value=[left, right])
-                return None
+                    left_op = _normalize_rulekit_bound_op(left_sign, is_left=True)
+                    right_op = _normalize_rulekit_bound_op(right_sign, is_left=False)
+                    return [
+                        Atom(feature=str(feature_name), op=left_op, value=left),
+                        Atom(feature=str(feature_name), op=right_op, value=right),
+                    ]
+                return []
 
             if hasattr(value_set, "getValue"):
-                return Atom(feature=str(feature_name), op="==", value=float(value_set.getValue()))
+                return [Atom(feature=str(feature_name), op="==", value=float(value_set.getValue()))]
             if hasattr(value_set, "getValueAsString"):
                 value = value_set.getValueAsString()
                 try:
                     value = float(value)
                 except Exception:
                     value = str(value)
-                return Atom(feature=str(feature_name), op="==", value=value)
+                return [Atom(feature=str(feature_name), op="==", value=value)]
 
         # Versuche Standard-Attribute zu extrahieren
         if hasattr(condition, "attribute") and hasattr(condition, "value"):
@@ -397,17 +407,108 @@ def _condition_to_atom(condition: Any, feature_names: list[str]) -> Atom | None:
                 op = condition.operator
                 # Normalisiere Operator
                 if op in ("=", "==", "equals"):
-                    return Atom(feature=str(feature_name), op="==", value=float(condition.value))
+                    return [Atom(feature=str(feature_name), op="==", value=float(condition.value))]
                 elif op in ("<", "less"):
-                    return Atom(feature=str(feature_name), op="<", value=float(condition.value))
+                    return [Atom(feature=str(feature_name), op="<", value=float(condition.value))]
                 elif op in (">", "greater"):
-                    return Atom(feature=str(feature_name), op=">", value=float(condition.value))
+                    return [Atom(feature=str(feature_name), op=">", value=float(condition.value))]
                 elif op in ("<=", "less_or_equal"):
-                    return Atom(feature=str(feature_name), op="<=", value=float(condition.value))
+                    return [Atom(feature=str(feature_name), op="<=", value=float(condition.value))]
                 elif op in (">=", "greater_or_equal"):
-                    return Atom(feature=str(feature_name), op=">=", value=float(condition.value))
+                    return [Atom(feature=str(feature_name), op=">=", value=float(condition.value))]
         
+        return atoms
+    except Exception:
+        return []
+
+
+def _condition_to_atom(condition: Any, feature_names: list[str]) -> Atom | None:
+    """Legacy helper: return first extracted atom if available."""
+    atoms = _condition_to_atoms(condition, feature_names)
+    return atoms[0] if atoms else None
+
+
+def _normalize_rulekit_bound_op(sign: str, *, is_left: bool) -> str:
+    token = str(sign).strip().lower()
+    if token in ("[", "<=", "left_closed", "closed", "inclusive"):
+        return ">=" if is_left else "<="
+    if token in ("(", "<", "left_open", "open", "exclusive"):
+        return ">" if is_left else "<"
+    if token in (">", ">="):
+        return token
+    if token in ("<", "<="):
+        return token
+    return ">=" if is_left else "<="
+
+
+def _extract_rulekit_rule_strength(rule: Any) -> float:
+    """Estimate rule strength from available RuleKit rule statistics."""
+    weight = _safe_positive_float(getattr(rule, "weight", None))
+    if weight is None and hasattr(rule, "getWeight"):
+        weight = _safe_positive_float(_try_call_no_args(rule.getWeight))
+
+    confidence = _safe_positive_float(getattr(rule, "confidence", None))
+    if confidence is None and hasattr(rule, "getConfidence"):
+        confidence = _safe_positive_float(_try_call_no_args(rule.getConfidence))
+
+    support = _safe_positive_float(getattr(rule, "support", None))
+    if support is None and hasattr(rule, "getSupport"):
+        support = _safe_positive_float(_try_call_no_args(rule.getSupport))
+
+    if weight is not None:
+        return max(weight, 1e-6)
+    if confidence is not None and support is not None:
+        return max(confidence * support, 1e-6)
+    if confidence is not None:
+        return max(confidence, 1e-6)
+    if support is not None:
+        return max(support, 1e-6)
+    return 1.0
+
+
+def _rulekit_default_scores(
+    *,
+    estimator: Any,
+    class_labels: list[Any],
+    y_train: np.ndarray | None,
+) -> list[float]:
+    """Build default scores using class priors to mimic RuleKit fallback behaviour."""
+    counts = np.zeros(len(class_labels), dtype=float)
+    labels_array = np.asarray(class_labels)
+
+    if y_train is not None:
+        y_arr = np.asarray(y_train).reshape(-1)
+        for idx, label in enumerate(labels_array):
+            counts[idx] = float(np.sum(y_arr == label))
+
+    if float(np.sum(counts)) <= 0.0:
+        class_hist = getattr(estimator, "class_counts_", None)
+        if class_hist is not None and isinstance(class_hist, dict):
+            for idx, label in enumerate(labels_array):
+                if label in class_hist:
+                    counts[idx] = float(class_hist[label])
+
+    total = float(np.sum(counts))
+    if total <= 0.0:
+        return [1.0 / max(len(class_labels), 1)] * len(class_labels)
+
+    priors = counts / total
+    return priors.tolist()
+
+
+def _safe_positive_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except Exception:
         return None
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        return None
+    return parsed
+
+
+def _try_call_no_args(fn: Any) -> Any:
+    try:
+        return fn()
     except Exception:
         return None
 
