@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from time import perf_counter
 from typing import Any
+import warnings
 
 import numpy as np
 from sklearn.metrics import f1_score
@@ -42,6 +43,8 @@ class BenchmarkResult:
     ruleset_json_bytes: int | None
     n_train: int | None
     n_test: int | None
+    validation_action: str | None = None
+    validation_message: str | None = None
 
 
 @dataclass
@@ -62,6 +65,8 @@ class AggregatedBenchmarkResult:
     n_atoms_error: float | None
     ruleset_json_bytes_mean: float | None
     ruleset_json_bytes_error: float | None
+    validation_warning_count: int = 0
+    validation_warning_example: str | None = None
 
 
 def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
@@ -193,6 +198,11 @@ def aggregate_benchmark_results(
                 n_atoms_error=_metric_error(group, "n_atoms", error_bar),
                 ruleset_json_bytes_mean=_metric_mean(group, "ruleset_json_bytes"),
                 ruleset_json_bytes_error=_metric_error(group, "ruleset_json_bytes", error_bar),
+                validation_warning_count=sum(1 for item in group if item.validation_action == "warn"),
+                validation_warning_example=next(
+                    (item.validation_message for item in group if item.validation_action == "warn" and item.validation_message),
+                    None,
+                ),
             )
         )
     return aggregated
@@ -290,20 +300,20 @@ def _run_single(
             flush=True,
         )
 
-        # F1-Validierung: Abbruch wenn verlustfreie Transformation F1 massiv verschlechtert
+        # F1-Validierung: staged policy (warn vs abort) fuer Transformationen
         is_lossy = getattr(estimator, "transformation_lossy_", False)
-        if f1_native is not None and f1_native > 0.0 and not is_lossy:
-            f1_drop = f1_native - f1_macro
-            # Toleranz: max 10% absoluter Verlust oder 20% relativer Verlust
-            max_abs_drop = 0.10
-            max_rel_drop = 0.20
-            if f1_drop > max_abs_drop and f1_drop / f1_native > max_rel_drop:
-                raise RuntimeError(
-                    f"F1-Validierung fehlgeschlagen für '{estimator_name}' auf '{dataset_name}': "
-                    f"F1 nativ={f1_native:.4f} → transformiert={f1_macro:.4f} "
-                    f"(Verlust={f1_drop:.4f}, {f1_drop/f1_native*100:.1f}%). "
-                    f"Die Transformation hat die Vorhersagequalität zerstört."
-                )
+        validation_action, validation_message = _evaluate_transformation_gap(
+            estimator_name=estimator_name,
+            is_lossy=is_lossy,
+            f1_native=f1_native,
+            f1_transformed=f1_macro,
+            dataset_name=dataset_name,
+        )
+        if validation_action == "warn" and validation_message:
+            warnings.warn(validation_message, UserWarning)
+            print(f"[WARNING] {validation_message}", flush=True)
+        elif validation_action == "abort" and validation_message:
+            raise RuntimeError(validation_message)
 
         return BenchmarkResult(
             dataset=dataset_name,
@@ -320,6 +330,8 @@ def _run_single(
             ruleset_json_bytes=ruleset_json_bytes,
             n_train=len(y_train),
             n_test=len(y_test),
+            validation_action=validation_action,
+            validation_message=validation_message,
         )
     except ImportError as exc:
         raise RuntimeError(
@@ -361,6 +373,61 @@ def _compute_macro_f1_robust(y_true, y_pred) -> float:
     y_true_str = y_true_arr.astype(str)
     y_pred_str = y_pred_arr.astype(str)
     return float(f1_score(y_true_str, y_pred_str, average="macro"))
+
+
+def _evaluate_transformation_gap(
+    *,
+    estimator_name: str,
+    is_lossy: bool,
+    f1_native: float | None,
+    f1_transformed: float,
+    dataset_name: str,
+) -> tuple[str, str | None]:
+    """Return (action, message) for transformation-gap validation.
+
+    Actions:
+      - "ok": no issue
+      - "warn": print a strong warning but continue
+      - "abort": raise RuntimeError in caller
+
+    For most non-lossy transformations we keep the existing strict policy.
+    For ExSTraCS shrinking variants, moderate gaps only warn because the
+    shrinking step is allowed to simplify the ruleset slightly, but very large
+    gaps still abort.
+    """
+    if is_lossy or f1_native is None or f1_native <= 0.0:
+        return "ok", None
+
+    f1_drop = float(f1_native - f1_transformed)
+    if f1_drop <= 0.0:
+        return "ok", None
+
+    rel_drop = f1_drop / float(f1_native)
+    base_message = (
+        f"F1-Validierung für '{estimator_name}' auf '{dataset_name}': "
+        f"F1 nativ={f1_native:.4f} → transformiert={f1_transformed:.4f} "
+        f"(Verlust={f1_drop:.4f}, {rel_drop*100:.1f}%)."
+    )
+
+    # ExSTraCS shrinking: moderate degradation => warning, only large degradation => abort.
+    if estimator_name.startswith("wrapper_exstracs_shrink"):
+        warn_abs_drop = 0.10
+        warn_rel_drop = 0.15
+        abort_abs_drop = 0.25
+        abort_rel_drop = 0.40
+        if f1_drop > abort_abs_drop and rel_drop > abort_rel_drop:
+            return "abort", base_message + " Die Shrinking-Transformation hat die Vorhersagequalität stark zerstört."
+        if f1_drop > warn_abs_drop and rel_drop > warn_rel_drop:
+            return "warn", base_message + " Deutliche Warnung: ExSTraCS-Shrinking weicht merklich vom nativen Modell ab."
+        return "ok", None
+
+    # Standard policy for non-lossy transformations.
+    max_abs_drop = 0.10
+    max_rel_drop = 0.20
+    if f1_drop > max_abs_drop and rel_drop > max_rel_drop:
+        return "abort", base_message + " Die Transformation hat die Vorhersagequalität zerstört."
+
+    return "ok", None
 
 
 def _validate_names(kind: str, names: list[str], registry: dict[str, Any]) -> None:

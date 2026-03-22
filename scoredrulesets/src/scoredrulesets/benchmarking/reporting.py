@@ -32,7 +32,7 @@ def format_benchmark_leaderboard_table(
             [
                 str(rank),
                 result.dataset,
-                result.estimator,
+                _display_estimator(result),
                 str(result.n_repeats),
                 _fmt_float(result.f1_macro_mean),
                 _fmt_float(result.f1_macro_error),
@@ -72,7 +72,7 @@ def format_benchmark_leaderboard_markdown(
                 [
                     str(rank),
                     result.dataset,
-                    result.estimator,
+                    _display_estimator(result),
                     str(result.n_repeats),
                     _fmt_float(result.f1_macro_mean),
                     _fmt_float(result.f1_macro_error),
@@ -96,7 +96,7 @@ def format_benchmark_leaderboard_html(
             [
                 str(rank),
                 result.dataset,
-                result.estimator,
+                _display_estimator(result),
                 str(result.n_repeats),
                 _fmt_float(result.f1_macro_mean),
                 _fmt_float(result.f1_macro_error),
@@ -120,6 +120,7 @@ def format_benchmark_report_markdown(
 
     if results:
         sections.extend(_summary_section(results))
+        sections.extend(_warnings_section_markdown(results))
 
     if config:
         sections.extend(["## Configuration", ""])
@@ -184,14 +185,19 @@ def format_benchmark_report_html(
                     [
                         ("datasets", str(len({result.dataset for result in results}))),
                         ("estimators", str(len({result.estimator for result in results}))),
+                        ("warning_runs", str(sum(result.validation_warning_count for result in results))),
+                        ("warning_models", str(sum(1 for result in results if result.validation_warning_count > 0))),
                         (
                             "top_1_model",
-                            f"{top.dataset} / {top.estimator} (f1={_fmt_float(top.f1_macro_mean)}, rules={_fmt_float(top.n_rules_mean)}, fit_s={_fmt_float(top.fit_seconds_mean)})",
+                            f"{top.dataset} / {_display_estimator(top)} (f1={_fmt_float(top.f1_macro_mean)}, rules={_fmt_float(top.n_rules_mean)}, fit_s={_fmt_float(top.fit_seconds_mean)})",
                         ),
                     ]
                 ),
             )
         )
+        warnings_html = _warnings_section_html(results)
+        if warnings_html:
+            sections.append(_html_section("Warnings", warnings_html))
 
     if config:
         sections.append(
@@ -242,12 +248,16 @@ def _summary_section(results: list[AggregatedBenchmarkResult]) -> list[str]:
     top = results[0]
     n_datasets = len({result.dataset for result in results})
     n_estimators = len({result.estimator for result in results})
+    warning_runs = sum(result.validation_warning_count for result in results)
+    warning_models = sum(1 for result in results if result.validation_warning_count > 0)
     lines = ["## Summary", ""]
     lines.append(f"- **datasets**: `{n_datasets}`")
     lines.append(f"- **estimators**: `{n_estimators}`")
+    lines.append(f"- **warning_runs**: `{warning_runs}`")
+    lines.append(f"- **warning_models**: `{warning_models}`")
     lines.append(
         "- **top_1_model**: "
-        f"`{top.dataset} / {top.estimator}` "
+        f"`{top.dataset} / {_display_estimator(top)}` "
         f"(f1={_fmt_float(top.f1_macro_mean)}, rules={_fmt_float(top.n_rules_mean)}, fit_s={_fmt_float(top.fit_seconds_mean)})"
     )
     lines.append("")
@@ -300,16 +310,19 @@ def _dataset_overview_section(results: list[AggregatedBenchmarkResult]) -> list[
         lines.append("")
         lines.append(
             "- **best_model**: "
-            f"`{summary['best'].estimator}` (f1={_fmt_float(summary['best'].f1_macro_mean)}, rules={_fmt_float(summary['best'].n_rules_mean)}, fit_s={_fmt_float(summary['best'].fit_seconds_mean)})"
+            f"`{_display_estimator(summary['best'])}` (f1={_fmt_float(summary['best'].f1_macro_mean)}, rules={_fmt_float(summary['best'].n_rules_mean)}, fit_s={_fmt_float(summary['best'].fit_seconds_mean)})"
         )
         lines.append(
             "- **smallest_model**: "
-            f"`{summary['smallest'].estimator}` (rules={_fmt_float(summary['smallest'].n_rules_mean)}, atoms={_fmt_float(summary['smallest'].n_atoms_mean)}, f1={_fmt_float(summary['smallest'].f1_macro_mean)})"
+            f"`{_display_estimator(summary['smallest'])}` (rules={_fmt_float(summary['smallest'].n_rules_mean)}, atoms={_fmt_float(summary['smallest'].n_atoms_mean)}, f1={_fmt_float(summary['smallest'].f1_macro_mean)})"
         )
         lines.append(
             "- **fastest_model**: "
-            f"`{summary['fastest'].estimator}` (fit_s={_fmt_float(summary['fastest'].fit_seconds_mean)}, f1={_fmt_float(summary['fastest'].f1_macro_mean)}, rules={_fmt_float(summary['fastest'].n_rules_mean)})"
+            f"`{_display_estimator(summary['fastest'])}` (fit_s={_fmt_float(summary['fastest'].fit_seconds_mean)}, f1={_fmt_float(summary['fastest'].f1_macro_mean)}, rules={_fmt_float(summary['fastest'].n_rules_mean)})"
         )
+        warned = [item for item in grouped[dataset] if item.validation_warning_count > 0]
+        if warned:
+            lines.append(f"- **warnings**: `{len(warned)}` estimator(s) with validation warnings")
         lines.append("")
     return lines
 
@@ -334,15 +347,19 @@ def _dataset_overview_html(results: list[AggregatedBenchmarkResult]) -> str:
                 [
                     (
                         "best_model",
-                        f"{summary['best'].estimator} (f1={_fmt_float(summary['best'].f1_macro_mean)}, rules={_fmt_float(summary['best'].n_rules_mean)}, fit_s={_fmt_float(summary['best'].fit_seconds_mean)})",
+                        f"{_display_estimator(summary['best'])} (f1={_fmt_float(summary['best'].f1_macro_mean)}, rules={_fmt_float(summary['best'].n_rules_mean)}, fit_s={_fmt_float(summary['best'].fit_seconds_mean)})",
                     ),
                     (
                         "smallest_model",
-                        f"{summary['smallest'].estimator} (rules={_fmt_float(summary['smallest'].n_rules_mean)}, atoms={_fmt_float(summary['smallest'].n_atoms_mean)}, f1={_fmt_float(summary['smallest'].f1_macro_mean)})",
+                        f"{_display_estimator(summary['smallest'])} (rules={_fmt_float(summary['smallest'].n_rules_mean)}, atoms={_fmt_float(summary['smallest'].n_atoms_mean)}, f1={_fmt_float(summary['smallest'].f1_macro_mean)})",
                     ),
                     (
                         "fastest_model",
-                        f"{summary['fastest'].estimator} (fit_s={_fmt_float(summary['fastest'].fit_seconds_mean)}, f1={_fmt_float(summary['fastest'].f1_macro_mean)}, rules={_fmt_float(summary['fastest'].n_rules_mean)})",
+                        f"{_display_estimator(summary['fastest'])} (fit_s={_fmt_float(summary['fastest'].fit_seconds_mean)}, f1={_fmt_float(summary['fastest'].f1_macro_mean)}, rules={_fmt_float(summary['fastest'].n_rules_mean)})",
+                    ),
+                    (
+                        "warnings",
+                        str(sum(1 for item in grouped[dataset] if item.validation_warning_count > 0)),
                     ),
                 ]
             )
@@ -357,15 +374,19 @@ def _dataset_summary_section(results: list[AggregatedBenchmarkResult]) -> list[s
     smallest = summary["smallest"]
     fastest = summary["fastest"]
 
-    return [
+    lines = [
         "- **best_model**: "
-        f"`{best.estimator}` (f1={_fmt_float(best.f1_macro_mean)}, rules={_fmt_float(best.n_rules_mean)}, fit_s={_fmt_float(best.fit_seconds_mean)})",
+        f"`{_display_estimator(best)}` (f1={_fmt_float(best.f1_macro_mean)}, rules={_fmt_float(best.n_rules_mean)}, fit_s={_fmt_float(best.fit_seconds_mean)})",
         "- **smallest_model**: "
-        f"`{smallest.estimator}` (rules={_fmt_float(smallest.n_rules_mean)}, atoms={_fmt_float(smallest.n_atoms_mean)}, f1={_fmt_float(smallest.f1_macro_mean)})",
+        f"`{_display_estimator(smallest)}` (rules={_fmt_float(smallest.n_rules_mean)}, atoms={_fmt_float(smallest.n_atoms_mean)}, f1={_fmt_float(smallest.f1_macro_mean)})",
         "- **fastest_model**: "
-        f"`{fastest.estimator}` (fit_s={_fmt_float(fastest.fit_seconds_mean)}, f1={_fmt_float(fastest.f1_macro_mean)}, rules={_fmt_float(fastest.n_rules_mean)})",
-        "",
+        f"`{_display_estimator(fastest)}` (fit_s={_fmt_float(fastest.fit_seconds_mean)}, f1={_fmt_float(fastest.f1_macro_mean)}, rules={_fmt_float(fastest.n_rules_mean)})",
     ]
+    warned = [item for item in results if item.validation_warning_count > 0]
+    if warned:
+        lines.append(f"- **warnings**: `{len(warned)}` estimator(s) with validation warnings")
+    lines.append("")
+    return lines
 
 
 def _dataset_section_html(dataset: str, results: list[AggregatedBenchmarkResult]) -> str:
@@ -377,21 +398,56 @@ def _dataset_section_html(dataset: str, results: list[AggregatedBenchmarkResult]
             [
                 (
                     "best_model",
-                    f"{summary['best'].estimator} (f1={_fmt_float(summary['best'].f1_macro_mean)}, rules={_fmt_float(summary['best'].n_rules_mean)}, fit_s={_fmt_float(summary['best'].fit_seconds_mean)})",
+                    f"{_display_estimator(summary['best'])} (f1={_fmt_float(summary['best'].f1_macro_mean)}, rules={_fmt_float(summary['best'].n_rules_mean)}, fit_s={_fmt_float(summary['best'].fit_seconds_mean)})",
                 ),
                 (
                     "smallest_model",
-                    f"{summary['smallest'].estimator} (rules={_fmt_float(summary['smallest'].n_rules_mean)}, atoms={_fmt_float(summary['smallest'].n_atoms_mean)}, f1={_fmt_float(summary['smallest'].f1_macro_mean)})",
+                    f"{_display_estimator(summary['smallest'])} (rules={_fmt_float(summary['smallest'].n_rules_mean)}, atoms={_fmt_float(summary['smallest'].n_atoms_mean)}, f1={_fmt_float(summary['smallest'].f1_macro_mean)})",
                 ),
                 (
                     "fastest_model",
-                    f"{summary['fastest'].estimator} (fit_s={_fmt_float(summary['fastest'].fit_seconds_mean)}, f1={_fmt_float(summary['fastest'].f1_macro_mean)}, rules={_fmt_float(summary['fastest'].n_rules_mean)})",
+                    f"{_display_estimator(summary['fastest'])} (fit_s={_fmt_float(summary['fastest'].fit_seconds_mean)}, f1={_fmt_float(summary['fastest'].f1_macro_mean)}, rules={_fmt_float(summary['fastest'].n_rules_mean)})",
+                ),
+                (
+                    "warnings",
+                    str(sum(1 for item in results if item.validation_warning_count > 0)),
                 ),
             ]
         )
         + format_benchmark_leaderboard_html(results)
         + "</section>"
     )
+
+
+def _display_estimator(result: AggregatedBenchmarkResult) -> str:
+    if getattr(result, "validation_warning_count", 0) > 0:
+        return f"{result.estimator} ⚠x{int(result.validation_warning_count)}"
+    return result.estimator
+
+
+def _warnings_section_markdown(results: list[AggregatedBenchmarkResult]) -> list[str]:
+    warned = [result for result in results if getattr(result, "validation_warning_count", 0) > 0]
+    if not warned:
+        return []
+    lines = ["## Warnings", ""]
+    for result in warned:
+        example = result.validation_warning_example or "warning present"
+        lines.append(
+            f"- `{result.dataset} / {result.estimator}`: {int(result.validation_warning_count)} warning run(s). Example: {example}"
+        )
+    lines.append("")
+    return lines
+
+
+def _warnings_section_html(results: list[AggregatedBenchmarkResult]) -> str:
+    warned = [result for result in results if getattr(result, "validation_warning_count", 0) > 0]
+    if not warned:
+        return ""
+    return "<ul>" + "".join(
+        f"<li><strong>{html.escape(result.dataset)} / {html.escape(result.estimator)}</strong>: "
+        f"{int(result.validation_warning_count)} warning run(s). Example: {html.escape(result.validation_warning_example or 'warning present')}</li>"
+        for result in warned
+    ) + "</ul>"
 
 
 def _select_dataset_summary(

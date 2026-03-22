@@ -12,12 +12,10 @@ Dieser Modul bietet Algorithmen zur Reduktion von ExSTraCS Rule-Populationen:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
-
 import numpy as np
 from sklearn.metrics import f1_score
 
-from ..schema import Atom, Rule, ScoredRuleSet
+from ..schema import Rule, ScoredRuleSet
 
 
 @dataclass
@@ -40,7 +38,11 @@ class ExSTraCSPruningParams:
     similarity_threshold: float = 0.8  # Merge wenn > 80% ähnlich
 
 
-def exstracs_prune_conservative(ruleset: ScoredRuleSet) -> ScoredRuleSet:
+def exstracs_prune_conservative(
+    ruleset: ScoredRuleSet,
+    X_ref: np.ndarray | None = None,
+    y_ref: np.ndarray | None = None,
+) -> ScoredRuleSet:
     """
     Conservative Atom-Pruning für ExSTraCS Regeln.
     
@@ -52,7 +54,14 @@ def exstracs_prune_conservative(ruleset: ScoredRuleSet) -> ScoredRuleSet:
     - Scores bleiben positiv
     - Keine komplette Auflösung
     """
+    from ..runtime import predict as predict_from_ruleset
+
     pruned_rules = []
+
+    baseline_f1 = None
+    if X_ref is not None and y_ref is not None:
+        y_pred_baseline = predict_from_ruleset(ruleset, X_ref)
+        baseline_f1 = f1_score(y_ref, y_pred_baseline, average='macro', zero_division=0)
     
     for rule in ruleset.rules:
         if not rule.atoms:  # Überspringe Default-Regel
@@ -70,17 +79,33 @@ def exstracs_prune_conservative(ruleset: ScoredRuleSet) -> ScoredRuleSet:
                 candidate_atoms = current_rule.atoms[:atom_idx] + current_rule.atoms[atom_idx + 1:]
                 
                 # Überprüfe Sicherheitskriterien
-                if (len(candidate_atoms) < len(current_rule.atoms) and
-                    any(s > 0 for s in current_rule.scores) and
-                    not (len(current_rule.atoms) > 1 and len(candidate_atoms) == 0)):
-                    
-                    # Ersetze Regel
-                    current_rule = Rule(
-                        atoms=candidate_atoms,
-                        scores=current_rule.scores,
-                        rule_id=current_rule.rule_id,
-                        metadata=current_rule.metadata,
-                    )
+                # WICHTIG: Non-default Regeln dürfen nie zu atoms=[] werden.
+                if not (len(candidate_atoms) < len(current_rule.atoms) and
+                        any(s > 0 for s in current_rule.scores) and
+                        len(candidate_atoms) > 0):
+                    continue
+
+                candidate_rule = Rule(
+                    atoms=candidate_atoms,
+                    scores=current_rule.scores,
+                    rule_id=current_rule.rule_id,
+                    metadata=current_rule.metadata,
+                )
+
+                # Ohne Referenzdaten: strukturell konservativ, aber ohne F1-Garantie.
+                if baseline_f1 is None:
+                    current_rule = candidate_rule
+                    changed = True
+                    break
+
+                # Mit Referenzdaten: nur akzeptieren, wenn F1 nicht schlechter wird.
+                candidate_rules = pruned_rules + [candidate_rule] + ruleset.rules[len(pruned_rules) + 1:]
+                candidate_ruleset = _create_pruned_ruleset(ruleset, candidate_rules, "conservative_prune")
+                y_pred_candidate = predict_from_ruleset(candidate_ruleset, X_ref)
+                f1_candidate = f1_score(y_ref, y_pred_candidate, average='macro', zero_division=0)
+                if f1_candidate + 1e-12 >= baseline_f1:
+                    current_rule = candidate_rule
+                    baseline_f1 = f1_candidate
                     changed = True
                     break
         
@@ -132,8 +157,10 @@ def exstracs_prune_aggressive(
                 candidate_atoms = current_rule.atoms[:atom_idx] + current_rule.atoms[atom_idx + 1:]
                 
                 # Überprüfe grundsätzliche Sicherheit
+                # WICHTIG: Non-default Regeln dürfen nie zu atoms=[] werden.
                 if not (len(candidate_atoms) < len(current_rule.atoms) and
-                        any(s > 0 for s in current_rule.scores)):
+                        any(s > 0 for s in current_rule.scores) and
+                        len(candidate_atoms) > 0):
                     continue
                 
                 # Erstelle Kandidaten-Ruleset
@@ -279,7 +306,11 @@ def exstracs_apply_all_shrinking(
     
     # 2. Conservative Pruning
     if params.conservative_prune:
-        current_ruleset = exstracs_prune_conservative(current_ruleset)
+        current_ruleset = exstracs_prune_conservative(
+            current_ruleset,
+            X_ref=X_val,
+            y_ref=y_val,
+        )
     
     # 3. Aggressive Pruning
     if params.aggressive_prune and X_val is not None and y_val is not None:
@@ -352,6 +383,21 @@ def _create_pruned_ruleset(
     """
     Erstelle neues Ruleset mit pruned rules.
     """
+    # Stelle sicher, dass maximal eine Default-Regel vorhanden ist.
+    # Falls mehrere leere Regeln existieren, werden deren Scores aufsummiert
+    # und als eine einzige Fallback-Regel genutzt.
+    default_rules = [r for r in pruned_rules if not r.atoms]
+    non_default_rules = [r for r in pruned_rules if r.atoms]
+    if len(default_rules) > 1:
+        summed_scores = np.sum([np.asarray(r.scores, dtype=float) for r in default_rules], axis=0)
+        merged_default = Rule(
+            atoms=[],
+            scores=summed_scores.tolist(),
+            rule_id="default",
+            metadata={"source": "merged_default", "merged_count": len(default_rules)},
+        )
+        pruned_rules = non_default_rules + [merged_default]
+
     return ScoredRuleSet(
         class_labels=original.class_labels,
         feature_names=original.feature_names,

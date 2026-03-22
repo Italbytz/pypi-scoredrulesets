@@ -17,7 +17,12 @@ from scoredrulesets.benchmarking import (
     run_benchmarks,
 )
 from scoredrulesets.benchmarking.datasets import DatasetBundle
-from scoredrulesets.benchmarking.runner import _resolve_test_size
+from scoredrulesets.benchmarking.runner import (
+    AggregatedBenchmarkResult,
+    BenchmarkResult,
+    _evaluate_transformation_gap,
+    _resolve_test_size,
+)
 
 
 def test_benchmarking_runs_for_core_estimators():
@@ -389,5 +394,129 @@ def test_paper_split_policy_thresholds():
     assert _resolve_test_size(small, cfg) == 0.30
     assert _resolve_test_size(medium, cfg) == 0.25
     assert _resolve_test_size(large, cfg) == 0.20
+
+
+def test_transformation_gap_standard_estimators_still_abort_on_large_gap():
+    action, message = _evaluate_transformation_gap(
+        estimator_name="wrapper_exstracs",
+        is_lossy=False,
+        f1_native=0.91,
+        f1_transformed=0.16,
+        dataset_name="sklearn_iris",
+    )
+    assert action == "abort"
+    assert message is not None
+    assert "zerstört" in message
+
+
+def test_transformation_gap_exstracs_shrink_warns_on_moderate_gap():
+    action, message = _evaluate_transformation_gap(
+        estimator_name="wrapper_exstracs_shrink_conservative",
+        is_lossy=False,
+        f1_native=0.91,
+        f1_transformed=0.73,
+        dataset_name="sklearn_iris",
+    )
+    assert action == "warn"
+    assert message is not None
+    assert "Deutliche Warnung" in message
+
+
+def test_transformation_gap_exstracs_shrink_still_aborts_on_very_large_gap():
+    action, message = _evaluate_transformation_gap(
+        estimator_name="wrapper_exstracs_shrink_conservative",
+        is_lossy=False,
+        f1_native=0.91,
+        f1_transformed=0.16,
+        dataset_name="sklearn_iris",
+    )
+    assert action == "abort"
+    assert message is not None
+    assert "stark zerstört" in message
+
+
+def test_aggregate_benchmark_results_persists_warning_metadata():
+    results = [
+        BenchmarkResult(
+            dataset="sklearn_iris",
+            estimator="wrapper_exstracs_shrink_conservative",
+            repeat=0,
+            status="ok",
+            skip_reason=None,
+            error=None,
+            f1_macro=0.80,
+            fit_seconds=0.1,
+            predict_seconds=0.01,
+            n_rules=10,
+            n_atoms=20,
+            ruleset_json_bytes=123,
+            n_train=100,
+            n_test=50,
+            validation_action="warn",
+            validation_message="example warning",
+        ),
+        BenchmarkResult(
+            dataset="sklearn_iris",
+            estimator="wrapper_exstracs_shrink_conservative",
+            repeat=1,
+            status="ok",
+            skip_reason=None,
+            error=None,
+            f1_macro=0.82,
+            fit_seconds=0.2,
+            predict_seconds=0.01,
+            n_rules=10,
+            n_atoms=20,
+            ruleset_json_bytes=123,
+            n_train=100,
+            n_test=50,
+            validation_action=None,
+            validation_message=None,
+        ),
+    ]
+
+    aggregated = aggregate_benchmark_results(results)
+    assert len(aggregated) == 1
+    row = aggregated[0]
+    assert row.validation_warning_count == 1
+    assert row.validation_warning_example == "example warning"
+
+
+def test_report_outputs_include_warning_information():
+    rows = [
+        AggregatedBenchmarkResult(
+            dataset="sklearn_iris",
+            estimator="wrapper_exstracs_shrink_conservative",
+            n_repeats=3,
+            status="ok",
+            f1_macro_mean=0.80,
+            f1_macro_error=0.01,
+            fit_seconds_mean=0.2,
+            fit_seconds_error=0.01,
+            predict_seconds_mean=0.01,
+            predict_seconds_error=0.0,
+            n_rules_mean=10,
+            n_rules_error=0.0,
+            n_atoms_mean=20,
+            n_atoms_error=0.0,
+            ruleset_json_bytes_mean=123,
+            ruleset_json_bytes_error=0.0,
+            validation_warning_count=2,
+            validation_warning_example="example warning",
+        )
+    ]
+
+    markdown = format_benchmark_report_markdown(rows, title="Warn Report")
+    html = format_benchmark_report_html(rows, title="Warn Report")
+
+    assert "## Warnings" in markdown
+    assert "warning_runs" in markdown
+    assert "⚠x2" in markdown
+    assert "example warning" in markdown
+
+    assert "<h2>Warnings</h2>" in html
+    assert "warning_runs" in html
+    assert "⚠x2" in html
+    assert "example warning" in html
 
 

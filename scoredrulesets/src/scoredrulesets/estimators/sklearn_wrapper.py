@@ -145,8 +145,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         # Für aggressive Pruning: Split Trainings-Daten
         X_train_split = X
         y_train_split = y
-        X_val_split = None
-        y_val_split = None
+        # Default: nutze Trainingsdaten als Referenz fuer konservatives Pruning.
+        X_val_split = X
+        y_val_split = y
 
         if params.aggressive_prune:
             X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(

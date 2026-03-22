@@ -63,12 +63,14 @@ def decision_function(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False
     scores = np.zeros((X.shape[0], n_classes), dtype=float)
     feature_names = ruleset.feature_names or [f"f{i}" for i in range(X.shape[1])]
 
-    # Identifiziere Default-Regel (Regel ohne Bedingungen)
-    default_rule = None
+    # Identifiziere Default-Regel(n) (Regeln ohne Bedingungen)
+    default_scores = np.zeros(n_classes, dtype=float)
+    has_default = False
     non_default_rules = []
     for rule in ruleset.rules:
         if not getattr(rule, 'atoms', None):
-            default_rule = rule
+            default_scores += np.asarray(rule.scores, dtype=float)
+            has_default = True
         else:
             non_default_rules.append(rule)
 
@@ -81,12 +83,18 @@ def decision_function(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False
                 scores[i] += np.asarray(rule.scores, dtype=float)
                 fired_rules.append(rule)
                 non_default_fired.append(rule)
-        # Falls keine Nicht-Default-Regel feuert, feuert die Default-Regel (falls vorhanden)
-        if not non_default_fired and default_rule is not None:
-            scores[i] += np.asarray(default_rule.scores, dtype=float)
-            fired_rules.append(default_rule)
+        # Falls keine Nicht-Default-Regel feuert, nutze den Default-Mechanismus (falls vorhanden)
+        if not non_default_fired and has_default:
+            scores[i] += default_scores
+            fired_rules.append(("default_combined", default_scores.tolist()))
         if debug:
-            print(f"[DEBUG decision_function] Sample {i}: fired_rules={[ (getattr(r, 'rule_id', None), getattr(r, 'scores', None)) for r in fired_rules ]}")
+            debug_rules = []
+            for r in fired_rules:
+                if isinstance(r, tuple):
+                    debug_rules.append(r)
+                else:
+                    debug_rules.append((getattr(r, 'rule_id', None), getattr(r, 'scores', None)))
+            print(f"[DEBUG decision_function] Sample {i}: fired_rules={debug_rules}")
             print(f"[DEBUG decision_function] Sample {i}: scores={scores[i]}")
     return scores
 
