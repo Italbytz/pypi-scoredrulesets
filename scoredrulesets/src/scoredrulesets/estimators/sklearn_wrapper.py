@@ -123,6 +123,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 class_labels=self.classes_.tolist(),
                 feature_names=self.feature_names_in_,
                 params=transform_cfg,
+                X_ref=X_valid,
             )
 
         # Alle Backends: Prediction immer ueber ScoredRuleSet routen,

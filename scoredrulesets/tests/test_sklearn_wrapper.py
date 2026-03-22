@@ -4,6 +4,7 @@ import warnings
 
 import numpy as np
 from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
 
 from scoredrulesets import ScoredRuleSetClassifier, format_ruleset_table
 from scoredrulesets.schema import AggregationSpec, Rule, ScoredRuleSet
@@ -88,23 +89,39 @@ def test_exstracs_params_unknown_keys_are_filtered():
 
 def test_cart_pruned_keeps_non_empty_rules_on_iris():
     X, y = load_iris(return_X_y=True)
-    clf = ScoredRuleSetClassifier(
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
+
+    # Baseline ohne Pruning
+    clf_base = ScoredRuleSetClassifier(
         backend="cart",
         backend_params={"max_depth": 4},
-        transform_params={
-            "prune_atoms": True,
-            "prune_lambda": 1.5,
-        },
         random_state=0,
     )
-    clf.fit(X, y)
+    clf_base.fit(X_tr, y_tr)
+    y_pred_base = clf_base.predict(X_te)
+    n_atoms_base = sum(len(r.atoms) for r in clf_base.to_ruleset().rules)
 
-    ruleset = clf.to_ruleset()
-    n_atoms = sum(len(rule.atoms) for rule in ruleset.rules)
+    # Auto-Pruning (durchsucht mehrere Lambdas automatisch)
+    clf_pruned = ScoredRuleSetClassifier(
+        backend="cart",
+        backend_params={"max_depth": 4},
+        transform_params={"prune_atoms": True},
+        random_state=0,
+    )
+    clf_pruned.fit(X_tr, y_tr)
+    y_pred_pruned = clf_pruned.predict(X_te)
+    ruleset = clf_pruned.to_ruleset()
+    n_atoms_pruned = sum(len(r.atoms) for r in ruleset.rules)
 
-    # Regression guard: pruning must not collapse all non-default rules to atoms=[]
-    assert n_atoms > 0
+    # Pruning darf keine leeren Nicht-Default-Regeln erzeugen
+    assert n_atoms_pruned > 0
     assert all(len(rule.atoms) > 0 for rule in ruleset.rules)
+
+    # Pruning muss Vorhersagen erhalten (F1 darf nicht sinken)
+    assert np.array_equal(y_pred_pruned, y_pred_base)
+
+    # Pruning muss Atome reduzieren (oder zumindest nicht erhöhen)
+    assert n_atoms_pruned <= n_atoms_base
 
 
 def test_rulekit_wrapper_passes_training_labels_to_transform(monkeypatch):
