@@ -11,6 +11,7 @@ Dieser Modul bietet Algorithmen zur Reduktion von ExSTraCS Rule-Populationen:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 import numpy as np
 from sklearn.metrics import f1_score
@@ -37,11 +38,17 @@ class ExSTraCSPruningParams:
     consolidate_similar: bool = False
     similarity_threshold: float = 0.8  # Merge wenn > 80% ähnlich
 
+    # Sicherheitslimits fuer grosse Populationen
+    max_pruning_seconds: float = 120.0  # Timeout fuer Pruning-Schleifen (Sekunden)
+    pre_filter_threshold: int = 200  # Auto-Filter wenn Regelzahl diesen Wert uebersteigt
+
 
 def exstracs_prune_conservative(
     ruleset: ScoredRuleSet,
     X_ref: np.ndarray | None = None,
     y_ref: np.ndarray | None = None,
+    *,
+    max_seconds: float = 120.0,
 ) -> ScoredRuleSet:
     """
     Conservative Atom-Pruning für ExSTraCS Regeln.
@@ -53,17 +60,34 @@ def exstracs_prune_conservative(
     - Weniger Atome
     - Scores bleiben positiv
     - Keine komplette Auflösung
+
+    Parameters
+    ----------
+    max_seconds : float
+        Maximale Laufzeit fuer die Pruning-Schleife (Sekunden).
+        Wird das Budget ueberschritten, werden die verbleibenden Regeln
+        unveraendert uebernommen.
     """
     from ..runtime import predict as predict_from_ruleset
 
-    pruned_rules = []
+    pruned_rules: list[Rule] = []
 
-    baseline_f1 = None
+    baseline_f1: float | None = None
     if X_ref is not None and y_ref is not None:
         y_pred_baseline = predict_from_ruleset(ruleset, X_ref)
         baseline_f1 = f1_score(y_ref, y_pred_baseline, average='macro', zero_division=0)
+
+    t_start = time.monotonic()
+    timed_out = False
     
-    for rule in ruleset.rules:
+    for rule_idx, rule in enumerate(ruleset.rules):
+        # Timeout-Pruefung (einmal pro Regel)
+        if time.monotonic() - t_start > max_seconds:
+            timed_out = True
+            # Verbleibende Regeln unveraendert uebernehmen
+            pruned_rules.extend(ruleset.rules[rule_idx:])
+            break
+
         if not rule.atoms:  # Überspringe Default-Regel
             pruned_rules.append(rule)
             continue
@@ -74,6 +98,11 @@ def exstracs_prune_conservative(
         
         while changed:
             changed = False
+
+            # Timeout auch in der inneren Schleife pruefen
+            if time.monotonic() - t_start > max_seconds:
+                timed_out = True
+                break
             
             for atom_idx in range(len(current_rule.atoms) - 1, -1, -1):
                 candidate_atoms = current_rule.atoms[:atom_idx] + current_rule.atoms[atom_idx + 1:]
@@ -110,8 +139,12 @@ def exstracs_prune_conservative(
                     break
         
         pruned_rules.append(current_rule)
-    
-    return _create_pruned_ruleset(ruleset, pruned_rules, "conservative_prune")
+
+    meta_extra = {"timed_out": timed_out} if timed_out else {}
+    result = _create_pruned_ruleset(ruleset, pruned_rules, "conservative_prune")
+    if timed_out:
+        result.metadata = {**result.metadata, **meta_extra}
+    return result
 
 
 def exstracs_prune_aggressive(
@@ -119,6 +152,8 @@ def exstracs_prune_aggressive(
     X_val: np.ndarray,
     y_val: np.ndarray,
     max_f1_loss: float = 0.01,
+    *,
+    max_seconds: float = 120.0,
 ) -> ScoredRuleSet:
     """
     Aggressive Atom-Pruning für ExSTraCS mit Validierungs-Daten.
@@ -131,6 +166,11 @@ def exstracs_prune_aggressive(
     2. Iterativ Atome entfernen
     3. Nach jeder Entfernung: F1 überprüfen
     4. Akzeptieren wenn F1 nicht > max_f1_loss sinkt
+
+    Parameters
+    ----------
+    max_seconds : float
+        Maximale Laufzeit fuer die Pruning-Schleife (Sekunden).
     """
     # Importiere Runtime-Funktionen
     from ..runtime import predict_proba as predict_proba_from_ruleset
@@ -141,8 +181,17 @@ def exstracs_prune_aggressive(
     
     pruned_rules = []
     rules_removed = 0
+
+    t_start = time.monotonic()
+    timed_out = False
     
     for rule_idx, rule in enumerate(ruleset.rules):
+        # Timeout-Pruefung
+        if time.monotonic() - t_start > max_seconds:
+            timed_out = True
+            pruned_rules.extend(ruleset.rules[rule_idx:])
+            break
+
         if not rule.atoms:  # Überspringe Default-Regel
             pruned_rules.append(rule)
             continue
@@ -152,6 +201,10 @@ def exstracs_prune_aggressive(
         
         while changed:
             changed = False
+
+            if time.monotonic() - t_start > max_seconds:
+                timed_out = True
+                break
             
             for atom_idx in range(len(current_rule.atoms) - 1, -1, -1):
                 candidate_atoms = current_rule.atoms[:atom_idx] + current_rule.atoms[atom_idx + 1:]
@@ -192,8 +245,11 @@ def exstracs_prune_aggressive(
                     break
         
         pruned_rules.append(current_rule)
-    
-    return _create_pruned_ruleset(ruleset, pruned_rules, "aggressive_prune")
+
+    result = _create_pruned_ruleset(ruleset, pruned_rules, "aggressive_prune")
+    if timed_out:
+        result.metadata = {**result.metadata, "timed_out": True}
+    return result
 
 
 def exstracs_filter_weak_rules(
@@ -287,7 +343,8 @@ def exstracs_apply_all_shrinking(
     Wende mehrere Shrinking-Strategien nacheinander an.
     
     Reihenfolge:
-    1. Filter schwache Regeln
+    0. Auto-Vorfilterung bei grossen Populationen (> pre_filter_threshold)
+    1. Filter schwache Regeln (falls explizit konfiguriert)
     2. Conservative Pruning
     3. Aggressive Pruning (falls X_val vorhanden)
     4. Consolidation
@@ -296,8 +353,16 @@ def exstracs_apply_all_shrinking(
         params = ExSTraCSPruningParams()
     
     current_ruleset = ruleset
+
+    # 0. Auto-Vorfilterung bei grossen Populationen
+    n_non_default = sum(1 for r in current_ruleset.rules if r.atoms)
+    if n_non_default > params.pre_filter_threshold:
+        current_ruleset = exstracs_filter_weak_rules(
+            current_ruleset,
+            min_fitness_percentile=params.min_fitness_percentile,
+        )
     
-    # 1. Filter schwache Regeln
+    # 1. Filter schwache Regeln (explizit)
     if params.filter_weak_rules:
         current_ruleset = exstracs_filter_weak_rules(
             current_ruleset,
@@ -310,6 +375,7 @@ def exstracs_apply_all_shrinking(
             current_ruleset,
             X_ref=X_val,
             y_ref=y_val,
+            max_seconds=params.max_pruning_seconds,
         )
     
     # 3. Aggressive Pruning
@@ -319,6 +385,7 @@ def exstracs_apply_all_shrinking(
             X_val,
             y_val,
             max_f1_loss=params.max_f1_loss,
+            max_seconds=params.max_pruning_seconds,
         )
     
     # 4. Consolidation
