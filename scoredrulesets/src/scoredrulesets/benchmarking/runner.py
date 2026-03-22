@@ -268,9 +268,7 @@ def _run_single(
             native_model = getattr(estimator, 'estimator_', None)
             if native_model is not None and hasattr(native_model, 'predict'):
                 y_pred_native = native_model.predict(X_test)
-                y_true_native = np.asarray(y_test, dtype=object).astype(str)
-                y_pred_native = np.asarray(y_pred_native, dtype=object).astype(str)
-                f1_native = float(f1_score(y_true_native, y_pred_native, average="macro"))
+                f1_native = _compute_macro_f1_robust(y_test, y_pred_native)
         except Exception:
             pass
 
@@ -278,9 +276,7 @@ def _run_single(
         y_pred = estimator.predict(X_test)
         predict_seconds = perf_counter() - predict_start
 
-        y_true_norm = np.asarray(y_test, dtype=object).astype(str)
-        y_pred_norm = np.asarray(y_pred, dtype=object).astype(str)
-        f1_macro = float(f1_score(y_true_norm, y_pred_norm, average="macro"))
+        f1_macro = _compute_macro_f1_robust(y_test, y_pred)
         ruleset = estimator.to_ruleset()
         n_rules, n_atoms, ruleset_json_bytes = model_size_metrics(ruleset)
 
@@ -335,6 +331,36 @@ def _run_single(
         raise RuntimeError(
             f"Fehler bei '{estimator_name}' auf '{dataset_name}': {exc}"
         ) from exc
+
+
+def _compute_macro_f1_robust(y_true, y_pred) -> float:
+    """Compute macro-F1 robustly across common label format mismatches.
+
+    Some backends return numerically equivalent labels with different types
+    (e.g. 1 vs 1.0). A plain string-cast would treat them as different
+    classes and can produce artificial F1=0.
+    """
+    y_true_arr = np.asarray(y_true).reshape(-1)
+    y_pred_arr = np.asarray(y_pred).reshape(-1)
+
+    # Fast path: raw labels already compatible
+    try:
+        return float(f1_score(y_true_arr, y_pred_arr, average="macro"))
+    except Exception:
+        pass
+
+    # Numeric-coercion path (handles int vs float label representations)
+    try:
+        y_true_num = y_true_arr.astype(float)
+        y_pred_num = y_pred_arr.astype(float)
+        return float(f1_score(y_true_num, y_pred_num, average="macro"))
+    except Exception:
+        pass
+
+    # Final fallback: string normalization
+    y_true_str = y_true_arr.astype(str)
+    y_pred_str = y_pred_arr.astype(str)
+    return float(f1_score(y_true_str, y_pred_str, average="macro"))
 
 
 def _validate_names(kind: str, names: list[str], registry: dict[str, Any]) -> None:
