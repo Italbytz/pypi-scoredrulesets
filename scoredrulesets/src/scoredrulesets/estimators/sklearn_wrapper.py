@@ -79,8 +79,22 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 feature_names=self.feature_names_in_,
             )
 
-            # Wende ExSTraCS Shrinking an (falls konfiguriert)
+            # Debug-Ausgabe: Default-Regel und Score-Verteilung
+            default_rules = [r for r in self.ruleset_.rules if not getattr(r, 'atoms', None)]
+            print(f"[DEBUG ExSTraCS->ScoredRuleSet] n_rules={len(self.ruleset_.rules)} | n_default_rules={len(default_rules)}")
+            if default_rules:
+                print(f"[DEBUG ExSTraCS->ScoredRuleSet] Default-Regel scores: {default_rules[0].scores}")
+            # Score-Verteilung der ersten 5 Regeln
+            for i, r in enumerate(self.ruleset_.rules[:5]):
+                print(f"[DEBUG ExSTraCS->ScoredRuleSet] Regel {i}: Atome={len(r.atoms)} Scores={r.scores}")
+
+            # Wende ExSTraCS Shrinking an (falls konfiguriert), aber deaktiviere Atom-Pruning explizit
             if self.exstracs_params:
+                # Kopiere exstracs_params, aber setze aggressive_prune und prune_atoms auf False
+                exstracs_params_no_prune = dict(self.exstracs_params)
+                exstracs_params_no_prune["aggressive_prune"] = False
+                exstracs_params_no_prune["prune_atoms"] = False
+                self.exstracs_params = exstracs_params_no_prune
                 self.ruleset_ = self._apply_exstracs_shrinking(
                     self.ruleset_,
                     X_valid,
@@ -206,7 +220,15 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         return model
 
     @staticmethod
-    def _infer_feature_names(X: np.ndarray) -> list[str]:
+    def _infer_feature_names(X) -> list[str]:
+        # Wenn DataFrame, verwende echte Spaltennamen
+        try:
+            import pandas as pd
+            if isinstance(X, pd.DataFrame):
+                return list(X.columns)
+        except ImportError:
+            pass
+        # Fallback: NumPy-Array
         return [f"f{i}" for i in range(X.shape[1])]
 
     @staticmethod

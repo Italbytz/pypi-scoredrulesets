@@ -129,13 +129,16 @@ def exstracs_to_scored_ruleset(
     Transformiere ExSTraCS Population zu Scored Rule Set.
     
     ExSTraCS produziert eine Population von Regeln mit:
-    - Conditions (intervals)
-    - Class label (Zielklasse)
-    - Fitness und Numerosity
+    - specifiedAttList: Liste der spezifizierten Feature-Indizes (sparse Darstellung)
+    - condition: Liste der Bedingungen (parallel zu specifiedAttList)
+    - phenotype: Zielklasse
+    - fitness und numerosity
     
     Transformation:
-    - Jede Regel bekommt Score = fitness × numerosity für ihre Klasse
-    - Intervals werden zu Range-Atoms
+    - Jede Regel bekommt Score = fitness × numerosity × classPredictionWeight
+    - Kontinuierliche Intervalle [lower, upper] werden zu zwei Atomen: feature > lower AND feature < upper
+      (ExSTraCS verwendet strikte Ungleichungen)
+    - Diskrete Werte werden zu == Atomen
     """
     try:
         # Versuche auf ExSTraCS-interne Struktur zuzugreifen
@@ -150,6 +153,27 @@ def exstracs_to_scored_ruleset(
         rules: list[Rule] = []
         n_classes = len(class_labels)
 
+        # Extrahiere classPredictionWeights aus dem Estimator (wie ExSTraCS nativ)
+        # classPredictionWeights[c] = 1 - (count_c / total) – gewichtet Minderheitsklassen höher
+        class_prediction_weights: dict[Any, float] = {}
+        try:
+            if hasattr(estimator, "env") and hasattr(estimator.env, "formatData"):
+                cpw = getattr(estimator.env.formatData, "classPredictionWeights", None)
+                if cpw is not None:
+                    class_prediction_weights = dict(cpw)
+        except Exception:
+            pass
+
+        # Extrahiere attributeInfoType für die Unterscheidung diskret/kontinuierlich
+        attribute_info_type: list[bool] = []
+        try:
+            if hasattr(estimator, "env") and hasattr(estimator.env, "formatData"):
+                ait = getattr(estimator.env.formatData, "attributeInfoType", None)
+                if ait is not None:
+                    attribute_info_type = list(ait)
+        except Exception:
+            pass
+
         # Debug: Sammle alle Zielklassen (phenotype) aus der Population
         all_phenotypes = set()
 
@@ -157,26 +181,43 @@ def exstracs_to_scored_ruleset(
         for rule_idx, rule in enumerate(iterable_population):
             atoms: list[Atom] = []
 
-            # Extrahiere Conditions (Intervals)
-            if hasattr(rule, "condition"):
-                # skExSTraCS Format
-                for feat_idx, interval in enumerate(rule.condition):
+            # Extrahiere Conditions mit korrekter Feature-Zuordnung über specifiedAttList
+            specified_att_list = getattr(rule, "specifiedAttList", None)
+            conditions = getattr(rule, "condition", None)
+
+            if specified_att_list is not None and conditions is not None:
+                # skExSTraCS Format: condition[i] gehört zu Feature specifiedAttList[i]
+                for cond_idx, interval in enumerate(conditions):
+                    if cond_idx < len(specified_att_list):
+                        feat_idx = specified_att_list[cond_idx]
+                        if feat_idx < len(feature_names):
+                            feature_name = feature_names[feat_idx]
+                        else:
+                            feature_name = f"f{feat_idx}"
+
+                        if interval is None or interval == "#":
+                            continue
+
+                        # Prüfe ob kontinuierlich oder diskret
+                        is_continuous = True
+                        if attribute_info_type and feat_idx < len(attribute_info_type):
+                            is_continuous = attribute_info_type[feat_idx]
+
+                        new_atoms = _exstracs_condition_to_atoms(
+                            interval, feature_name, is_continuous
+                        )
+                        atoms.extend(new_atoms)
+            elif conditions is not None:
+                # Fallback: Kein specifiedAttList vorhanden (unerwartetes Format)
+                # Iteriere über conditions und verwende Index als Feature-Index
+                for feat_idx, interval in enumerate(conditions):
                     if feat_idx < len(feature_names):
                         feature_name = feature_names[feat_idx]
-                        # Überspringe "don't care" Zustände (None oder wild)
                         if interval is not None and interval != "#":
-                            atom = _interval_to_atom(interval, feature_name)
-                            if atom is not None:
-                                atoms.append(atom)
-            elif hasattr(rule, "alleles"):
-                # Alternative Format
-                for feat_idx, allele in enumerate(rule.alleles):
-                    if feat_idx < len(feature_names):
-                        feature_name = feature_names[feat_idx]
-                        if allele is not None and allele != "#":
-                            atom = _interval_to_atom(allele, feature_name)
-                            if atom is not None:
-                                atoms.append(atom)
+                            new_atoms = _exstracs_condition_to_atoms(
+                                interval, feature_name, True
+                            )
+                            atoms.extend(new_atoms)
 
             # Extrahiere Zielklasse und Fitness
             class_idx = 0
@@ -189,8 +230,19 @@ def exstracs_to_scored_ruleset(
                 try:
                     class_idx = class_labels.index(class_label)
                 except (ValueError, IndexError):
-                    print(f"[WARN] ExSTraCS-Regel {rule_idx}: phenotype '{class_label}' nicht in class_labels {class_labels}. Mapping auf 0.")
-                    class_idx = 0
+                    # Versuche Float-Vergleich (ExSTraCS speichert phenotype oft als float)
+                    found = False
+                    for ci, cl in enumerate(class_labels):
+                        try:
+                            if float(cl) == float(class_label):
+                                class_idx = ci
+                                found = True
+                                break
+                        except (ValueError, TypeError):
+                            continue
+                    if not found:
+                        print(f"[WARN] ExSTraCS-Regel {rule_idx}: phenotype '{class_label}' nicht in class_labels {class_labels}. Mapping auf 0.")
+                        class_idx = 0
             else:
                 print(f"[WARN] ExSTraCS-Regel {rule_idx}: Keine phenotype gefunden, mapping auf 0.")
 
@@ -199,8 +251,13 @@ def exstracs_to_scored_ruleset(
             if hasattr(rule, "numerosity"):
                 numerosity = float(rule.numerosity)
 
-            # Score = fitness × numerosity
+            # Score = fitness × numerosity × classPredictionWeight (wie in ExSTraCS Prediction)
             score_value = fitness * numerosity
+
+            # Wende classPredictionWeight an (falls verfügbar)
+            phenotype_key = getattr(rule, "phenotype", None)
+            if phenotype_key is not None and phenotype_key in class_prediction_weights:
+                score_value *= class_prediction_weights[phenotype_key]
 
             # Erstelle Score-Vektor
             scores = [0.0] * n_classes
@@ -216,17 +273,26 @@ def exstracs_to_scored_ruleset(
                         "fitness": fitness,
                         "numerosity": numerosity,
                         "class_label": class_labels[class_idx] if class_idx < len(class_labels) else class_idx,
-                        "phenotype": getattr(rule, "phenotype", None),
+                        "phenotype": phenotype_key,
                     },
                 )
             )
 
-        # Debug-Ausgabe: Alle gefundenen Zielklassen
+        # Debug-Ausgabe
         print(f"[DEBUG] ExSTraCS: class_labels={class_labels}, phenotypes in population={sorted(all_phenotypes)}")
+        if class_prediction_weights:
+            print(f"[DEBUG] ExSTraCS: classPredictionWeights={class_prediction_weights}")
 
-        # Füge Default-Regel hinzu (falls nicht vorhanden, und nur einmal!)
-        default_rule_count = sum(1 for r in rules if len(r.atoms) == 0)
-        if default_rule_count == 0:
+        # Diagnostik: Warnung bei zu vielen Regeln ohne Atome
+        n_no_atoms = sum(1 for r in rules if len(r.atoms) == 0)
+        if n_no_atoms > len(rules) * 0.5:
+            print(f"[WARN] ExSTraCS: {n_no_atoms}/{len(rules)} Regeln haben keine Atome! "
+                  f"Möglicherweise werden Bedingungen nicht korrekt extrahiert.")
+
+        # Default-Regel-Logik: Default-Regel wie jede andere behandeln, ggf. Scores aufsummieren
+        default_rules = [r for r in rules if len(r.atoms) == 0]
+        if len(default_rules) == 0:
+            # Keine Default-Regel vorhanden: Füge eine mit neutralen Scores hinzu
             default_scores = [1.0 / n_classes] * n_classes
             rules.insert(
                 0,
@@ -237,15 +303,29 @@ def exstracs_to_scored_ruleset(
                     metadata={"source": "exstracs_default"},
                 ),
             )
-        elif default_rule_count > 1:
-            # Entferne alle bis auf eine Default-Regel
-            new_rules = [r for r in rules if len(r.atoms) > 0]
-            # Füge die erste gefundene Default-Regel wieder ein
-            for r in rules:
-                if len(r.atoms) == 0:
-                    new_rules.insert(0, r)
-                    break
-            rules = new_rules
+        elif len(default_rules) > 1:
+            # Mehrere Default-Regeln: Scores aufsummieren und zu einer Regel zusammenfassen
+            summed_scores = [0.0] * n_classes
+            for r in default_rules:
+                summed_scores = [a + b for a, b in zip(summed_scores, r.scores)]
+            # Entferne alle Default-Regeln
+            rules = [r for r in rules if len(r.atoms) > 0]
+            # Füge aufsummierte Default-Regel ein
+            rules.insert(
+                0,
+                Rule(
+                    atoms=[],
+                    scores=summed_scores,
+                    rule_id="default",
+                    metadata={"source": "exstracs_default_combined", "n_combined": len(default_rules)},
+                ),
+            )
+
+        # Debug: Zeige Atome der ersten 5 Regeln
+        for i, r in enumerate(rules[:5]):
+            print(f"[DEBUG ExSTraCS->ScoredRuleSet] Regel {i} (id={r.rule_id}) Atome={len(r.atoms)} Scores={r.scores}")
+            for atom in r.atoms:
+                print(f"  Feature: {atom.feature}, Op: {atom.op}, Wert: {atom.value}")
 
         ruleset = ScoredRuleSet(
             class_labels=class_labels,
@@ -443,26 +523,68 @@ def _resolve_class_index(class_label: Any, class_labels: list[Any]) -> int:
     return 0
 
 
+def _exstracs_condition_to_atoms(
+    condition: Any, feature_name: str, is_continuous: bool
+) -> list[Atom]:
+    """
+    Transformiere eine ExSTraCS-Bedingung zu Atom(en).
+    
+    Für kontinuierliche Features:
+      ExSTraCS nutzt Intervalle [lower, upper] mit strikter Ungleichung:
+        lower < value < upper
+      → Zwei Atome: feature > lower AND feature < upper
+    
+    Für diskrete Features:
+      ExSTraCS nutzt Gleichheit: value == condition
+      → Ein Atom: feature == value
+    """
+    atoms: list[Atom] = []
+    try:
+        # Prüfe ob es ein Intervall ist (list, tuple oder numpy array mit 2 Elementen)
+        is_array_like = isinstance(condition, (tuple, list))
+        if not is_array_like:
+            try:
+                # Unterstütze numpy arrays
+                if hasattr(condition, "__len__") and hasattr(condition, "__getitem__"):
+                    is_array_like = True
+            except Exception:
+                pass
+
+        if is_continuous and is_array_like and len(condition) == 2:
+            lower = float(condition[0])
+            upper = float(condition[1])
+            # Reihenfolge absichern
+            if lower > upper:
+                lower, upper = upper, lower
+            # ExSTraCS verwendet strikte Ungleichung: lower < value < upper
+            atoms.append(Atom(feature=str(feature_name), op=">", value=lower))
+            atoms.append(Atom(feature=str(feature_name), op="<", value=upper))
+        elif not is_continuous:
+            # Diskretes Feature: Gleichheit
+            atoms.append(Atom(feature=str(feature_name), op="==", value=condition))
+        elif is_array_like and len(condition) == 2:
+            # Fallback: Als Intervall behandeln
+            lower = float(condition[0])
+            upper = float(condition[1])
+            if lower > upper:
+                lower, upper = upper, lower
+            atoms.append(Atom(feature=str(feature_name), op=">", value=lower))
+            atoms.append(Atom(feature=str(feature_name), op="<", value=upper))
+        else:
+            # Skalarer Wert: als Gleichheit behandeln
+            atoms.append(Atom(feature=str(feature_name), op="==", value=condition))
+
+    except Exception:
+        pass
+    return atoms
+
+
 def _interval_to_atom(interval: Any, feature_name: str) -> Atom | None:
     """
-    Transformiere ExSTraCS Interval zu Atom.
+    Transformiere ExSTraCS Interval zu Atom (Legacy-Funktion).
     
-    ExSTraCS nutzt Intervals [lower, upper] für kontinuierliche Features.
+    Bevorzuge _exstracs_condition_to_atoms für korrekte strikte Ungleichungen.
     """
-    try:
-        # Interval als Tupel (lower, upper)
-        if isinstance(interval, (tuple, list)) and len(interval) == 2:
-            lower, upper = interval
-            # Nutze Range-Atom (zwischen lower und upper)
-            # Wir konstruieren ein "in range" Atom
-            midpoint = (float(lower) + float(upper)) / 2.0
-            return Atom(
-                feature=str(feature_name),
-                op="in",
-                value={"lower": float(lower), "upper": float(upper)},
-            )
-        
-        return None
-    except Exception:
-        return None
+    atoms = _exstracs_condition_to_atoms(interval, feature_name, is_continuous=True)
+    return atoms[0] if atoms else None
 

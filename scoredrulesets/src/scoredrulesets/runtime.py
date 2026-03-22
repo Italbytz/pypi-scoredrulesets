@@ -31,6 +31,14 @@ def _atom_matches(value: Any, atom: Atom) -> bool:
     if op == ">=":
         return value >= ref
     if op == "in":
+        # ExSTraCS liefert Intervalle als Dict mit 'lower' und 'upper'
+        if isinstance(ref, dict) and "lower" in ref and "upper" in ref:
+            lower = ref["lower"]
+            upper = ref["upper"]
+            # Reihenfolge absichern (falls lower > upper)
+            if lower > upper:
+                lower, upper = upper, lower
+            return lower <= value <= upper
         return value in ref
     if op == "not_in":
         return value not in ref
