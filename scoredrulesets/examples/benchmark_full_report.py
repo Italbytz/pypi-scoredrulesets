@@ -9,7 +9,14 @@ Umfangreicher Benchmark aller relevanten Schätzer und Datensätze mit Fortschri
 Laufzeit: Kann je nach Konfiguration sehr lang sein!
 """
 
+import argparse
+import contextlib
+import datetime as dt
+import json
+import sys
+import time
 from pathlib import Path
+
 from scoredrulesets.benchmarking.estimators import default_estimator_specs
 from scoredrulesets.benchmarking.datasets import load_sklearn_datasets, load_online_paper_uci_datasets
 from scoredrulesets.benchmarking import (
@@ -26,11 +33,48 @@ from scoredrulesets.benchmarking import (
     plot_benchmark_heatmap_combined,
 )
 from scoredrulesets.benchmarking.runner import results_as_dicts
-import json
-import time
 
 
-def main():
+class _TeeStream:
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for stream in self._streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self):
+        for stream in self._streams:
+            stream.flush()
+
+
+def _default_log_path() -> Path:
+    ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return Path("benchmarks") / "logs" / f"benchmark_full_report_{ts}.log"
+
+
+@contextlib.contextmanager
+def _maybe_tee_to_file(log_file: Path | None):
+    if log_file is None:
+        yield
+        return
+
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("w", encoding="utf-8") as f:
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = _TeeStream(old_stdout, f)
+        sys.stderr = _TeeStream(old_stderr, f)
+        try:
+            print(f"[LOG] writing console output to: {log_file}")
+            yield
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+
+def main(log_file: Path | None = None):
     # Alle Estimatoren und Datensätze sammeln
     estimator_specs = default_estimator_specs()
     estimator_names = list(estimator_specs.keys())
@@ -133,6 +177,9 @@ def main():
     print("\nLeaderboard (Top 10):")
     print(format_benchmark_leaderboard_table(leaderboard)[:2000])
 
+    if log_file is not None:
+        print(f"\n[LOG] completed. Full log saved to: {log_file}")
+
 
 def _csv_string(rows):
     if not rows:
@@ -146,5 +193,28 @@ def _csv_string(rows):
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run full benchmark report with optional console logging.")
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help="Path for console log file. Default: benchmarks/logs/benchmark_full_report_<timestamp>.log",
+    )
+    parser.add_argument(
+        "--no-log",
+        action="store_true",
+        help="Disable automatic console log file output.",
+    )
+    args = parser.parse_args()
+
+    selected_log_file: Path | None
+    if args.no_log:
+        selected_log_file = None
+    elif args.log_file is not None:
+        selected_log_file = args.log_file
+    else:
+        selected_log_file = _default_log_path()
+
+    with _maybe_tee_to_file(selected_log_file):
+        main(log_file=selected_log_file)
 
