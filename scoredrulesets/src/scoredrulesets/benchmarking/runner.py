@@ -253,22 +253,9 @@ def _run_single(
     try:
         estimator = estimator_factory()
     except Exception as exc:
-        return BenchmarkResult(
-            dataset=dataset_name,
-            estimator=estimator_name,
-            repeat=repeat,
-            status="skipped",
-            skip_reason="init_failed",
-            error=str(exc),
-            f1_macro=None,
-            fit_seconds=None,
-            predict_seconds=None,
-            n_rules=None,
-            n_atoms=None,
-            ruleset_json_bytes=None,
-            n_train=len(y_train),
-            n_test=len(y_test),
-        )
+        raise RuntimeError(
+            f"Schätzer '{estimator_name}' konnte nicht initialisiert werden: {exc}"
+        ) from exc
 
     try:
         fit_start = perf_counter()
@@ -277,8 +264,6 @@ def _run_single(
 
         # Nach dem Training: F1-Score des nativen Modells (vor Transformation), falls möglich
         f1_native = None
-        n_rules_native = None
-        n_atoms_native = None
         try:
             native_model = getattr(estimator, 'estimator_', None)
             if native_model is not None and hasattr(native_model, 'predict'):
@@ -286,14 +271,8 @@ def _run_single(
                 y_true_native = np.asarray(y_test, dtype=object).astype(str)
                 y_pred_native = np.asarray(y_pred_native, dtype=object).astype(str)
                 f1_native = float(f1_score(y_true_native, y_pred_native, average="macro"))
-                # Versuche native Regel-/Atomzahl zu bekommen (falls vorhanden)
-                if hasattr(native_model, 'to_ruleset'):
-                    ruleset_native = native_model.to_ruleset()
-                    n_rules_native, n_atoms_native, _ = model_size_metrics(ruleset_native)
-        except Exception as ex:
-            pass  # Ignoriere Fehler bei der nativen Auswertung
-
-
+        except Exception:
+            pass
 
         predict_start = perf_counter()
         y_pred = estimator.predict(X_test)
@@ -305,30 +284,30 @@ def _run_single(
         ruleset = estimator.to_ruleset()
         n_rules, n_atoms, ruleset_json_bytes = model_size_metrics(ruleset)
 
-        # Konsolenausgabe: F1, Regelzahl, Atomzahl nach Transformation
-        print(f"[BENCHMARK] {estimator_name} | {dataset_name} | F1={f1_macro:.4f} | Regeln={n_rules} | Atome={n_atoms}")
-        if f1_native is not None:
-            print(f"[BENCHMARK]   → F1 native (vor Transformation): {f1_native:.4f}")
-            if n_rules_native is not None and n_atoms_native is not None:
-                print(f"[BENCHMARK]   → native Regeln={n_rules_native} | native Atome={n_atoms_native}")
+        # Kompakte Konsolenausgabe
+        native_info = f" (nativ={f1_native:.4f})" if f1_native is not None else ""
+        print(
+            f"[BENCHMARK] {estimator_name} | {dataset_name} | "
+            f"F1={f1_macro:.4f}{native_info} | "
+            f"Regeln={n_rules} | Atome={n_atoms} | "
+            f"fit={fit_seconds:.2f}s",
+            flush=True,
+        )
 
-        # Debug: Vergleiche feuende Regeln und Scores für die ersten 5 Test-Samples
-        if hasattr(estimator, 'estimator_') and hasattr(estimator, 'to_ruleset') and hasattr(estimator, 'predict'):
-            try:
-                native_model = getattr(estimator, 'estimator_', None)
-                if native_model is not None and hasattr(native_model, 'predict') and hasattr(native_model, 'predict_proba'):
-                    print("[DEBUG] Vergleich feuende Regeln und Scores für die ersten 5 Test-Samples:")
-                    for i in range(min(5, len(X_test))):
-                        print(f"Sample {i}:")
-                        # Vor Transformation (nativ)
-                        y_pred_native = native_model.predict(X_test[i:i+1])
-                        print(f"  Native Prediction: {y_pred_native}")
-                        # Nach Transformation (ScoredRuleSet)
-                        from scoredrulesets.runtime import decision_function
-                        scores = decision_function(ruleset, X_test[i:i+1], debug=True)
-                        print(f"  ScoredRuleSet Prediction: {ruleset.class_labels[np.argmax(scores)]}")
-            except Exception as ex:
-                print(f"[DEBUG] Fehler beim Vergleich der feuenden Regeln: {ex}")
+        # F1-Validierung: Abbruch wenn verlustfreie Transformation F1 massiv verschlechtert
+        is_lossy = getattr(estimator, "transformation_lossy_", False)
+        if f1_native is not None and f1_native > 0.0 and not is_lossy:
+            f1_drop = f1_native - f1_macro
+            # Toleranz: max 10% absoluter Verlust oder 20% relativer Verlust
+            max_abs_drop = 0.10
+            max_rel_drop = 0.20
+            if f1_drop > max_abs_drop and f1_drop / f1_native > max_rel_drop:
+                raise RuntimeError(
+                    f"F1-Validierung fehlgeschlagen für '{estimator_name}' auf '{dataset_name}': "
+                    f"F1 nativ={f1_native:.4f} → transformiert={f1_macro:.4f} "
+                    f"(Verlust={f1_drop:.4f}, {f1_drop/f1_native*100:.1f}%). "
+                    f"Die Transformation hat die Vorhersagequalität zerstört."
+                )
 
         return BenchmarkResult(
             dataset=dataset_name,
@@ -347,39 +326,15 @@ def _run_single(
             n_test=len(y_test),
         )
     except ImportError as exc:
-        return BenchmarkResult(
-            dataset=dataset_name,
-            estimator=estimator_name,
-            repeat=repeat,
-            status="skipped",
-            skip_reason="missing_optional_dependency",
-            error=str(exc),
-            f1_macro=None,
-            fit_seconds=None,
-            predict_seconds=None,
-            n_rules=None,
-            n_atoms=None,
-            ruleset_json_bytes=None,
-            n_train=len(y_train),
-            n_test=len(y_test),
-        )
+        raise RuntimeError(
+            f"Fehlende Abhängigkeit für '{estimator_name}': {exc}"
+        ) from exc
+    except RuntimeError:
+        raise  # F1-Validierung und Init-Fehler durchlassen
     except Exception as exc:
-        return BenchmarkResult(
-            dataset=dataset_name,
-            estimator=estimator_name,
-            repeat=repeat,
-            status="error",
-            skip_reason=None,
-            error=str(exc),
-            f1_macro=None,
-            fit_seconds=None,
-            predict_seconds=None,
-            n_rules=None,
-            n_atoms=None,
-            ruleset_json_bytes=None,
-            n_train=len(y_train),
-            n_test=len(y_test),
-        )
+        raise RuntimeError(
+            f"Fehler bei '{estimator_name}' auf '{dataset_name}': {exc}"
+        ) from exc
 
 
 def _validate_names(kind: str, names: list[str], registry: dict[str, Any]) -> None:

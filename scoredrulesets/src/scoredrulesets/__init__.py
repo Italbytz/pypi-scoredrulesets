@@ -18,6 +18,7 @@ from .benchmarking import (
     format_benchmark_report_markdown,
     load_aggregated_results_json,
     plot_benchmark_heatmap,
+    plot_benchmark_heatmap_combined,
     plot_benchmark_results,
     run_benchmarks,
 )
@@ -26,6 +27,7 @@ from .estimators.logicgp import LogicGPClassifier
 from .estimators.michigan import MichiganRuleSetClassifier
 from .estimators.native import NativeScoredRuleSetClassifier
 from .estimators.pittsburgh import PittsburghRuleSetClassifier
+from .estimators.rulefit import RuleFitClassifier
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
 from .formatting import format_ruleset_table
 from .io import dump_ruleset_json, load_ruleset_json
@@ -46,6 +48,7 @@ __all__ = [
     "MichiganRuleSetClassifier",
     "NativeScoredRuleSetClassifier",
     "PittsburghRuleSetClassifier",
+    "RuleFitClassifier",
     "ScoredRuleSetClassifier",
     "aggregate_benchmark_results",
     "aggregated_results_as_dicts",
@@ -66,6 +69,7 @@ __all__ = [
     "load_aggregated_results_json",
     "load_ruleset_json",
     "plot_benchmark_heatmap",
+    "plot_benchmark_heatmap_combined",
     "plot_benchmark_results",
     "run_benchmarks",
 ]

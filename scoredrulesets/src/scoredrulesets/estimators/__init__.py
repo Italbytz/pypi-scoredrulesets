@@ -4,6 +4,7 @@ from .logicgp import LogicGPClassifier
 from .michigan import MichiganRuleSetClassifier
 from .native import NativeScoredRuleSetClassifier
 from .pittsburgh import PittsburghRuleSetClassifier
+from .rulefit import RuleFitClassifier
 from .sklearn_wrapper import ScoredRuleSetClassifier
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
 	"MichiganRuleSetClassifier",
 	"NativeScoredRuleSetClassifier",
 	"PittsburghRuleSetClassifier",
+	"RuleFitClassifier",
 	"ScoredRuleSetClassifier",
 ]
 

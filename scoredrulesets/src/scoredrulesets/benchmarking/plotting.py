@@ -8,7 +8,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, LogNorm
+from matplotlib.patches import Rectangle
+from matplotlib import cm
 
 from .runner import AggregatedBenchmarkResult, BenchmarkResult, aggregate_benchmark_results
 
@@ -278,3 +280,259 @@ def _fmt_metric(value: float | None) -> str:
     return f"{float(value):.2f}"
 
 
+# ---------------------------------------------------------------------------
+# Combined multi-metric heatmap
+# ---------------------------------------------------------------------------
+
+
+def plot_benchmark_heatmap_combined(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+) -> tuple[Path, Path]:
+    """Create a combined heatmap with three metrics per cell.
+
+    Each cell is split into three rectangles:
+      - **Top half**: F1-macro (green colour scale)
+      - **Bottom-left quarter**: total atom count (blue colour scale, log)
+      - **Bottom-right quarter**: fit time in seconds (orange colour scale, log)
+
+    Each sub-rectangle is annotated with its numeric value.
+
+    Returns (png_path, pdf_path).
+    """
+    raw_results = list(results)
+    ok_results = [r for r in raw_results if r.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for combined heatmap")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for combined heatmap")
+
+    dataset_names = sorted({r.dataset for r in aggregated})
+    estimator_names = _sort_estimators_for_heatmap(aggregated)
+
+    n_rows = len(dataset_names)
+    n_cols = len(estimator_names)
+
+    # Build lookup  ─────────────────────────────────────────────────────────
+    lookup: dict[tuple[str, str], AggregatedBenchmarkResult] = {}
+    for r in aggregated:
+        lookup[(r.dataset, r.estimator)] = r
+
+    # Collect raw metric arrays for normalisation  ──────────────────────────
+    f1_vals: list[float] = []
+    atom_vals: list[float] = []
+    fit_vals: list[float] = []
+    for r in aggregated:
+        if r.f1_macro_mean is not None:
+            f1_vals.append(float(r.f1_macro_mean))
+        if r.n_atoms_mean is not None and r.n_atoms_mean > 0:
+            atom_vals.append(float(r.n_atoms_mean))
+        if r.fit_seconds_mean is not None and r.fit_seconds_mean > 0:
+            fit_vals.append(float(r.fit_seconds_mean))
+
+    # Colour maps & norms  ─────────────────────────────────────────────────
+    f1_cmap = plt.colormaps["Greens"]
+    f1_norm = Normalize(vmin=0.0, vmax=1.0)
+
+    atom_cmap = plt.colormaps["Blues"]
+    if atom_vals:
+        atom_norm = LogNorm(
+            vmin=max(1.0, min(atom_vals)),
+            vmax=max(max(atom_vals), 2.0),
+        )
+    else:
+        atom_norm = Normalize(vmin=1, vmax=100)
+
+    fit_cmap = plt.colormaps["Oranges"]
+    if fit_vals:
+        fit_norm = LogNorm(
+            vmin=max(0.001, min(fit_vals)),
+            vmax=max(max(fit_vals), 0.002),
+        )
+    else:
+        fit_norm = Normalize(vmin=0.001, vmax=10)
+
+    # Figure layout  ───────────────────────────────────────────────────────
+    cell_w = max(1.4, min(2.0, 26.0 / max(n_cols, 1)))
+    cell_h = max(0.9, min(1.3, 18.0 / max(n_rows, 1)))
+    fig_w = 2.0 + cell_w * n_cols + 3.0        # left margin + cells + legend
+    fig_h = 1.6 + cell_h * n_rows + 1.2        # top/bottom margins
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.set_xlim(0, n_cols)
+    ax.set_ylim(n_rows, 0)          # row 0 at top
+    ax.set_aspect("equal")
+    ax.set_frame_on(False)
+    ax.tick_params(length=0)
+
+    # Axis labels  ─────────────────────────────────────────────────────────
+    ax.set_xticks([c + 0.5 for c in range(n_cols)])
+    ax.set_xticklabels(estimator_names, rotation=55, ha="right", fontsize=8)
+    ax.set_yticks([r + 0.5 for r in range(n_rows)])
+    ax.set_yticklabels(dataset_names, fontsize=9)
+    ax.set_xlabel("Estimator", fontsize=10)
+    ax.set_ylabel("Dataset", fontsize=10)
+    ax.set_title(
+        "Combined benchmark heatmap: F1 (top), atoms (bottom-left), fit time (bottom-right)",
+        fontsize=11,
+        pad=12,
+    )
+
+    # Draw cells  ──────────────────────────────────────────────────────────
+    for ri, ds in enumerate(dataset_names):
+        for ci, est in enumerate(estimator_names):
+            entry = lookup.get((ds, est))
+            _draw_combined_cell(
+                ax, ci, ri, entry,
+                f1_cmap, f1_norm,
+                atom_cmap, atom_norm,
+                fit_cmap, fit_norm,
+            )
+
+    # Grid lines  ──────────────────────────────────────────────────────────
+    for r in range(n_rows + 1):
+        ax.axhline(r, color="white", linewidth=1.2)
+    for c in range(n_cols + 1):
+        ax.axvline(c, color="white", linewidth=1.2)
+
+    # Colour-bar legends (right side)  ─────────────────────────────────────
+    _add_legend_bar(fig, f1_cmap, f1_norm, label="F1-macro", position=[0.92, 0.55, 0.015, 0.30])
+    _add_legend_bar(fig, atom_cmap, atom_norm, label="Atoms", position=[0.92, 0.15, 0.015, 0.30])
+    _add_legend_bar(fig, fit_cmap, fit_norm, label="Fit (s)", position=[0.96, 0.15, 0.015, 0.30])
+
+    fig.subplots_adjust(left=0.15, right=0.90, bottom=0.22, top=0.92)
+
+    base = Path(output_base)
+    png_path = base.with_suffix(".png")
+    pdf_path = base.with_suffix(".pdf")
+    fig.savefig(png_path, dpi=200, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    return png_path, pdf_path
+
+
+def _draw_combined_cell(
+    ax,
+    col: int,
+    row: int,
+    entry: AggregatedBenchmarkResult | None,
+    f1_cmap, f1_norm,
+    atom_cmap, atom_norm,
+    fit_cmap, fit_norm,
+):
+    """Draw one cell with three coloured sub-rectangles + text annotations."""
+    x0, y0 = float(col), float(row)
+
+    if entry is None:
+        # Grey "n/a" cell
+        ax.add_patch(Rectangle((x0, y0), 1.0, 1.0, facecolor="#e5e7eb", edgecolor="none"))
+        ax.text(x0 + 0.5, y0 + 0.5, "n/a", ha="center", va="center", fontsize=7, color="#888")
+        return
+
+    # ── Top half: F1 ──────────────────────────────────────────────────────
+    f1_val = entry.f1_macro_mean
+    if f1_val is not None:
+        f1_color = f1_cmap(f1_norm(float(f1_val)))
+    else:
+        f1_color = "#e5e7eb"
+    ax.add_patch(Rectangle((x0, y0), 1.0, 0.5, facecolor=f1_color, edgecolor="none"))
+
+    f1_text = f"{f1_val:.2f}" if f1_val is not None else "n/a"
+    f1_err = entry.f1_macro_error
+    if f1_err is not None and f1_val is not None:
+        f1_text += f"\n±{f1_err:.2f}"
+    text_lum = _luminance(f1_color) if f1_val is not None else 0.7
+    ax.text(
+        x0 + 0.5, y0 + 0.25, f1_text,
+        ha="center", va="center",
+        fontsize=7, fontweight="bold",
+        color="white" if text_lum < 0.5 else "black",
+    )
+
+    # ── Bottom-left quarter: Atoms ────────────────────────────────────────
+    atom_val = entry.n_atoms_mean
+    if atom_val is not None and atom_val > 0:
+        atom_color = atom_cmap(atom_norm(float(atom_val)))
+    else:
+        atom_color = "#e5e7eb"
+    ax.add_patch(Rectangle((x0, y0 + 0.5), 0.5, 0.5, facecolor=atom_color, edgecolor="none"))
+
+    atom_text = _fmt_compact(atom_val)
+    atom_lum = _luminance(atom_color) if (atom_val is not None and atom_val > 0) else 0.7
+    ax.text(
+        x0 + 0.25, y0 + 0.75, atom_text,
+        ha="center", va="center",
+        fontsize=6,
+        color="white" if atom_lum < 0.5 else "black",
+    )
+
+    # ── Bottom-right quarter: Fit time ────────────────────────────────────
+    fit_val = entry.fit_seconds_mean
+    if fit_val is not None and fit_val > 0:
+        fit_color = fit_cmap(fit_norm(float(fit_val)))
+    else:
+        fit_color = "#e5e7eb"
+    ax.add_patch(Rectangle((x0 + 0.5, y0 + 0.5), 0.5, 0.5, facecolor=fit_color, edgecolor="none"))
+
+    fit_text = _fmt_duration_short(fit_val)
+    fit_lum = _luminance(fit_color) if (fit_val is not None and fit_val > 0) else 0.7
+    ax.text(
+        x0 + 0.75, y0 + 0.75, fit_text,
+        ha="center", va="center",
+        fontsize=6,
+        color="white" if fit_lum < 0.5 else "black",
+    )
+
+
+def _add_legend_bar(fig, cmap, norm, *, label: str, position: list[float]):
+    """Add a small colour-bar to the figure at `position = [left, bottom, width, height]`."""
+    cax = fig.add_axes(position)
+    sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cb = fig.colorbar(sm, cax=cax)
+    cb.set_label(label, fontsize=8)
+    cb.ax.tick_params(labelsize=7)
+
+
+def _fmt_compact(value: float | None) -> str:
+    """Format a number compactly (e.g. 1234 → '1.2k')."""
+    if value is None:
+        return "n/a"
+    v = float(value)
+    if v >= 10_000:
+        return f"{v / 1000:.0f}k"
+    if v >= 1_000:
+        return f"{v / 1000:.1f}k"
+    if v >= 100:
+        return f"{v:.0f}"
+    if v >= 10:
+        return f"{v:.1f}"
+    return f"{v:.2f}"
+
+
+def _fmt_duration_short(seconds: float | None) -> str:
+    """Format seconds compactly (e.g. 0.03 → '30ms', 5.2 → '5.2s')."""
+    if seconds is None:
+        return "n/a"
+    s = float(seconds)
+    if s < 0.01:
+        return f"{s * 1000:.0f}ms"
+    if s < 1.0:
+        return f"{s * 1000:.0f}ms"
+    if s < 60:
+        return f"{s:.1f}s"
+    m = s / 60
+    return f"{m:.1f}m"
+
+
+def _luminance(color) -> float:
+    """Approximate perceived luminance of an RGBA tuple or hex colour."""
+    import matplotlib.colors as mcolors
+    try:
+        rgba = mcolors.to_rgba(color)
+    except Exception:
+        return 0.5
+    # Rec. 709 luminance
+    return 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]

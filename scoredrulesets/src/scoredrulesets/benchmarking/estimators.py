@@ -441,4 +441,26 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
+        "wrapper_rulefit": EstimatorSpec(
+            name="wrapper_rulefit",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulefit",
+                backend_params={
+                    "max_rules": 50,
+                    "tree_size": 4,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_rulefit_compact": EstimatorSpec(
+            name="wrapper_rulefit_compact",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulefit",
+                backend_params={
+                    "max_rules": 20,
+                    "tree_size": 3,
+                },
+                random_state=0,
+            ),
+        ),
     }

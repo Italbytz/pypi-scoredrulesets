@@ -66,12 +66,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 feature_names=self.feature_names_in_,
             )
         elif backend_lower == "rulefit":
-            from .ruleset_transform import rulefit_to_scored_ruleset
-            self.ruleset_ = rulefit_to_scored_ruleset(
-                estimator=self.estimator_,
-                class_labels=self.classes_.tolist(),
-                feature_names=self.feature_names_in_,
-            )
+            # RuleFitClassifier verwaltet sein ScoredRuleSet intern
+            if hasattr(self.estimator_, "to_ruleset"):
+                self.ruleset_ = self.estimator_.to_ruleset()
+            else:
+                raise RuntimeError(
+                    "RuleFitClassifier hat kein 'to_ruleset()' nach fit(). "
+                    "Bitte rulefit.py auf Fehler pruefen."
+                )
         elif backend_lower == "exstracs":
             self.ruleset_ = exstracs_to_scored_ruleset(
                 estimator=self.estimator_,
@@ -79,14 +81,6 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 feature_names=self.feature_names_in_,
             )
 
-            # Debug-Ausgabe: Default-Regel und Score-Verteilung
-            default_rules = [r for r in self.ruleset_.rules if not getattr(r, 'atoms', None)]
-            print(f"[DEBUG ExSTraCS->ScoredRuleSet] n_rules={len(self.ruleset_.rules)} | n_default_rules={len(default_rules)}")
-            if default_rules:
-                print(f"[DEBUG ExSTraCS->ScoredRuleSet] Default-Regel scores: {default_rules[0].scores}")
-            # Score-Verteilung der ersten 5 Regeln
-            for i, r in enumerate(self.ruleset_.rules[:5]):
-                print(f"[DEBUG ExSTraCS->ScoredRuleSet] Regel {i}: Atome={len(r.atoms)} Scores={r.scores}")
 
             # Wende ExSTraCS Shrinking an (falls konfiguriert), aber deaktiviere Atom-Pruning explizit
             if self.exstracs_params:
@@ -142,7 +136,10 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
             "logicgp",
             "pittsburgh",
             "michigan",
+            "rulefit",
         )
+        # RuleFit-Transformation ist verlustbehaftet (lineare Features werden ignoriert)
+        self.transformation_lossy_ = backend_lower in ("rulefit",)
         return self
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:

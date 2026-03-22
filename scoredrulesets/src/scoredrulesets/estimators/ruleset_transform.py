@@ -241,10 +241,15 @@ def exstracs_to_scored_ruleset(
                         except (ValueError, TypeError):
                             continue
                     if not found:
-                        print(f"[WARN] ExSTraCS-Regel {rule_idx}: phenotype '{class_label}' nicht in class_labels {class_labels}. Mapping auf 0.")
+                        import warnings
+                        warnings.warn(
+                            f"ExSTraCS-Regel {rule_idx}: phenotype '{class_label}' "
+                            f"nicht in class_labels {class_labels}. Mapping auf 0."
+                        )
                         class_idx = 0
             else:
-                print(f"[WARN] ExSTraCS-Regel {rule_idx}: Keine phenotype gefunden, mapping auf 0.")
+                import warnings
+                warnings.warn(f"ExSTraCS-Regel {rule_idx}: Keine phenotype gefunden, mapping auf 0.")
 
             if hasattr(rule, "fitness"):
                 fitness = float(rule.fitness)
@@ -278,16 +283,14 @@ def exstracs_to_scored_ruleset(
                 )
             )
 
-        # Debug-Ausgabe
-        print(f"[DEBUG] ExSTraCS: class_labels={class_labels}, phenotypes in population={sorted(all_phenotypes)}")
-        if class_prediction_weights:
-            print(f"[DEBUG] ExSTraCS: classPredictionWeights={class_prediction_weights}")
-
         # Diagnostik: Warnung bei zu vielen Regeln ohne Atome
         n_no_atoms = sum(1 for r in rules if len(r.atoms) == 0)
         if n_no_atoms > len(rules) * 0.5:
-            print(f"[WARN] ExSTraCS: {n_no_atoms}/{len(rules)} Regeln haben keine Atome! "
-                  f"Möglicherweise werden Bedingungen nicht korrekt extrahiert.")
+            import warnings
+            warnings.warn(
+                f"ExSTraCS: {n_no_atoms}/{len(rules)} Regeln haben keine Atome! "
+                f"Möglicherweise werden Bedingungen nicht korrekt extrahiert."
+            )
 
         # Default-Regel-Logik: Default-Regel wie jede andere behandeln, ggf. Scores aufsummieren
         default_rules = [r for r in rules if len(r.atoms) == 0]
@@ -321,11 +324,6 @@ def exstracs_to_scored_ruleset(
                 ),
             )
 
-        # Debug: Zeige Atome der ersten 5 Regeln
-        for i, r in enumerate(rules[:5]):
-            print(f"[DEBUG ExSTraCS->ScoredRuleSet] Regel {i} (id={r.rule_id}) Atome={len(r.atoms)} Scores={r.scores}")
-            for atom in r.atoms:
-                print(f"  Feature: {atom.feature}, Op: {atom.op}, Wert: {atom.value}")
 
         ruleset = ScoredRuleSet(
             class_labels=class_labels,
@@ -340,88 +338,6 @@ def exstracs_to_scored_ruleset(
     except Exception as e:
         raise TypeError(f"Konnte ExSTraCS zu Scored Rule Set nicht transformieren: {e}") from e
 
-
-def rulefit_to_scored_ruleset(
-    estimator: Any,
-    class_labels: list[Any],
-    feature_names: list[str],
-) -> ScoredRuleSet:
-    """
-    Transformiere RuleFit-Regeln zu Scored Rule Set.
-    Jede Regel wird als Atom-Liste mit Score übernommen.
-    """
-    try:
-        rules = []
-        n_classes = len(class_labels)
-        # RuleFit speichert Regeln in estimator.rule_ und estimator.coef_
-        rule_attrs = getattr(estimator, "rule_", None)
-        coefs = getattr(estimator, "coef_", None)
-        if rule_attrs is None or coefs is None:
-            raise TypeError("RuleFit Estimator hat keine 'rule_' oder 'coef_' Attribute")
-        for idx, (rule, coef) in enumerate(zip(rule_attrs, coefs)):
-            if coef == 0 or rule is None:
-                continue
-            # Regel kann entweder eine DecisionRule oder ein LinearTerm sein
-            atoms = []
-            if hasattr(rule, "feature_index") and rule.feature_index is not None:
-                # LinearTerm: Einzelnes Feature
-                fname = feature_names[rule.feature_index]
-                atoms.append(Atom(feature=fname, op="linear", value=None))
-            elif hasattr(rule, "rule") and rule.rule is not None:
-                # DecisionRule: Bedingungen als String
-                # Wir parsen die Bedingung grob (z.B. "feature <= 1.5 and feature2 > 0.2")
-                conds = str(rule.rule).split(" and ")
-                for cond in conds:
-                    for op in ["<=", ">=", "<", ">", "=="]:
-                        if op in cond:
-                            fname, val = cond.split(op)
-                            fname = fname.strip()
-                            val = val.strip()
-                            try:
-                                val = float(val)
-                            except Exception:
-                                pass
-                            atoms.append(Atom(feature=fname, op=op, value=val))
-                            break
-            # Score-Vektor: Für Klassifikation: Score auf alle Klassen, für Regression: auf alle
-            scores = [0.0] * n_classes
-            # RuleFit ist meist binär, Score auf positive Klasse
-            if n_classes == 2:
-                scores[1] = float(coef)
-            else:
-                # Multi-Klasse: Score auf alle (hier: nur auf Index 0)
-                scores[0] = float(coef)
-            rules.append(
-                Rule(
-                    atoms=atoms,
-                    scores=scores,
-                    rule_id=f"rulefit_{idx}",
-                    metadata={"source": "rulefit"},
-                )
-            )
-        # Default-Regel
-        if not any(len(r.atoms) == 0 for r in rules):
-            default_scores = [1.0 / n_classes] * n_classes
-            rules.insert(
-                0,
-                Rule(
-                    atoms=[],
-                    scores=default_scores,
-                    rule_id="default",
-                    metadata={"source": "rulefit_default"},
-                ),
-            )
-        ruleset = ScoredRuleSet(
-            class_labels=class_labels,
-            feature_names=feature_names,
-            rules=rules,
-            aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
-            metadata={"transform": "rulefit_to_scored_ruleset", "n_rules": len(rules)},
-        )
-        ruleset.validate()
-        return ruleset
-    except Exception as e:
-        raise TypeError(f"Konnte RuleFit zu Scored Rule Set nicht transformieren: {e}") from e
 
 
 def _condition_to_atom(condition: Any, feature_names: list[str]) -> Atom | None:

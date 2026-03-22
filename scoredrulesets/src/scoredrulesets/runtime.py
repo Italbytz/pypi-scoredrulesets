@@ -111,7 +111,9 @@ def predict_proba(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False) ->
 def predict(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False) -> np.ndarray:
     proba = predict_proba(ruleset, X, debug=debug)
     indices = np.argmax(proba, axis=1)
-    labels = np.asarray(ruleset.class_labels, dtype=object)
+    # Infer a sensible dtype: let numpy decide (int, float, str, …)
+    # instead of forcing dtype=object which confuses sklearn metrics.
+    labels = np.asarray(ruleset.class_labels)
     return labels[indices]
 
 

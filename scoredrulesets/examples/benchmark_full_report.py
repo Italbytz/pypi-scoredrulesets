@@ -23,11 +23,11 @@ from scoredrulesets.benchmarking import (
     format_benchmark_leaderboard_table,
     plot_benchmark_results,
     plot_benchmark_heatmap,
+    plot_benchmark_heatmap_combined,
 )
 from scoredrulesets.benchmarking.runner import results_as_dicts
 import json
 import time
-from tqdm import tqdm
 
 
 def main():
@@ -50,6 +50,7 @@ def main():
         paper_uci_strict=False,
         repeats=3,
         random_state=42,
+        show_progress=True,
     )
 
     # Fortschrittsanzeige
@@ -74,6 +75,7 @@ def main():
     # Plots und Reports
     png_path, pdf_path = plot_benchmark_results(results, output_base=Path("benchmark_results"), aggregate_repeats=True)
     heatmap_png, heatmap_pdf = plot_benchmark_heatmap(results, output_base=Path("benchmark_results_heatmap"))
+    combined_png, combined_pdf = plot_benchmark_heatmap_combined(results, output_base=Path("benchmark_results_heatmap_combined"))
     md_report = format_benchmark_report_markdown(
         leaderboard,
         title="ScoredRuleSets Benchmark Report",
@@ -87,6 +89,8 @@ def main():
             "plot_pdf": str(pdf_path),
             "heatmap_png": str(heatmap_png),
             "heatmap_pdf": str(heatmap_pdf),
+            "combined_heatmap_png": str(combined_png),
+            "combined_heatmap_pdf": str(combined_pdf),
         },
         notes=[
             "Alle Schätzer und Datensätze, 3 Wiederholungen, Paper-Split-Policy.",
@@ -107,6 +111,8 @@ def main():
             "plot_pdf": str(pdf_path),
             "heatmap_png": str(heatmap_png),
             "heatmap_pdf": str(heatmap_pdf),
+            "combined_heatmap_png": str(combined_png),
+            "combined_heatmap_pdf": str(combined_pdf),
         },
         notes=[
             "Alle Schätzer und Datensätze, 3 Wiederholungen, Paper-Split-Policy.",
@@ -122,6 +128,7 @@ def main():
     print("- benchmark_leaderboard.md / .html (Report)")
     print("- benchmark_results.png / .pdf (Plots)")
     print("- benchmark_results_heatmap.png / .pdf (Heatmap)")
+    print("- benchmark_results_heatmap_combined.png / .pdf (Combined multi-metric heatmap)")
 
     print("\nLeaderboard (Top 10):")
     print(format_benchmark_leaderboard_table(leaderboard)[:2000])
