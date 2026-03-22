@@ -113,6 +113,21 @@ def _resolve_rulekit_class():
     Versuche RuleKit-Klasse zu laden.
     RuleKit benötigt Java - gebe aussagekräftige Fehlermeldung aus.
     """
+    # Setze JAVA_HOME automatisch, falls nicht gesetzt (macOS / Linux)
+    if not os.environ.get("JAVA_HOME"):
+        try:
+            # macOS: /usr/libexec/java_home liefert den korrekten Pfad
+            java_home = sp.run(
+                ["/usr/libexec/java_home"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if java_home.returncode == 0 and java_home.stdout.strip():
+                os.environ["JAVA_HOME"] = java_home.stdout.strip()
+        except (FileNotFoundError, sp.TimeoutExpired):
+            pass  # Nicht macOS oder java_home nicht verfügbar
+
     try:
         # Überprüfe ob Java installiert ist
         result = sp.run(
