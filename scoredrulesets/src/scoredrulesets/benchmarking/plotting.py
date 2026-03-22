@@ -293,9 +293,13 @@ def plot_benchmark_heatmap_combined(
     """Create a combined heatmap with three metrics per cell.
 
     Each cell is split into three rectangles:
-      - **Top half**: F1-macro (green colour scale)
-      - **Bottom-left quarter**: total atom count (blue colour scale, log)
-      - **Bottom-right quarter**: fit time in seconds (orange colour scale, log)
+      - **Top half**: F1-macro
+      - **Bottom-left quarter**: total atom count
+      - **Bottom-right quarter**: fit time in seconds
+
+    All three sub-rectangles share the same colour scale. Darker colour means
+    better relative performance for the respective metric; for size and fit time
+    the scale is therefore inverted so that smaller values appear better.
 
     Each sub-rectangle is annotated with its numeric value.
 
@@ -333,27 +337,14 @@ def plot_benchmark_heatmap_combined(
         if r.fit_seconds_mean is not None and r.fit_seconds_mean > 0:
             fit_vals.append(float(r.fit_seconds_mean))
 
-    # Colour maps & norms  ─────────────────────────────────────────────────
-    f1_cmap = plt.colormaps["Greens"]
+    # Colour map & norms  ──────────────────────────────────────────────────
+    combined_cmap = plt.colormaps["Greens"]
     f1_norm = Normalize(vmin=0.0, vmax=1.0)
 
-    atom_cmap = plt.colormaps["Blues"]
-    if atom_vals:
-        atom_norm = LogNorm(
-            vmin=max(1.0, min(atom_vals)),
-            vmax=max(max(atom_vals), 2.0),
-        )
-    else:
-        atom_norm = Normalize(vmin=1, vmax=100)
+    atom_norm = _build_positive_log_norm(atom_vals, min_floor=1.0, default_max=100.0)
 
-    fit_cmap = plt.colormaps["Oranges"]
-    if fit_vals:
-        fit_norm = LogNorm(
-            vmin=max(0.001, min(fit_vals)),
-            vmax=max(max(fit_vals), 0.002),
-        )
-    else:
-        fit_norm = Normalize(vmin=0.001, vmax=10)
+    fit_norm = _build_positive_log_norm(fit_vals, min_floor=0.001, default_max=10.0)
+    legend_norm = Normalize(vmin=0.0, vmax=1.0)
 
     # Figure layout  ───────────────────────────────────────────────────────
     cell_w = max(1.4, min(2.0, 26.0 / max(n_cols, 1)))
@@ -386,9 +377,10 @@ def plot_benchmark_heatmap_combined(
             entry = lookup.get((ds, est))
             _draw_combined_cell(
                 ax, ci, ri, entry,
-                f1_cmap, f1_norm,
-                atom_cmap, atom_norm,
-                fit_cmap, fit_norm,
+                combined_cmap,
+                f1_norm,
+                atom_norm,
+                fit_norm,
             )
 
     # Grid lines  ──────────────────────────────────────────────────────────
@@ -397,10 +389,14 @@ def plot_benchmark_heatmap_combined(
     for c in range(n_cols + 1):
         ax.axvline(c, color="white", linewidth=1.2)
 
-    # Colour-bar legends (right side)  ─────────────────────────────────────
-    _add_legend_bar(fig, f1_cmap, f1_norm, label="F1-macro", position=[0.92, 0.55, 0.015, 0.30])
-    _add_legend_bar(fig, atom_cmap, atom_norm, label="Atoms", position=[0.92, 0.15, 0.015, 0.30])
-    _add_legend_bar(fig, fit_cmap, fit_norm, label="Fit (s)", position=[0.96, 0.15, 0.015, 0.30])
+    # Shared colour-bar legend (right side)  ───────────────────────────────
+    _add_legend_bar(
+        fig,
+        combined_cmap,
+        legend_norm,
+        position=[0.92, 0.20, 0.018, 0.56],
+        show_ticks=False,
+    )
 
     fig.subplots_adjust(left=0.15, right=0.90, bottom=0.22, top=0.92)
 
@@ -418,9 +414,10 @@ def _draw_combined_cell(
     col: int,
     row: int,
     entry: AggregatedBenchmarkResult | None,
-    f1_cmap, f1_norm,
-    atom_cmap, atom_norm,
-    fit_cmap, fit_norm,
+    cmap,
+    f1_norm,
+    atom_norm,
+    fit_norm,
 ):
     """Draw one cell with three coloured sub-rectangles + text annotations."""
     x0, y0 = float(col), float(row)
@@ -434,7 +431,8 @@ def _draw_combined_cell(
     # ── Top half: F1 ──────────────────────────────────────────────────────
     f1_val = entry.f1_macro_mean
     if f1_val is not None:
-        f1_color = f1_cmap(f1_norm(float(f1_val)))
+        f1_score = _metric_score(float(f1_val), f1_norm)
+        f1_color = cmap(f1_score)
     else:
         f1_color = "#e5e7eb"
     ax.add_patch(Rectangle((x0, y0), 1.0, 0.5, facecolor=f1_color, edgecolor="none"))
@@ -454,7 +452,8 @@ def _draw_combined_cell(
     # ── Bottom-left quarter: Atoms ────────────────────────────────────────
     atom_val = entry.n_atoms_mean
     if atom_val is not None and atom_val > 0:
-        atom_color = atom_cmap(atom_norm(float(atom_val)))
+        atom_score = _metric_score(float(atom_val), atom_norm, invert=True)
+        atom_color = cmap(atom_score)
     else:
         atom_color = "#e5e7eb"
     ax.add_patch(Rectangle((x0, y0 + 0.5), 0.5, 0.5, facecolor=atom_color, edgecolor="none"))
@@ -471,7 +470,8 @@ def _draw_combined_cell(
     # ── Bottom-right quarter: Fit time ────────────────────────────────────
     fit_val = entry.fit_seconds_mean
     if fit_val is not None and fit_val > 0:
-        fit_color = fit_cmap(fit_norm(float(fit_val)))
+        fit_score = _metric_score(float(fit_val), fit_norm, invert=True)
+        fit_color = cmap(fit_score)
     else:
         fit_color = "#e5e7eb"
     ax.add_patch(Rectangle((x0 + 0.5, y0 + 0.5), 0.5, 0.5, facecolor=fit_color, edgecolor="none"))
@@ -486,14 +486,48 @@ def _draw_combined_cell(
     )
 
 
-def _add_legend_bar(fig, cmap, norm, *, label: str, position: list[float]):
+def _add_legend_bar(
+    fig,
+    cmap,
+    norm,
+    *,
+    position: list[float],
+    label: str | None = None,
+    show_ticks: bool = True,
+):
     """Add a small colour-bar to the figure at `position = [left, bottom, width, height]`."""
     cax = fig.add_axes(position)
     sm = cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cb = fig.colorbar(sm, cax=cax)
-    cb.set_label(label, fontsize=8)
-    cb.ax.tick_params(labelsize=7)
+    if label:
+        cb.set_label(label, fontsize=8)
+    if show_ticks:
+        cb.ax.tick_params(labelsize=7)
+    else:
+        cb.set_ticks([])
+        cb.ax.tick_params(length=0)
+
+
+def _build_positive_log_norm(values: list[float], *, min_floor: float, default_max: float) -> LogNorm:
+    """Build a positive log norm with a safe non-zero span."""
+    if not values:
+        return LogNorm(vmin=min_floor, vmax=default_max)
+
+    vmin = max(min_floor, min(values))
+    vmax = max(max(values), min_floor * 2.0)
+    if vmax <= vmin:
+        vmax = vmin * 1.01
+    return LogNorm(vmin=vmin, vmax=vmax)
+
+
+def _metric_score(value: float, norm, *, invert: bool = False) -> float:
+    """Map a metric value to a shared 0..1 colour score."""
+    score = float(norm(value))
+    if not math.isfinite(score):
+        score = 0.0
+    score = min(1.0, max(0.0, score))
+    return 1.0 - score if invert else score
 
 
 def _fmt_compact(value: float | None) -> str:

@@ -1,7 +1,9 @@
 import importlib.util
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import LogNorm, Normalize
 
 from scoredrulesets.benchmarking import (
     BenchmarkConfig,
@@ -13,9 +15,11 @@ from scoredrulesets.benchmarking import (
     format_benchmark_report_markdown,
     format_benchmark_leaderboard_table,
     plot_benchmark_heatmap,
+    plot_benchmark_heatmap_combined,
     plot_benchmark_results,
     run_benchmarks,
 )
+import scoredrulesets.benchmarking.plotting as plotting_module
 from scoredrulesets.benchmarking.datasets import DatasetBundle
 from scoredrulesets.benchmarking.runner import (
     AggregatedBenchmarkResult,
@@ -243,6 +247,97 @@ def test_benchmark_heatmap_is_written_as_png_and_pdf(tmp_path: Path):
     assert pdf_path.exists()
     assert png_path.stat().st_size > 0
     assert pdf_path.stat().st_size > 0
+
+
+def test_combined_heatmap_cell_uses_shared_colour_scale():
+    fig, ax = plt.subplots()
+    cmap = plt.colormaps["Greens"]
+    f1_norm = Normalize(vmin=0.0, vmax=1.0)
+    atom_norm = LogNorm(vmin=10.0, vmax=1000.0)
+    fit_norm = LogNorm(vmin=0.1, vmax=10.0)
+    entry = AggregatedBenchmarkResult(
+        dataset="synthetic",
+        estimator="native",
+        n_repeats=1,
+        status="ok",
+        f1_macro_mean=0.75,
+        f1_macro_error=0.02,
+        fit_seconds_mean=1.0,
+        fit_seconds_error=0.1,
+        predict_seconds_mean=0.05,
+        predict_seconds_error=0.01,
+        n_rules_mean=8.0,
+        n_rules_error=0.0,
+        n_atoms_mean=100.0,
+        n_atoms_error=5.0,
+        ruleset_json_bytes_mean=256.0,
+        ruleset_json_bytes_error=0.0,
+    )
+
+    plotting_module._draw_combined_cell(ax, 0, 0, entry, cmap, f1_norm, atom_norm, fit_norm)
+
+    assert len(ax.patches) == 3
+    np.testing.assert_allclose(ax.patches[0].get_facecolor(), cmap(0.75))
+    np.testing.assert_allclose(ax.patches[1].get_facecolor(), cmap(1.0 - float(atom_norm(100.0))))
+    np.testing.assert_allclose(ax.patches[2].get_facecolor(), cmap(1.0 - float(fit_norm(1.0))))
+    plt.close(fig)
+
+
+def test_combined_heatmap_adds_single_unlabelled_legend_bar(tmp_path: Path, monkeypatch):
+    legend_calls: list[dict[str, object]] = []
+    original_add_legend_bar = plotting_module._add_legend_bar
+
+    def _capture_add_legend_bar(*args, **kwargs):
+        legend_calls.append(dict(kwargs))
+        return original_add_legend_bar(*args, **kwargs)
+
+    monkeypatch.setattr(plotting_module, "_add_legend_bar", _capture_add_legend_bar)
+
+    results = [
+        BenchmarkResult(
+            dataset="synthetic_a",
+            estimator="native",
+            repeat=0,
+            status="ok",
+            skip_reason=None,
+            error=None,
+            f1_macro=0.81,
+            fit_seconds=0.4,
+            predict_seconds=0.05,
+            n_rules=6,
+            n_atoms=24,
+            ruleset_json_bytes=320,
+            n_train=80,
+            n_test=20,
+        ),
+        BenchmarkResult(
+            dataset="synthetic_a",
+            estimator="wrapper_cart",
+            repeat=0,
+            status="ok",
+            skip_reason=None,
+            error=None,
+            f1_macro=0.76,
+            fit_seconds=1.2,
+            predict_seconds=0.05,
+            n_rules=9,
+            n_atoms=60,
+            ruleset_json_bytes=480,
+            n_train=80,
+            n_test=20,
+        ),
+    ]
+
+    base = tmp_path / "benchmark_heatmap_combined"
+    png_path, pdf_path = plot_benchmark_heatmap_combined(results, base, error_bar="std")
+
+    assert png_path.exists()
+    assert pdf_path.exists()
+    assert png_path.stat().st_size > 0
+    assert pdf_path.stat().st_size > 0
+    assert len(legend_calls) == 1
+    assert legend_calls[0]["show_ticks"] is False
+    assert legend_calls[0].get("label") is None
 
 
 def test_benchmark_leaderboard_sorting_and_markdown_output():
