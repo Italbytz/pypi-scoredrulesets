@@ -82,3 +82,24 @@ def test_exstracs_params_unknown_keys_are_filtered():
 
     assert sanitized == {"conservative_prune": True}
     assert any("Ignoring unknown exstracs_params keys" in str(w.message) for w in captured)
+
+
+def test_cart_pruned_keeps_non_empty_rules_on_iris():
+    X, y = load_iris(return_X_y=True)
+    clf = ScoredRuleSetClassifier(
+        backend="cart",
+        backend_params={"max_depth": 4},
+        transform_params={
+            "prune_atoms": True,
+            "prune_lambda": 1.5,
+        },
+        random_state=0,
+    )
+    clf.fit(X, y)
+
+    ruleset = clf.to_ruleset()
+    n_atoms = sum(len(rule.atoms) for rule in ruleset.rules)
+
+    # Regression guard: pruning must not collapse all non-default rules to atoms=[]
+    assert n_atoms > 0
+    assert all(len(rule.atoms) > 0 for rule in ruleset.rules)

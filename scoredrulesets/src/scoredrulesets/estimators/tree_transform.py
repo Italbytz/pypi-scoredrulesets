@@ -196,27 +196,24 @@ def _aggressive_atom_pruning(rules: list[Rule], prune_lambda: float) -> list[Rul
 def _can_remove_atom_safely(original_rule: Rule, candidate_rule: Rule) -> bool:
     """
     Prüfe, ob ein Atom sicher entfernt werden kann.
-    
+
     Kriterien:
     1. Der Kandidat muss weniger Atome haben
     2. Die Scores müssen noch positive Werte für mindestens eine Klasse haben
-    3. Der Kandidat darf nicht alle Atome aufgelöst haben (außer bei Default-Regel)
+    3. Nicht-Default-Regeln dürfen nicht zu leeren Regeln werden
     """
     # Kriterium 1: Weniger Atome
     if len(candidate_rule.atoms) >= len(original_rule.atoms):
         return False
-    
+
     # Kriterium 2: Scores nicht alle null
     if all(s == 0.0 for s in candidate_rule.scores):
         return False
-    
-    # Kriterium 3: Nicht vollständig gelöst (wenn mehr als 1 Atom vorhanden war)
-    # Wenn die Regel auf leer reduziert werden würde, ist das nur ok für eine
-    # explizite Default-Regel - und die wird ohnehin übersprungen
-    if len(original_rule.atoms) > 1 and len(candidate_rule.atoms) == 0:
+
+    # Kriterium 3: Keine leeren Nicht-Default-Regeln erzeugen.
+    # Leere Regeln (atoms=[]) sind im ScoredRuleSet nur als explizite Default-Regel gedacht.
+    if len(candidate_rule.atoms) == 0:
         return False
-    
+
     return True
-
-
 
