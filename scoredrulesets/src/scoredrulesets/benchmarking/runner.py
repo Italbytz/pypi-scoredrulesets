@@ -43,6 +43,7 @@ class BenchmarkResult:
     ruleset_json_bytes: int | None
     n_train: int | None
     n_test: int | None
+    n_classes: int | None = None
     validation_action: str | None = None
     validation_message: str | None = None
 
@@ -114,6 +115,7 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                 spec = estimator_registry[estimator_name]
                 run_number = completed_runs + 1
                 run_started = perf_counter()
+                n_classes = int(len(np.unique(bundle.y)))
                 if config.show_progress:
                     _print_progress_start(
                         run_number=run_number,
@@ -124,6 +126,7 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                         estimator_name=spec.name,
                         n_train=len(y_train),
                         n_test=len(y_test),
+                        n_classes=n_classes,
                     )
                 result = _run_single(
                     estimator_name=spec.name,
@@ -289,13 +292,14 @@ def _run_single(
         f1_macro = _compute_macro_f1_robust(y_test, y_pred)
         ruleset = estimator.to_ruleset()
         n_rules, n_atoms, ruleset_json_bytes = model_size_metrics(ruleset)
+        n_classes = int(len(np.unique(np.concatenate([y_train, y_test]))))
 
         # Kompakte Konsolenausgabe
         native_info = f" (nativ={f1_native:.4f})" if f1_native is not None else ""
         print(
             f"[BENCHMARK] {estimator_name} | {dataset_name} | "
             f"F1={f1_macro:.4f}{native_info} | "
-            f"Regeln={n_rules} | Atome={n_atoms} | "
+            f"Klassen={n_classes} | Regeln={n_rules} | Atome={n_atoms} | "
             f"fit={fit_seconds:.2f}s",
             flush=True,
         )
@@ -330,6 +334,7 @@ def _run_single(
             ruleset_json_bytes=ruleset_json_bytes,
             n_train=len(y_train),
             n_test=len(y_test),
+            n_classes=n_classes,
             validation_action=validation_action,
             validation_message=validation_message,
         )
@@ -491,11 +496,12 @@ def _print_progress_start(
     estimator_name: str,
     n_train: int,
     n_test: int,
+    n_classes: int = 0,
 ) -> None:
     print(
         f"[progress {run_number}/{total_runs}] START "
         f"dataset={dataset_name} repeat={repeat}/{total_repeats} "
-        f"estimator={estimator_name} train={n_train} test={n_test}",
+        f"estimator={estimator_name} train={n_train} test={n_test} classes={n_classes}",
         flush=True,
     )
 

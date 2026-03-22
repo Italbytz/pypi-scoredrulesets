@@ -39,7 +39,7 @@ def test_benchmarking_runs_for_core_estimators():
     results = run_benchmarks(config)
 
     assert len(results) == 3
-    assert all(r.dataset == "sklearn_iris" for r in results)
+    assert all(r.dataset == "uci_iris" for r in results)
     assert all(r.status == "ok" for r in results)
     assert all(r.f1_macro is not None for r in results)
     assert all(r.n_rules is not None and r.n_rules > 0 for r in results)
@@ -104,7 +104,7 @@ def test_benchmarking_aggregation_over_repeats():
     aggregated = aggregate_benchmark_results(results, error_bar="std")
 
     assert len(aggregated) == 2
-    assert all(item.dataset == "sklearn_iris" for item in aggregated)
+    assert all(item.dataset == "uci_iris" for item in aggregated)
     assert all(item.n_repeats == 2 for item in aggregated)
     assert all(item.f1_macro_mean is not None for item in aggregated)
     assert all(item.f1_macro_error is not None for item in aggregated)
@@ -393,9 +393,9 @@ def test_benchmark_report_markdown_contains_sections_and_artifacts():
     assert "## Heatmap Preview" not in report
     assert "## Notes" in report
     assert "## Top per Dataset" in report
-    assert "### sklearn_iris" in report
+    assert "### uci_iris" in report
     assert "## Leaderboard" in report
-    assert "## Dataset: sklearn_iris" in report
+    assert "## Dataset: uci_iris" in report
     assert "[benchmark.png](benchmark.png)" in report
     assert "![Benchmark plot](benchmark.png)" in report
     assert "_Heatmap add-on: compact overview of aggregated F1 values and fit times per dataset/estimator._" in report
@@ -444,7 +444,7 @@ def test_benchmark_report_html_contains_sections_and_preview():
     assert html.index("<img src='benchmark.png' alt='Benchmark plot'>") < html.index("<img src='benchmark_heatmap.png' alt='Benchmark heatmap'>")
     assert "<h2>Top per Dataset</h2>" in html
     assert "<h2>Leaderboard</h2>" in html
-    assert "<h2>Dataset: sklearn_iris</h2>" in html
+    assert "<h2>Dataset: uci_iris</h2>" in html
     assert "<table>" in html
 
 

@@ -57,7 +57,9 @@ PAPER_UCI_DATASET_SPECS: tuple[PaperUCIDatasetSpec, ...] = (
         key="car_evaluation",
         canonical_name="uci_car_evaluation",
         uci_id=19,
-        openml_data_ids=(991,),
+        # data_id=991 ist eine *binarisierte* Version (P/N).
+        # data_id=40975 liefert die originalen 4 Klassen (unacc, acc, good, vgood).
+        openml_data_ids=(40975,),
         openml_names=("car", "car_evaluation"),
         aliases=("uci_car", "uci_car_evaluation_database"),
     ),
@@ -65,8 +67,10 @@ PAPER_UCI_DATASET_SPECS: tuple[PaperUCIDatasetSpec, ...] = (
         key="heart_disease",
         canonical_name="uci_heart_disease",
         uci_id=45,
-        openml_data_ids=(),
-        openml_names=("heart-disease", "heart_disease", "heart"),
+        # data_id=49 = heart-c (Cleveland, 303 Instanzen, binaer: <50 vs >50_1).
+        # Binaer ist die konventionelle Aufgabe fuer diesen Datensatz.
+        openml_data_ids=(49,),
+        openml_names=("heart-c", "heart-disease", "heart_disease", "heart"),
         aliases=("uci_heart-disease", "uci_heart"),
     ),
     PaperUCIDatasetSpec(
@@ -287,7 +291,16 @@ def load_dataset_registry(*, include_online_uci: bool = True) -> dict[str, Datas
     registry = load_sklearn_datasets()
     registry.update(load_local_uci_datasets())
     if include_online_uci:
-        registry.update(load_online_paper_uci_datasets())
+        uci_bundles = load_online_paper_uci_datasets()
+        registry.update(uci_bundles)
+
+        # Deduplizierung: Entferne sklearn-Eintraege, die nur Aliase eines
+        # geladenen UCI-Datensatzes sind (z.B. sklearn_iris == uci_iris).
+        for spec in PAPER_UCI_DATASET_SPECS:
+            if spec.canonical_name in registry:
+                for alias in spec.aliases:
+                    if alias in registry and alias != spec.canonical_name:
+                        del registry[alias]
     return registry
 
 
@@ -297,9 +310,15 @@ def resolve_dataset_names(
     *,
     paper_uci_strict: bool = False,
 ) -> list[str]:
-    """Loest besondere Dataset-Aliasse auf (z.B. `paper_uci`)."""
+    """Loest besondere Dataset-Aliasse auf (z.B. ``paper_uci``, ``sklearn_iris`` → ``uci_iris``)."""
     if requested_names is None:
         return list(registry.keys())
+
+    # Alias → kanonischer Name (z.B. sklearn_iris → uci_iris)
+    alias_map: dict[str, str] = {}
+    for spec in PAPER_UCI_DATASET_SPECS:
+        for alias in spec.aliases:
+            alias_map[alias] = spec.canonical_name
 
     resolved: list[str] = []
     for name in requested_names:
@@ -309,7 +328,14 @@ def resolve_dataset_names(
         if normalized == "paper_uci":
             resolved.extend(resolve_paper_uci_dataset_names(registry, strict=paper_uci_strict))
         else:
-            resolved.append(normalized)
+            # Veraltete Aliase automatisch auf kanonischen Namen umschreiben.
+            canonical = alias_map.get(normalized, normalized)
+            if canonical in registry:
+                resolved.append(canonical)
+            elif normalized in registry:
+                resolved.append(normalized)
+            else:
+                resolved.append(normalized)  # _validate_names gibt spaeter den Fehler
 
     # Reihenfolge behalten, Duplikate entfernen.
     unique: list[str] = []

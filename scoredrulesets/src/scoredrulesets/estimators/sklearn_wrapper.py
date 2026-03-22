@@ -125,15 +125,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 params=transform_cfg,
             )
 
-        # rulekit/exstracs/logicgp: Prediction immer ueber ScoredRuleSet routen
-        self.is_ruleset_mode_ = backend_lower in (
-            "rulekit",
-            "exstracs",
-            "logicgp",
-            "pittsburgh",
-            "michigan",
-            "rulefit",
-        )
+        # Alle Backends: Prediction immer ueber ScoredRuleSet routen,
+        # damit der Benchmark das tatsaechliche ScoredRuleSet testet.
+        self.is_ruleset_mode_ = True
         # RuleFit-Transformation ist verlustbehaftet (lineare Features werden ignoriert)
         self.transformation_lossy_ = backend_lower in ("rulefit",)
         return self
