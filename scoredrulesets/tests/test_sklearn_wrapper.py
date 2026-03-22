@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import warnings
 
 from sklearn.datasets import load_iris
 
@@ -67,3 +68,17 @@ def test_cart_backend_writes_ruleset_output_file(tmp_path: Path):
     assert len(loaded_payload["rules"]) > 0
 
 
+def test_exstracs_params_unknown_keys_are_filtered():
+    # Kein ExSTraCS-Backend nötig: wir testen die Param-Säuberung direkt.
+    raw_params = {
+        "conservative_prune": True,
+        "prune_atoms": False,  # Legacy/invalid key -> must be ignored
+        "unknown_key": 123,
+    }
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        sanitized = ScoredRuleSetClassifier._sanitize_exstracs_params(raw_params)
+
+    assert sanitized == {"conservative_prune": True}
+    assert any("Ignoring unknown exstracs_params keys" in str(w.message) for w in captured)

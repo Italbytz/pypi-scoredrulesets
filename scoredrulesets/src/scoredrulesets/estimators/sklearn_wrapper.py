@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+import warnings
 
 import numpy as np
 from sklearn.base import clone
@@ -81,14 +82,8 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 feature_names=self.feature_names_in_,
             )
 
-
-            # Wende ExSTraCS Shrinking an (falls konfiguriert), aber deaktiviere Atom-Pruning explizit
+            # Wende ExSTraCS Shrinking an (falls konfiguriert)
             if self.exstracs_params:
-                # Kopiere exstracs_params, aber setze aggressive_prune und prune_atoms auf False
-                exstracs_params_no_prune = dict(self.exstracs_params)
-                exstracs_params_no_prune["aggressive_prune"] = False
-                exstracs_params_no_prune["prune_atoms"] = False
-                self.exstracs_params = exstracs_params_no_prune
                 self.ruleset_ = self._apply_exstracs_shrinking(
                     self.ruleset_,
                     X_valid,
@@ -144,25 +139,42 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:
         """Wende ExSTraCS Shrinking-Parameter an"""
-        params = ExSTraCSPruningParams(**(self.exstracs_params or {}))
-        
+        sanitized = self._sanitize_exstracs_params(self.exstracs_params)
+        params = ExSTraCSPruningParams(**sanitized)
+
         # Für aggressive Pruning: Split Trainings-Daten
         X_train_split = X
         y_train_split = y
         X_val_split = None
         y_val_split = None
-        
+
         if params.aggressive_prune:
             X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
                 X, y, test_size=0.2, random_state=self.random_state, stratify=y
             )
-        
+
         return exstracs_apply_all_shrinking(
             ruleset,
             X_val=X_val_split,
             y_val=y_val_split,
             params=params,
         )
+
+    @staticmethod
+    def _sanitize_exstracs_params(exstracs_params: dict[str, Any] | None) -> dict[str, Any]:
+        """Filtere unbekannte ExSTraCS-Keys weg, damit Alt-Konfigurationen robust bleiben."""
+        if not exstracs_params:
+            return {}
+
+        allowed = set(ExSTraCSPruningParams.__dataclass_fields__.keys())
+        sanitized = {k: v for k, v in exstracs_params.items() if k in allowed}
+        unknown = sorted(k for k in exstracs_params if k not in allowed)
+        if unknown:
+            warnings.warn(
+                "Ignoring unknown exstracs_params keys: " + ", ".join(unknown),
+                UserWarning,
+            )
+        return sanitized
 
     def _prepare_X_for_prediction(self, X_valid: np.ndarray) -> np.ndarray:
         """Bereite X für die ScoredRuleSet-Prediction vor.

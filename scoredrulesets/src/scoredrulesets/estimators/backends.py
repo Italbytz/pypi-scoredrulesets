@@ -4,9 +4,159 @@ import importlib
 import inspect
 import os
 import subprocess as sp
+from pathlib import Path
 from typing import Any
 
 from sklearn.tree import DecisionTreeClassifier
+
+
+# ---------------------------------------------------------------------------
+# Java / JVM helpers  (needed by rulekit backend)
+# ---------------------------------------------------------------------------
+
+def _ensure_java_home() -> None:
+    """Make sure JAVA_HOME points to a JDK whose libjli.dylib JPype can load.
+
+    Problem: sdkman (and some Homebrew setups) may set JAVA_HOME to a JDK
+    built for the wrong CPU architecture (e.g. x86_64 on an arm64 Mac).
+    This function:
+      1. Checks whether a **loadable** JVM library exists at the current JAVA_HOME.
+      2. If not, tries ``/usr/libexec/java_home`` (macOS) to get a working path.
+      3. Updates ``os.environ["JAVA_HOME"]`` accordingly.
+      4. Tells JPype where the JVM library is (monkey-patches getDefaultJVMPath).
+    """
+    current = os.environ.get("JAVA_HOME", "")
+
+    # Step 1: If JAVA_HOME is set, check that a loadable JVM lib exists
+    if current and _find_jvm_dll(current):
+        _configure_jpype(current)
+        return
+
+    # Step 2: Try /usr/libexec/java_home (macOS) for a compatible JDK
+    resolved = _java_home_from_system()
+    if resolved and _find_jvm_dll(resolved):
+        os.environ["JAVA_HOME"] = resolved
+        _configure_jpype(resolved)
+        return
+
+    # Step 3: JAVA_HOME was not set at all → use system result anyway
+    if not current and resolved:
+        os.environ["JAVA_HOME"] = resolved
+        _configure_jpype(resolved)
+        return
+
+    # Nothing helped – leave env as-is; the caller will get the JVM error.
+
+
+def _java_home_from_system() -> str | None:
+    """Return JAVA_HOME as reported by the OS (macOS ``/usr/libexec/java_home``)."""
+    try:
+        proc = sp.run(
+            ["/usr/libexec/java_home"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    except (FileNotFoundError, sp.TimeoutExpired):
+        pass
+    return None
+
+
+def _find_jvm_dll(java_home: str) -> str | None:
+    """Return the path to a **loadable** JVM shared library under *java_home*.
+
+    On macOS this also verifies that the library's CPU architecture matches
+    the running Python process (arm64 vs x86_64).  Returns None if no
+    compatible library is found.
+    """
+    import platform as _platform
+    import struct
+
+    base = Path(java_home)
+    if not base.is_dir():
+        return None
+
+    # Determine Python's pointer size → architecture expectation
+    # 8 bytes → 64-bit; struct.calcsize("P") is reliable across platforms.
+    _py_arch = _platform.machine().lower()  # e.g. "arm64", "x86_64", "aarch64"
+
+    # Well-known relative paths  (checked in order)
+    _patterns = (
+        "lib/libjli.dylib",
+        "lib/server/libjvm.dylib",
+        "lib/server/libjvm.so",
+        "lib/amd64/server/libjvm.so",
+        "jre/lib/server/libjvm.so",
+        "jre/lib/amd64/server/libjvm.so",
+    )
+
+    for pattern in _patterns:
+        candidate = base / pattern
+        if candidate.exists() and _dll_arch_ok(candidate, _py_arch):
+            return str(candidate)
+
+    # Fallback: recursive glob
+    for dll in base.rglob("libjli.dylib"):
+        if _dll_arch_ok(dll, _py_arch):
+            return str(dll)
+    for dll in base.rglob("libjvm.*"):
+        if dll.suffix in (".dylib", ".so") and _dll_arch_ok(dll, _py_arch):
+            return str(dll)
+
+    return None
+
+
+def _dll_arch_ok(dll_path: Path, python_arch: str) -> bool:
+    """Check whether *dll_path*'s CPU architecture is compatible with *python_arch*.
+
+    On macOS we use ``file`` to inspect Mach-O headers.  On other platforms
+    we optimistically return True (worst case: JPype will fail with a clear
+    error message).
+    """
+    import sys as _sys
+    if _sys.platform != "darwin":
+        return True  # Skip check on Linux/Windows
+
+    try:
+        result = sp.run(
+            ["file", str(dll_path)],
+            capture_output=True, text=True, timeout=5,
+        )
+        output = result.stdout.lower()
+        # Map Python's platform.machine() to what `file` reports
+        if python_arch in ("arm64", "aarch64"):
+            return "arm64" in output
+        if python_arch in ("x86_64", "amd64"):
+            return "x86_64" in output
+        # Unknown arch – accept optimistically
+        return True
+    except Exception:
+        return True  # If `file` fails, don't block
+
+
+def _configure_jpype(java_home: str) -> None:
+    """Tell JPype where to find the JVM (if jpype is installed).
+
+    JPype uses JAVA_HOME first, but its ``find_libjvm`` may fail on some
+    setups (sdkman, Homebrew symlinks).  We patch ``getDefaultJVMPath``
+    directly if we already know the correct path.
+    """
+    try:
+        import jpype          # type: ignore[import-untyped]
+        if jpype.isJVMStarted():
+            return  # Already running, nothing we can do.
+        jvm_path = _find_jvm_dll(java_home)
+        if jvm_path:
+            # Monkey-patch getDefaultJVMPath so rulekit (and anything else
+            # that calls it) receives the verified path.
+            _original = jpype.getDefaultJVMPath
+
+            def _patched() -> str:
+                return jvm_path
+
+            jpype.getDefaultJVMPath = _patched  # type: ignore[assignment]
+    except ImportError:
+        pass
 
 
 
@@ -112,20 +262,7 @@ def _resolve_rulekit_class():
     Versuche RuleKit-Klasse zu laden.
     RuleKit benötigt Java - gebe aussagekräftige Fehlermeldung aus.
     """
-    # Setze JAVA_HOME automatisch, falls nicht gesetzt (macOS / Linux)
-    if not os.environ.get("JAVA_HOME"):
-        try:
-            # macOS: /usr/libexec/java_home liefert den korrekten Pfad
-            java_home = sp.run(
-                ["/usr/libexec/java_home"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if java_home.returncode == 0 and java_home.stdout.strip():
-                os.environ["JAVA_HOME"] = java_home.stdout.strip()
-        except (FileNotFoundError, sp.TimeoutExpired):
-            pass  # Nicht macOS oder java_home nicht verfügbar
+    _ensure_java_home()
 
     try:
         # Überprüfe ob Java installiert ist
