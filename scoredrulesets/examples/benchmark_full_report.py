@@ -55,7 +55,7 @@ def main():
     # Fortschrittsanzeige
     print("\n[1/3] Führe Benchmarks aus...")
     t0 = time.time()
-    results = run_benchmarks(config, progress_callback=lambda msg: print(f"[Progress] {msg}"))
+    results = run_benchmarks(config)
     t1 = time.time()
     print(f"Benchmarks abgeschlossen in {t1-t0:.1f} Sekunden.")
 

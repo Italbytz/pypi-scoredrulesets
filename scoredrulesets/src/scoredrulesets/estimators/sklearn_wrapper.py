@@ -143,7 +143,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         
         if params.aggressive_prune:
             X_train_split, X_val_split, y_train_split, y_val_split = train_test_split(
-                X, y, test_size=0.2, random_state=self.random_state
+                X, y, test_size=0.2, random_state=self.random_state, stratify=y
             )
         
         return exstracs_apply_all_shrinking(

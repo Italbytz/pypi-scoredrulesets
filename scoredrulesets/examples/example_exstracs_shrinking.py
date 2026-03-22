@@ -50,12 +50,20 @@ def benchmark_exstracs_shrinking():
     
     for dataset_name, dataset, train_size in datasets:
         X, y = dataset.data, dataset.target
-        
-        # Split Trainings-Daten (ExSTraCS trainiert oft nur auf subset)
-        X_train = X[:train_size]
-        y_train = y[:train_size]
-        X_test, y_test = train_test_split(X[train_size:], y[train_size:], test_size=0.3, random_state=42)
-        
+
+        # Stratified Split: Stelle sicher, dass alle Klassen im Training vertreten sind
+        if train_size < len(X):
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, train_size=train_size, stratify=y, random_state=42
+            )
+        else:
+            X_train, y_train = X, y
+            X_test, y_test = np.empty((0, X.shape[1])), np.empty((0,))
+
+        if len(X_test) == 0 or len(y_test) == 0:
+            print(f"[WARN] Zu wenig Testdaten für {dataset_name}, überspringe.")
+            continue
+
         print(f"\n{'='*80}")
         print(f"Dataset: {dataset_name}")
         print(f"Training: {len(X_train)} samples, Test: {len(X_test)} samples")
@@ -73,22 +81,67 @@ def benchmark_exstracs_shrinking():
                     exstracs_params=shrinking_params,
                     random_state=42,
                 )
-                
                 # Trainiere
                 clf.fit(X_train, y_train)
-                
-                # Vorhersage
+
+                # F1 mit nativem ExSTraCS-Modell (vor Transformation)
+                estimator = getattr(clf, "estimator_", None)
+                if estimator is not None and hasattr(estimator, "predict"):
+                    try:
+                        y_pred_native = estimator.predict(X_test)
+                        # Debug-Ausgaben, wenn F1=0.0 oder Fehler
+                        import numpy as np
+                        debug_native = False
+                        try:
+                            f1_native = f1_score(y_test, y_pred_native, average='macro', zero_division=0)
+                            if f1_native == 0.0:
+                                debug_native = True
+                        except Exception as e:
+                            print(f"  [F1 native ExSTraCS: Error: {e}]", end=" ")
+                            debug_native = True
+                            f1_native = None
+                        if debug_native:
+                            print("\n  [DEBUG native] y_test:", y_test)
+                            print("  [DEBUG native] y_pred_native:", y_pred_native)
+                            print("  [DEBUG native] y_test type:", type(y_test), "len:", len(y_test), "unique:", np.unique(y_test))
+                            print("  [DEBUG native] y_pred_native type:", type(y_pred_native), "len:", len(y_pred_native), "unique:", np.unique(y_pred_native))
+                        if f1_native is not None:
+                            print(f"  [F1 native ExSTraCS: {f1_native:.4f}]", end=" ")
+                    except Exception as e:
+                        print(f"  [F1 native ExSTraCS: Error: {e}]", end=" ")
+
+                # Vorhersage mit ScoredRuleSet
                 y_pred = clf.predict(X_test)
-                f1 = f1_score(y_test, y_pred, average='macro', zero_division=0)
-                
+                # Debug-Ausgaben, wenn F1=0.0 oder Fehler
+                import numpy as np
+                debug_scored = False
+                try:
+                    f1 = f1_score(y_test, y_pred, average='macro', zero_division=0)
+                    if f1 == 0.0:
+                        debug_scored = True
+                except Exception as e:
+                    print(f"  [F1 scoredruleset: Error: {e}]", end=" ")
+                    debug_scored = True
+                    f1 = None
+                if debug_scored:
+                    print("\n  [DEBUG scoredruleset] y_test:", y_test)
+                    print("  [DEBUG scoredruleset] y_pred:", y_pred)
+                    print("  [DEBUG scoredruleset] y_test type:", type(y_test), "len:", len(y_test), "unique:", np.unique(y_test))
+                    print("  [DEBUG scoredruleset] y_pred type:", type(y_pred), "len:", len(y_pred), "unique:", np.unique(y_pred))
+
                 # Ruleset Statistiken
                 ruleset = clf.to_ruleset()
                 n_rules = len(ruleset.rules)
                 n_atoms = sum(len(r.atoms) for r in ruleset.rules)
                 avg_atoms = n_atoms / max(n_rules, 1)
-                
-                print(f"✓ F1={f1:.4f} | Rules={n_rules:3d} | Atoms={n_atoms:4d} | AvgAtoms={avg_atoms:.1f}")
-                
+
+                # Debug: Zähle Regeln mit atoms=0 und mit atoms>0
+                n_default = sum(1 for r in ruleset.rules if len(r.atoms) == 0)
+                n_nondefault = sum(1 for r in ruleset.rules if len(r.atoms) > 0)
+                print(f"  [DEBUG] Default-Regeln: {n_default}, Nicht-Default-Regeln: {n_nondefault}")
+
+                print(f"✓ F1 scoredruleset={f1:.4f} | Rules={n_rules:3d} | Atoms={n_atoms:4d} | AvgAtoms={avg_atoms:.1f}")
+
                 results.append({
                     'variant': variant_name,
                     'f1': f1,
@@ -96,7 +149,7 @@ def benchmark_exstracs_shrinking():
                     'n_atoms': n_atoms,
                     'avg_atoms': avg_atoms,
                 })
-                
+
             except Exception as e:
                 print(f"✗ Error: {str(e)[:50]}...")
         
@@ -133,11 +186,26 @@ def test_individual_strategy():
     clf_baseline = ScoredRuleSetClassifier(backend="exstracs", random_state=42)
     clf_baseline.fit(X_train, y_train)
     ruleset_baseline = clf_baseline.to_ruleset()
-    f1_baseline = f1_score(y_test, clf_baseline.predict(X_test), average='macro')
-    
+    y_pred_baseline = clf_baseline.predict(X_test)
+    import numpy as np
+    debug_baseline = False
+    try:
+        f1_baseline = f1_score(y_test, y_pred_baseline, average='macro')
+        if f1_baseline == 0.0:
+            debug_baseline = True
+    except Exception as e:
+        print(f"  [F1 baseline: Error: {e}]", end=" ")
+        debug_baseline = True
+        f1_baseline = None
+    if debug_baseline:
+        print("\n  [DEBUG baseline] y_test:", y_test)
+        print("  [DEBUG baseline] y_pred:", y_pred_baseline)
+        print("  [DEBUG baseline] y_test type:", type(y_test), "len:", len(y_test), "unique:", np.unique(y_test))
+        print("  [DEBUG baseline] y_pred type:", type(y_pred_baseline), "len:", len(y_pred_baseline), "unique:", np.unique(y_pred_baseline))
     print(f"  Rules: {len(ruleset_baseline.rules)}")
     print(f"  Total Atoms: {sum(len(r.atoms) for r in ruleset_baseline.rules)}")
-    print(f"  F1: {f1_baseline:.4f}")
+    if f1_baseline is not None:
+        print(f"  F1: {f1_baseline:.4f}")
     
     print("\nMit Aggressive Pruning (max_f1_loss=1%):")
     clf_aggressive = ScoredRuleSetClassifier(
@@ -150,11 +218,25 @@ def test_individual_strategy():
     )
     clf_aggressive.fit(X_train, y_train)
     ruleset_aggressive = clf_aggressive.to_ruleset()
-    f1_aggressive = f1_score(y_test, clf_aggressive.predict(X_test), average='macro')
-    
+    y_pred_aggressive = clf_aggressive.predict(X_test)
+    debug_aggressive = False
+    try:
+        f1_aggressive = f1_score(y_test, y_pred_aggressive, average='macro')
+        if f1_aggressive == 0.0:
+            debug_aggressive = True
+    except Exception as e:
+        print(f"  [F1 aggressive: Error: {e}]", end=" ")
+        debug_aggressive = True
+        f1_aggressive = None
+    if debug_aggressive:
+        print("\n  [DEBUG aggressive] y_test:", y_test)
+        print("  [DEBUG aggressive] y_pred:", y_pred_aggressive)
+        print("  [DEBUG aggressive] y_test type:", type(y_test), "len:", len(y_test), "unique:", np.unique(y_test))
+        print("  [DEBUG aggressive] y_pred type:", type(y_pred_aggressive), "len:", len(y_pred_aggressive), "unique:", np.unique(y_pred_aggressive))
     print(f"  Rules: {len(ruleset_aggressive.rules)}")
     print(f"  Total Atoms: {sum(len(r.atoms) for r in ruleset_aggressive.rules)}")
-    print(f"  F1: {f1_aggressive:.4f}")
+    if f1_aggressive is not None:
+        print(f"  F1: {f1_aggressive:.4f}")
     
     atom_reduction = (1 - sum(len(r.atoms) for r in ruleset_aggressive.rules) / 
                      sum(len(r.atoms) for r in ruleset_baseline.rules)) * 100

@@ -15,14 +15,7 @@ class EstimatorSpec:
 
 
 def default_estimator_specs() -> dict[str, EstimatorSpec]:
-                "wrapper_rulefit": EstimatorSpec(
-                    name="wrapper_rulefit",
-                    factory=lambda: ScoredRuleSetClassifier(
-                        backend="rulefit",
-                        backend_params={},
-                        random_state=0,
-                    ),
-                ),
+    # ...existing code...
     return {
         "wrapper_cart": EstimatorSpec(
             name="wrapper_cart",

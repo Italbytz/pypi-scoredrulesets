@@ -141,7 +141,7 @@ def exstracs_to_scored_ruleset(
         # Versuche auf ExSTraCS-interne Struktur zuzugreifen
         if not hasattr(estimator, "pop") and not hasattr(estimator, "population"):
             raise TypeError("ExSTraCS Estimator hat keine 'pop' oder 'population' Attribut")
-        
+
         population = estimator.pop if hasattr(estimator, "pop") else estimator.population
         if hasattr(population, "popSet"):
             iterable_population = population.popSet
@@ -149,11 +149,14 @@ def exstracs_to_scored_ruleset(
             iterable_population = population
         rules: list[Rule] = []
         n_classes = len(class_labels)
-        
+
+        # Debug: Sammle alle Zielklassen (phenotype) aus der Population
+        all_phenotypes = set()
+
         # Verarbeite jede Regel in der Population
         for rule_idx, rule in enumerate(iterable_population):
             atoms: list[Atom] = []
-            
+
             # Extrahiere Conditions (Intervals)
             if hasattr(rule, "condition"):
                 # skExSTraCS Format
@@ -174,31 +177,35 @@ def exstracs_to_scored_ruleset(
                             atom = _interval_to_atom(allele, feature_name)
                             if atom is not None:
                                 atoms.append(atom)
-            
+
             # Extrahiere Zielklasse und Fitness
             class_idx = 0
             fitness = 1.0
             numerosity = 1
-            
+
             if hasattr(rule, "phenotype"):
                 class_label = rule.phenotype
+                all_phenotypes.add(class_label)
                 try:
                     class_idx = class_labels.index(class_label)
                 except (ValueError, IndexError):
-                    class_idx = int(class_label) if isinstance(class_label, (int, np.integer)) else 0
-            
+                    print(f"[WARN] ExSTraCS-Regel {rule_idx}: phenotype '{class_label}' nicht in class_labels {class_labels}. Mapping auf 0.")
+                    class_idx = 0
+            else:
+                print(f"[WARN] ExSTraCS-Regel {rule_idx}: Keine phenotype gefunden, mapping auf 0.")
+
             if hasattr(rule, "fitness"):
                 fitness = float(rule.fitness)
             if hasattr(rule, "numerosity"):
                 numerosity = float(rule.numerosity)
-            
+
             # Score = fitness × numerosity
             score_value = fitness * numerosity
-            
+
             # Erstelle Score-Vektor
             scores = [0.0] * n_classes
             scores[class_idx] = score_value
-            
+
             rules.append(
                 Rule(
                     atoms=atoms,
@@ -208,14 +215,18 @@ def exstracs_to_scored_ruleset(
                         "source": "exstracs",
                         "fitness": fitness,
                         "numerosity": numerosity,
-                        "class_label": class_labels[class_idx],
+                        "class_label": class_labels[class_idx] if class_idx < len(class_labels) else class_idx,
+                        "phenotype": getattr(rule, "phenotype", None),
                     },
                 )
             )
-        
-        # Füge Default-Regel hinzu (falls nicht vorhanden)
-        if not any(len(r.atoms) == 0 for r in rules):
-            # Berechne Häufigkeiten für Default-Regel
+
+        # Debug-Ausgabe: Alle gefundenen Zielklassen
+        print(f"[DEBUG] ExSTraCS: class_labels={class_labels}, phenotypes in population={sorted(all_phenotypes)}")
+
+        # Füge Default-Regel hinzu (falls nicht vorhanden, und nur einmal!)
+        default_rule_count = sum(1 for r in rules if len(r.atoms) == 0)
+        if default_rule_count == 0:
             default_scores = [1.0 / n_classes] * n_classes
             rules.insert(
                 0,
@@ -226,7 +237,16 @@ def exstracs_to_scored_ruleset(
                     metadata={"source": "exstracs_default"},
                 ),
             )
-        
+        elif default_rule_count > 1:
+            # Entferne alle bis auf eine Default-Regel
+            new_rules = [r for r in rules if len(r.atoms) > 0]
+            # Füge die erste gefundene Default-Regel wieder ein
+            for r in rules:
+                if len(r.atoms) == 0:
+                    new_rules.insert(0, r)
+                    break
+            rules = new_rules
+
         ruleset = ScoredRuleSet(
             class_labels=class_labels,
             feature_names=feature_names,
@@ -236,7 +256,7 @@ def exstracs_to_scored_ruleset(
         )
         ruleset.validate()
         return ruleset
-        
+
     except Exception as e:
         raise TypeError(f"Konnte ExSTraCS zu Scored Rule Set nicht transformieren: {e}") from e
 
