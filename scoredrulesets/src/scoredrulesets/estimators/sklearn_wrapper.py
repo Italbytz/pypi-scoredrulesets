@@ -167,6 +167,23 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
             params=params,
         )
 
+    def _prepare_X_for_prediction(self, X_valid: np.ndarray) -> np.ndarray:
+        """Bereite X für die ScoredRuleSet-Prediction vor.
+        
+        LogicGP benötigt diskretisierte Daten, da die Atome im ScoredRuleSet
+        auf Bin-Indizes basieren, nicht auf Rohwerten.
+        """
+        backend_lower = self.backend.lower()
+        if backend_lower == "logicgp" and hasattr(self.estimator_, "_binners_"):
+            from .logicgp import _discretize_features
+            X_disc, _, _ = _discretize_features(
+                X_valid,
+                fitted_binners=self.estimator_._binners_,
+                cat_masks=self.estimator_._cat_masks_,
+            )
+            return X_disc
+        return X_valid
+
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
         X_valid: np.ndarray = np.asarray(check_array(X, dtype=None))
@@ -177,7 +194,8 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
             )
 
         if self.is_ruleset_mode_:
-            return predict_from_ruleset(self.ruleset_, X_valid)
+            X_prepared = self._prepare_X_for_prediction(X_valid)
+            return predict_from_ruleset(self.ruleset_, X_prepared)
 
         estimator: Any = self.estimator_
         return estimator.predict(X_valid)
@@ -192,7 +210,8 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
             )
 
         if self.is_ruleset_mode_:
-            return predict_proba_from_ruleset(self.ruleset_, X_valid)
+            X_prepared = self._prepare_X_for_prediction(X_valid)
+            return predict_proba_from_ruleset(self.ruleset_, X_prepared)
 
         estimator: Any = self.estimator_
         if hasattr(estimator, "predict_proba"):
