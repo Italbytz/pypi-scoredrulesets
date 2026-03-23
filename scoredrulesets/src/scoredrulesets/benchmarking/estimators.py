@@ -53,8 +53,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
         "native": EstimatorSpec(
             name="native",
             factory=lambda: NativeScoredRuleSetClassifier(
-                max_rules=8,
+                max_rules=100,
+                max_rules_per_feature=2,
                 min_samples_leaf=3,
+                min_relative_gain=0.35,
             ),
         ),
         "wrapper_pittsburgh": EstimatorSpec(

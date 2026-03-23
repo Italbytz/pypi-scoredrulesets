@@ -12,7 +12,12 @@ from matplotlib.colors import Normalize, LogNorm
 from matplotlib.patches import Rectangle
 from matplotlib import cm
 
-from .runner import AggregatedBenchmarkResult, BenchmarkResult, aggregate_benchmark_results
+from .runner import (
+    AggregatedBenchmarkResult,
+    BenchmarkResult,
+    aggregate_benchmark_results,
+    build_pareto_per_dataset,
+)
 
 
 def plot_benchmark_results(
@@ -570,3 +575,267 @@ def _luminance(color) -> float:
         return 0.5
     # Rec. 709 luminance
     return 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]
+
+
+# ---------------------------------------------------------------------------
+# Combined dot plot (F1 left, model size right) – inspired by imodels
+# ---------------------------------------------------------------------------
+
+
+def plot_combined_dot(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+    size_metric: str = "n_atoms",
+) -> tuple[Path, Path]:
+    """Create a combined two-panel dot plot (F1 left, model size right).
+
+    Y-axis: datasets, each estimator shown as a coloured dot.
+    Left panel: F1-macro (0–1).
+    Right panel: model size on symlog scale.
+    Legend on the far right.
+
+    Returns *(png_path, pdf_path)*.
+    """
+    raw_results = list(results)
+    ok_results = [r for r in raw_results if r.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for combined dot plot")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for combined dot plot")
+
+    dataset_names = sorted({r.dataset for r in aggregated})
+    estimator_names = _sort_estimators_for_heatmap(aggregated)
+
+    n_datasets = len(dataset_names)
+    n_estimators = len(estimator_names)
+
+    # Build lookup
+    lookup: dict[tuple[str, str], AggregatedBenchmarkResult] = {}
+    for r in aggregated:
+        lookup[(r.dataset, r.estimator)] = r
+
+    # Figure layout
+    fig_width = max(10.0, 6.0 + 0.4 * n_estimators)
+    fig_height = max(4.0, 1.2 * n_datasets)
+    fig = plt.figure(figsize=(fig_width, fig_height), constrained_layout=True)
+    gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.0, 0.35])
+    ax_f1 = fig.add_subplot(gs[0, 0])
+    ax_size = fig.add_subplot(gs[0, 1], sharey=ax_f1)
+    ax_legend = fig.add_subplot(gs[0, 2])
+
+    y_base = np.arange(n_datasets, dtype=float)
+    offsets = (
+        np.array([0.0])
+        if n_estimators <= 1
+        else np.linspace(-0.3, 0.3, num=n_estimators)
+    )
+
+    palette = plt.rcParams.get("axes.prop_cycle", None)
+    colors = palette.by_key().get("color", []) if palette is not None else []
+
+    size_mean_col = f"{size_metric}_mean"
+    size_err_col = f"{size_metric}_error"
+
+    for idx, est in enumerate(estimator_names):
+        color = colors[idx % len(colors)] if colors else None
+        f1_vals = np.full(n_datasets, np.nan)
+        f1_errs = np.full(n_datasets, 0.0)
+        size_vals = np.full(n_datasets, np.nan)
+        size_errs = np.full(n_datasets, 0.0)
+
+        for di, ds in enumerate(dataset_names):
+            entry = lookup.get((ds, est))
+            if entry is None:
+                continue
+            if entry.f1_macro_mean is not None:
+                f1_vals[di] = entry.f1_macro_mean
+            if entry.f1_macro_error is not None:
+                f1_errs[di] = entry.f1_macro_error
+            sz = getattr(entry, size_mean_col, None)
+            if sz is not None:
+                size_vals[di] = sz
+            se = getattr(entry, size_err_col, None)
+            if se is not None:
+                size_errs[di] = se
+
+        y = y_base + offsets[idx]
+        mask_f1 = ~np.isnan(f1_vals)
+        mask_sz = ~np.isnan(size_vals)
+
+        if mask_f1.any():
+            ax_f1.errorbar(
+                f1_vals[mask_f1], y[mask_f1],
+                xerr=f1_errs[mask_f1],
+                fmt="o", capsize=3, markersize=5, linewidth=1,
+                color=color, label=est,
+            )
+        if mask_sz.any():
+            ax_size.errorbar(
+                size_vals[mask_sz], y[mask_sz],
+                xerr=size_errs[mask_sz],
+                fmt="o", capsize=3, markersize=5, linewidth=1,
+                color=color, label=est,
+            )
+
+    # Axis config
+    ax_f1.set_yticks(y_base)
+    ax_f1.set_yticklabels(dataset_names, fontsize=9)
+    ax_f1.invert_yaxis()
+    ax_f1.set_xlim(-0.02, 1.02)
+    ax_f1.set_xlabel("F1-macro (mean ± std)", fontsize=10)
+    ax_f1.set_ylabel("Dataset", fontsize=10)
+    ax_f1.grid(axis="x", alpha=0.3)
+    ax_f1.set_axisbelow(True)
+
+    ax_size.set_xscale("symlog", linthresh=1.0, linscale=1.0)
+    ax_size.set_xlabel(f"{size_metric} (mean ± std)", fontsize=10)
+    ax_size.grid(axis="x", alpha=0.3)
+    ax_size.set_axisbelow(True)
+    plt.setp(ax_size.get_yticklabels(), visible=False)
+
+    # Background bands
+    for di in range(n_datasets):
+        if di % 2 == 1:
+            for ax in (ax_f1, ax_size):
+                ax.axhspan(di - 0.5, di + 0.5, facecolor="0.96", edgecolor="none", zorder=-1)
+
+    # Legend
+    handles, labels = ax_f1.get_legend_handles_labels()
+    ax_legend.axis("off")
+    if handles:
+        ax_legend.legend(
+            handles, labels,
+            loc="center left",
+            ncol=1,
+            frameon=False,
+            title="Estimator",
+            fontsize=9,
+            title_fontsize=10,
+        )
+
+    fig.suptitle("Combined benchmark: F1 (left) and model size (right)", fontsize=12, y=1.01)
+
+    base = Path(output_base)
+    png_path = base.with_suffix(".png")
+    pdf_path = base.with_suffix(".pdf")
+    fig.savefig(png_path, dpi=180, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    return png_path, pdf_path
+
+
+# ---------------------------------------------------------------------------
+# Pareto front scatter plot (F1 vs model size)
+# ---------------------------------------------------------------------------
+
+
+def plot_pareto_front(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+    size_metric: str = "n_atoms",
+) -> tuple[Path, Path]:
+    """Create a scatter plot highlighting the Pareto front per dataset.
+
+    x-axis: model size  (n_atoms by default)
+    y-axis: F1-macro
+    Pareto-optimal estimators are highlighted with a larger marker and
+    connected by a dashed step line.
+
+    Returns *(png_path, pdf_path)*.
+    """
+    raw_results = list(results)
+    ok_results = [r for r in raw_results if r.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for Pareto front plot")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for Pareto front plot")
+
+    pareto_per_ds = build_pareto_per_dataset(
+        aggregated,
+        quality_attr="f1_macro_mean",
+        size_attr=f"{size_metric}_mean",
+    )
+
+    dataset_names = sorted({r.dataset for r in aggregated})
+    fig, axes = _build_dataset_axes(len(dataset_names))
+    fig.suptitle("Pareto front: F1 vs model size per dataset", fontsize=13)
+
+    used_axes = []
+    for ax, ds_name in zip(axes, dataset_names):
+        used_axes.append(ax)
+        ds_results = [r for r in aggregated if r.dataset == ds_name]
+        pareto_set = {r.estimator for r in pareto_per_ds.get(ds_name, [])}
+
+        size_col = f"{size_metric}_mean"
+        size_err_col = f"{size_metric}_error"
+
+        x_all, y_all, labels_all = [], [], []
+        x_pareto, y_pareto, labels_pareto = [], [], []
+
+        for r in ds_results:
+            sz = getattr(r, size_col)
+            f1 = r.f1_macro_mean
+            if sz is None or f1 is None:
+                continue
+            x_all.append(float(sz))
+            y_all.append(float(f1))
+            labels_all.append(r.estimator)
+            if r.estimator in pareto_set:
+                x_pareto.append(float(sz))
+                y_pareto.append(float(f1))
+                labels_pareto.append(r.estimator)
+
+        # All estimators (grey)
+        ax.scatter(x_all, y_all, s=50, c="lightgray", edgecolors="gray", zorder=2)
+        for xv, yv, lbl in zip(x_all, y_all, labels_all):
+            ax.annotate(lbl, (xv, yv), textcoords="offset points", xytext=(4, 4), fontsize=6, color="gray")
+
+        # Pareto-optimal (red, larger)
+        ax.scatter(x_pareto, y_pareto, s=120, c="tomato", edgecolors="darkred", zorder=3, label="Pareto-optimal")
+        for xv, yv, lbl in zip(x_pareto, y_pareto, labels_pareto):
+            ax.annotate(
+                lbl, (xv, yv), textcoords="offset points", xytext=(5, 5),
+                fontsize=7, fontweight="bold", color="darkred",
+            )
+
+        # Step line connecting Pareto front
+        if len(x_pareto) > 1:
+            order = sorted(range(len(x_pareto)), key=lambda i: x_pareto[i])
+            ax.step(
+                [x_pareto[i] for i in order],
+                [y_pareto[i] for i in order],
+                where="post",
+                linestyle="--",
+                color="tomato",
+                linewidth=1.2,
+                alpha=0.7,
+                zorder=1,
+            )
+
+        ax.set_title(ds_name, fontsize=10)
+        ax.set_xlabel(size_metric)
+        ax.set_ylabel("F1-macro")
+        ax.set_ylim(-0.02, 1.02)
+        ax.grid(True, alpha=0.3)
+        if x_all:
+            ax.set_xscale("symlog", linthresh=1.0, linscale=1.0)
+
+    for ax in axes[len(dataset_names):]:
+        ax.set_visible(False)
+
+    fig.subplots_adjust(top=0.88, wspace=0.30, hspace=0.40)
+
+    base = Path(output_base)
+    png_path = base.with_suffix(".png")
+    pdf_path = base.with_suffix(".pdf")
+    fig.savefig(png_path, dpi=180, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    return png_path, pdf_path
+

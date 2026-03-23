@@ -265,6 +265,62 @@ def build_benchmark_leaderboard(
     return sorted(results, key=_sort_key)
 
 
+def compute_pareto_front(
+    results: list[AggregatedBenchmarkResult],
+    *,
+    quality_attr: str = "f1_macro_mean",
+    size_attr: str = "n_atoms_mean",
+) -> list[AggregatedBenchmarkResult]:
+    """Return the Pareto-optimal subset w.r.t. quality (higher=better) and size (lower=better).
+
+    A result is Pareto-optimal if no other result has both strictly better quality
+    and strictly smaller (or equal) size.
+    """
+    valid = [
+        r for r in results
+        if getattr(r, quality_attr) is not None and getattr(r, size_attr) is not None
+    ]
+    if not valid:
+        return []
+
+    # Sort by quality descending, size ascending as tiebreaker
+    valid.sort(
+        key=lambda r: (-float(getattr(r, quality_attr)), float(getattr(r, size_attr)))
+    )
+
+    pareto: list[AggregatedBenchmarkResult] = []
+    min_size = float("inf")
+    for r in valid:
+        size = float(getattr(r, size_attr))
+        if size < min_size:
+            pareto.append(r)
+            min_size = size
+
+    return pareto
+
+
+def build_pareto_per_dataset(
+    results: list[AggregatedBenchmarkResult],
+    *,
+    quality_attr: str = "f1_macro_mean",
+    size_attr: str = "n_atoms_mean",
+) -> dict[str, list[AggregatedBenchmarkResult]]:
+    """Compute the Pareto front per dataset.
+
+    Returns a dict mapping dataset name to the list of Pareto-optimal results.
+    """
+    grouped: dict[str, list[AggregatedBenchmarkResult]] = {}
+    for r in results:
+        grouped.setdefault(r.dataset, []).append(r)
+
+    return {
+        dataset: compute_pareto_front(
+            group, quality_attr=quality_attr, size_attr=size_attr
+        )
+        for dataset, group in grouped.items()
+    }
+
+
 def _run_single(
     estimator_name: str,
     estimator_factory,

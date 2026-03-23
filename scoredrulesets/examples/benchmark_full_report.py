@@ -31,6 +31,8 @@ from scoredrulesets.benchmarking import (
     plot_benchmark_results,
     plot_benchmark_heatmap,
     plot_benchmark_heatmap_combined,
+    plot_combined_dot,
+    plot_pareto_front,
 )
 from scoredrulesets.benchmarking.runner import results_as_dicts
 
@@ -120,6 +122,8 @@ def main(log_file: Path | None = None):
     png_path, pdf_path = plot_benchmark_results(results, output_base=Path("benchmark_results"), aggregate_repeats=True)
     heatmap_png, heatmap_pdf = plot_benchmark_heatmap(results, output_base=Path("benchmark_results_heatmap"))
     combined_png, combined_pdf = plot_benchmark_heatmap_combined(results, output_base=Path("benchmark_results_heatmap_combined"))
+    dot_png, dot_pdf = plot_combined_dot(results, output_base=Path("benchmark_results_combined_dot"))
+    pareto_png, pareto_pdf = plot_pareto_front(results, output_base=Path("benchmark_results_pareto"))
     md_report = format_benchmark_report_markdown(
         leaderboard,
         title="ScoredRuleSets Benchmark Report",
@@ -135,6 +139,10 @@ def main(log_file: Path | None = None):
             "heatmap_pdf": str(heatmap_pdf),
             "combined_heatmap_png": str(combined_png),
             "combined_heatmap_pdf": str(combined_pdf),
+            "combined_dot_png": str(dot_png),
+            "combined_dot_pdf": str(dot_pdf),
+            "pareto_png": str(pareto_png),
+            "pareto_pdf": str(pareto_pdf),
         },
         notes=[
             "Alle Schätzer und Datensätze, 3 Wiederholungen, Paper-Split-Policy.",
@@ -157,6 +165,10 @@ def main(log_file: Path | None = None):
             "heatmap_pdf": str(heatmap_pdf),
             "combined_heatmap_png": str(combined_png),
             "combined_heatmap_pdf": str(combined_pdf),
+            "combined_dot_png": str(dot_png),
+            "combined_dot_pdf": str(dot_pdf),
+            "pareto_png": str(pareto_png),
+            "pareto_pdf": str(pareto_pdf),
         },
         notes=[
             "Alle Schätzer und Datensätze, 3 Wiederholungen, Paper-Split-Policy.",
@@ -173,6 +185,8 @@ def main(log_file: Path | None = None):
     print("- benchmark_results.png / .pdf (Plots)")
     print("- benchmark_results_heatmap.png / .pdf (Heatmap)")
     print("- benchmark_results_heatmap_combined.png / .pdf (Combined multi-metric heatmap)")
+    print("- benchmark_results_combined_dot.png / .pdf (Combined dot plot: F1 + model size)")
+    print("- benchmark_results_pareto.png / .pdf (Pareto front: F1 vs model size)")
 
     print("\nLeaderboard (Top 10):")
     print(format_benchmark_leaderboard_table(leaderboard)[:2000])

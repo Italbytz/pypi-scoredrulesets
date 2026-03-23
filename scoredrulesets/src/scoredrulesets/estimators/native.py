@@ -19,17 +19,21 @@ class NativeScoredRuleSetClassifier(BaseRuleSetEstimator):
         temperature: float = 1.0,
         include_default_rule: bool = True,
         enable_categorical_rules: bool = True,
-        max_rules: int = 6,
+        max_rules: int = 100,
+        max_rules_per_feature: int = 2,
         min_samples_leaf: int = 5,
         min_gain: float = 1e-9,
+        min_relative_gain: float = 0.35,
     ):
         self.aggregation = aggregation
         self.temperature = temperature
         self.include_default_rule = include_default_rule
         self.enable_categorical_rules = enable_categorical_rules
         self.max_rules = max_rules
+        self.max_rules_per_feature = max_rules_per_feature
         self.min_samples_leaf = min_samples_leaf
         self.min_gain = min_gain
+        self.min_relative_gain = min_relative_gain
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
@@ -44,15 +48,46 @@ class NativeScoredRuleSetClassifier(BaseRuleSetEstimator):
         prior_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
         default_scores = self._distribution_to_scores(prior_counts)
 
-        candidate_rules: list[tuple[float, Rule]] = []
+        # Phase 1: Compute best gain per feature for ranking
+        feature_gains: list[tuple[float, int]] = []  # (best_gain, feature_idx)
         for feature_idx in range(self.n_features_in_):
             column = X_valid[:, feature_idx]
+            split = self._best_numeric_split(column, y_idx, n_classes)
+            if split is not None:
+                feature_gains.append((split[1], feature_idx))
+            elif self.enable_categorical_rules:
+                # Use best categorical gain
+                cat_gains = [g for g, _, _ in self._categorical_splits(column, y_idx, n_classes)]
+                if cat_gains:
+                    feature_gains.append((max(cat_gains), feature_idx))
+
+        # Phase 2: Adaptive feature selection based on gain ranking
+        feature_gains.sort(key=lambda item: item[0], reverse=True)
+        selected_features: set[int] = set()
+        if feature_gains:
+            best_gain = feature_gains[0][0]
+            gain_threshold = self.min_relative_gain * best_gain
+            prev_gain = best_gain
+            for gain, fidx in feature_gains:
+                if gain < gain_threshold:
+                    break
+                # Gap detection: stop when gain drops by >50% from previous
+                if selected_features and prev_gain > 0 and gain < 0.5 * prev_gain:
+                    break
+                selected_features.add(fidx)
+                prev_gain = gain
+
+        # Phase 3: Generate rules only for selected features (limited per feature)
+        candidate_rules: list[tuple[float, Rule]] = []
+        for feature_idx in selected_features:
+            column = X_valid[:, feature_idx]
             feature_name = str(self.feature_names_in_[feature_idx])
+            feature_candidates: list[tuple[float, Rule]] = []
             split = self._best_numeric_split(column, y_idx, n_classes)
             if split is not None:
                 threshold, gain, left_counts, right_counts = split
                 if gain >= self.min_gain:
-                    candidate_rules.append(
+                    feature_candidates.append(
                         (
                             gain,
                             Rule(
@@ -63,7 +98,7 @@ class NativeScoredRuleSetClassifier(BaseRuleSetEstimator):
                             ),
                         )
                     )
-                    candidate_rules.append(
+                    feature_candidates.append(
                         (
                             gain,
                             Rule(
@@ -79,7 +114,7 @@ class NativeScoredRuleSetClassifier(BaseRuleSetEstimator):
                 ):
                     if interval_gain < self.min_gain:
                         continue
-                    candidate_rules.append(
+                    feature_candidates.append(
                         (
                             interval_gain,
                             Rule(
@@ -90,15 +125,13 @@ class NativeScoredRuleSetClassifier(BaseRuleSetEstimator):
                             ),
                         )
                     )
-                continue
-
-            if self.enable_categorical_rules:
+            elif self.enable_categorical_rules:
                 for category_idx, (gain, category, match_counts) in enumerate(
                     self._categorical_splits(column, y_idx, n_classes)
                 ):
                     if gain < self.min_gain:
                         continue
-                    candidate_rules.append(
+                    feature_candidates.append(
                         (
                             gain,
                             Rule(
@@ -114,7 +147,7 @@ class NativeScoredRuleSetClassifier(BaseRuleSetEstimator):
                 ):
                     if group_gain < self.min_gain:
                         continue
-                    candidate_rules.append(
+                    feature_candidates.append(
                         (
                             group_gain,
                             Rule(
@@ -125,6 +158,10 @@ class NativeScoredRuleSetClassifier(BaseRuleSetEstimator):
                             ),
                         )
                     )
+
+            # Keep only top max_rules_per_feature rules per feature
+            feature_candidates.sort(key=lambda item: item[0], reverse=True)
+            candidate_rules.extend(feature_candidates[: self.max_rules_per_feature])
 
         candidate_rules.sort(key=lambda item: item[0], reverse=True)
         chosen_rules = [rule for _, rule in candidate_rules[: max(0, int(self.max_rules))]]

@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
-from .runner import AggregatedBenchmarkResult
+from .runner import AggregatedBenchmarkResult, build_pareto_per_dataset
 
 
 HEATMAP_PREVIEW_NOTE = (
@@ -160,6 +160,9 @@ def format_benchmark_report_markdown(
     if results:
         sections.extend(_dataset_overview_section(results))
 
+    if results:
+        sections.append(format_pareto_table_markdown(results))
+
     sections.extend(["## Leaderboard", "", format_benchmark_leaderboard_markdown(results), ""])
     if results:
         sections.extend(_dataset_sections(results))
@@ -231,6 +234,7 @@ def format_benchmark_report_html(
 
     if results:
         sections.append(_html_section("Top per Dataset", _dataset_overview_html(results)))
+        sections.append(_html_section("Pareto Front (F1 vs Model Size)", format_pareto_table_html(results)))
         sections.append(_html_section("Leaderboard", format_benchmark_leaderboard_html(results)))
         seen: set[str] = set()
         for result in results:
@@ -417,6 +421,75 @@ def _dataset_section_html(dataset: str, results: list[AggregatedBenchmarkResult]
         + format_benchmark_leaderboard_html(results)
         + "</section>"
     )
+
+
+def format_pareto_table_markdown(
+    results: list[AggregatedBenchmarkResult],
+) -> str:
+    """Format a Pareto-front table (F1 vs atoms) per dataset as Markdown."""
+    pareto_map = build_pareto_per_dataset(results)
+    lines: list[str] = ["## Pareto Front (F1 vs Model Size)", ""]
+
+    dataset_order: list[str] = []
+    seen: set[str] = set()
+    for r in results:
+        if r.dataset not in seen:
+            dataset_order.append(r.dataset)
+            seen.add(r.dataset)
+
+    for dataset in dataset_order:
+        pareto = pareto_map.get(dataset, [])
+        if not pareto:
+            continue
+        lines.append(f"### {dataset}")
+        lines.append("")
+        lines.append("| estimator | f1_mean | atoms | rules |")
+        lines.append("| --- | ---: | ---: | ---: |")
+        for r in pareto:
+            lines.append(
+                f"| {_display_estimator(r)}"
+                f" | {_fmt_float(r.f1_macro_mean)}"
+                f" | {_fmt_float(r.n_atoms_mean)}"
+                f" | {_fmt_float(r.n_rules_mean)} |"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def format_pareto_table_html(
+    results: list[AggregatedBenchmarkResult],
+) -> str:
+    """Format a Pareto-front table (F1 vs atoms) per dataset as HTML."""
+    pareto_map = build_pareto_per_dataset(results)
+    parts: list[str] = []
+
+    dataset_order: list[str] = []
+    seen: set[str] = set()
+    for r in results:
+        if r.dataset not in seen:
+            dataset_order.append(r.dataset)
+            seen.add(r.dataset)
+
+    for dataset in dataset_order:
+        pareto = pareto_map.get(dataset, [])
+        if not pareto:
+            continue
+        headers = ["estimator", "f1_mean", "atoms", "rules"]
+        rows = [
+            [
+                _display_estimator(r),
+                _fmt_float(r.f1_macro_mean),
+                _fmt_float(r.n_atoms_mean),
+                _fmt_float(r.n_rules_mean),
+            ]
+            for r in pareto
+        ]
+        parts.append(
+            f"<div class='dataset-card'>"
+            f"<h3>{html.escape(dataset)}</h3>"
+            f"{_html_table(headers, rows)}</div>"
+        )
+    return "".join(parts)
 
 
 def _display_estimator(result: AggregatedBenchmarkResult) -> str:

@@ -13,8 +13,16 @@ from .reporting import (
 	format_benchmark_report_html,
 	format_benchmark_leaderboard_markdown,
 	format_benchmark_leaderboard_table,
+	format_pareto_table_markdown,
+	format_pareto_table_html,
 )
-from .plotting import plot_benchmark_heatmap, plot_benchmark_heatmap_combined, plot_benchmark_results
+from .plotting import (
+	plot_benchmark_heatmap,
+	plot_benchmark_heatmap_combined,
+	plot_benchmark_results,
+	plot_combined_dot,
+	plot_pareto_front,
+)
 from .runner import (
 	AggregatedBenchmarkResult,
 	BenchmarkConfig,
@@ -22,6 +30,8 @@ from .runner import (
 	aggregate_benchmark_results,
 	aggregated_results_as_dicts,
 	build_benchmark_leaderboard,
+	build_pareto_per_dataset,
+	compute_pareto_front,
 	run_benchmarks,
 )
 
@@ -33,7 +43,9 @@ __all__ = [
 	"aggregate_benchmark_results",
 	"aggregated_results_as_dicts",
 	"build_benchmark_leaderboard",
+	"build_pareto_per_dataset",
 	"compare_benchmark_runs",
+	"compute_pareto_front",
 	"format_benchmark_comparison_report_html",
 	"format_benchmark_comparison_report_markdown",
 	"format_benchmark_leaderboard_html",
@@ -43,10 +55,14 @@ __all__ = [
 	"format_benchmark_report_html",
 	"format_benchmark_report_markdown",
 	"format_benchmark_leaderboard_table",
+	"format_pareto_table_markdown",
+	"format_pareto_table_html",
 	"load_aggregated_results_json",
 	"plot_benchmark_heatmap",
 	"plot_benchmark_heatmap_combined",
 	"plot_benchmark_results",
+	"plot_combined_dot",
+	"plot_pareto_front",
 	"run_benchmarks",
 ]
 
