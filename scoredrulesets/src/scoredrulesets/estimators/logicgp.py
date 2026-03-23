@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from sklearn.metrics import f1_score as _f1_score
+from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import KBinsDiscretizer
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
@@ -708,6 +710,14 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         Maximale Modellgroesse (Anzahl Literale). Falls gesetzt, werden
         Individuen mit groesserer Modellgroesse ignoriert (Suchphase des
         Zwei-Phasen-Modellauswahl-Algorithmus aus logicGP-RLCW).
+    validation_fraction : float
+        Anteil der Trainingsdaten, der als Validierungsmenge fuer die
+        finale Modellauswahl reserviert wird.  Die Auswahl nutzt dann die
+        tatsaechliche Macro-F1 auf dem Val-Set statt auf den Trainingsdaten.
+        ``0`` (Standard) deaktiviert den Split – die Modellauswahl erfolgt
+        dann anhand der Training-Macro-F1, die deutlich zuverlaessiger ist
+        als ``consolidated`` (mean recall) und keinen Datenverlust verursacht.
+        Werte > 0 sind nur fuer grosse Datensaetze empfohlen (n >= 200).
     random_state : int or None
     """
 
@@ -723,6 +733,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         n_adaptations_per_gen: int = 6,
         tournament_size: int = 5,
         max_model_size: int | None = None,
+        validation_fraction: float = 0.0,
         random_state: int | None = None,
     ):
         self.trainer = trainer
@@ -735,6 +746,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         self.n_adaptations_per_gen = n_adaptations_per_gen
         self.tournament_size = tournament_size
         self.max_model_size = max_model_size
+        self.validation_fraction = validation_fraction
         self.random_state = random_state
 
 
@@ -761,11 +773,39 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             X_valid, n_bins=self.n_bins
         )
 
+        # ----- Validation-Split fuer bessere finale Modellauswahl -----
+        use_val = (
+            self.validation_fraction > 0
+            and X_disc.shape[0] >= 30          # zu wenig Samples -> kein Split
+            and len(np.unique(y_idx)) >= 2     # mindestens 2 Klassen
+        )
+        if use_val:
+            try:
+                sss = StratifiedShuffleSplit(
+                    n_splits=1,
+                    test_size=self.validation_fraction,
+                    random_state=(self.random_state if self.random_state is not None else 0),
+                )
+                train_idx, val_idx = next(sss.split(X_disc, y_idx))
+                X_disc_train = X_disc[train_idx]
+                y_idx_train = y_idx[train_idx]
+                X_disc_val = X_disc[val_idx]
+                y_idx_val = y_idx[val_idx]
+            except ValueError:
+                # Stratifizierung fehlgeschlagen (zu wenig Samples pro Klasse)
+                use_val = False
+
+        if not use_val:
+            X_disc_train = X_disc
+            y_idx_train = y_idx
+            X_disc_val = None
+            y_idx_val = None
+
         # Suchraum: alle nicht-trivialen Teilmengenliterale
-        all_literals = _generate_literals(X_disc)
+        all_literals = _generate_literals(X_disc_train)
         if self.min_max_weight > 0 and len(all_literals) > 0:
             all_literals = self._filter_literals(
-                all_literals, X_disc, y_idx, n_classes
+                all_literals, X_disc_train, y_idx_train, n_classes
             )
         if not all_literals:
             raise ValueError(
@@ -775,10 +815,15 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         # Initialpopulation: ein Individuum pro Literal
         population = self._init_population(all_literals, n_classes)
 
-        # GP-Schleife
+        # GP-Schleife (auf Train-Split)
         best_poly = self._run_gp(
-            population, all_literals, X_disc, y_idx, n_classes
+            population, all_literals, X_disc_train, y_idx_train, n_classes,
+            X_val=X_disc_val, y_val=y_idx_val,
         )
+
+        # Gewichte auf GESAMTEN Daten neu berechnen
+        if use_val:
+            _compute_weights(best_poly, X_disc, y_idx, n_classes)
 
         # ScoredRuleSet erstellen
         self.ruleset_ = self._poly_to_ruleset(best_poly, n_classes)
@@ -864,12 +909,22 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         X_disc: np.ndarray,
         y_idx: np.ndarray,
         n_classes: int,
+        *,
+        X_val: np.ndarray | None = None,
+        y_val: np.ndarray | None = None,
     ) -> _Polynomial:
         """
         Fuehrt den GP-Hauptloop aus und gibt das beste Polynom zurueck.
         Unterstuetzt FLCW- und RLCW-Varianten basierend auf ``self.trainer``.
+
+        Die finale Modellauswahl bewertet Kandidaten anhand der
+        tatsaechlichen Macro-F1 (statt ``fit.consolidated`` = mean recall).
+        Wenn ``X_val``/``y_val`` gegeben: F1 auf Validation-Set.
+        Sonst: F1 auf Trainingsdaten (kein Datenverlust, zuverlaessiger
+        fuer kleine Datensaetze).
         """
         use_rlcw = self.trainer.lower().startswith("rlcw")
+        has_val = X_val is not None and y_val is not None
 
         # ------------------------------------------------------------------
         # Gewichte berechnen und Initialpopulation evaluieren
@@ -960,7 +1015,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 )
 
             # ------------------------------------------------------------------
-            # Stagnations-Tracking
+            # Stagnations-Tracking (immer auf consolidated, da guenstig)
             # ------------------------------------------------------------------
             current_best = max(f.consolidated for _, f in evaluated)
             if current_best > best_consolidated + 1e-10:
@@ -976,7 +1031,44 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             if stagnation_count >= self.stagnation_generations:
                 break
 
-        return _final_model_selection(all_candidates, min_improvement=self.min_improvement_pct)
+        # ------------------------------------------------------------------
+        # Finale Modellauswahl
+        # ------------------------------------------------------------------
+        # Bewerte Kandidaten anhand der tatsaechlichen Macro-F1 statt
+        # ``consolidated`` (mean recall), da F1 besser mit der realen
+        # Vorhersagequalitaet korreliert.
+        # Bei aktivem Validation-Split: F1 auf Val-Set (Generalisierung).
+        # Ohne Split: F1 auf Trainingsdaten (kein Datenverlust).
+        eval_X = X_val if has_val else X_disc
+        eval_y = y_val if has_val else y_idx
+        labels = list(range(n_classes))
+
+        seen_ids: set[int] = set()
+        f1_candidates: list[tuple[_Polynomial, _Fitness | _FitnessRLCW, float]] = []
+
+        # 1) Finale Population (aktuellste und relevanteste Individuen)
+        for poly, fit in evaluated:
+            if id(poly) not in seen_ids:
+                seen_ids.add(id(poly))
+                preds = poly.predict_classes(eval_X)
+                f1 = float(_f1_score(eval_y, preds, average="macro", labels=labels))
+                f1_candidates.append((poly, fit, f1))
+
+        # 2) Historische Top-Kandidaten (nach consolidated) re-evaluieren
+        top_hist = sorted(all_candidates, key=lambda x: x[2], reverse=True)
+        n_extra = 0
+        for poly, fit, _ in top_hist:
+            if id(poly) in seen_ids:
+                continue
+            seen_ids.add(id(poly))
+            preds = poly.predict_classes(eval_X)
+            f1 = float(_f1_score(eval_y, preds, average="macro", labels=labels))
+            f1_candidates.append((poly, fit, f1))
+            n_extra += 1
+            if n_extra >= 50:
+                break
+
+        return _final_model_selection(f1_candidates, min_improvement=self.min_improvement_pct)
 
     def _select_two_parents(self, evaluated: list) -> tuple[_Polynomial, _Polynomial]:
         """Waehlt zwei Eltern per Domination-Turnier."""

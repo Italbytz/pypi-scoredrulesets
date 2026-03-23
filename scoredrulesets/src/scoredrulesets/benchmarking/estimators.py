@@ -437,4 +437,69 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
+        # ------------------------------------------------------------------
+        # Multiplexer-optimierte Varianten (Ziel: F1=1.0 auf vollem Datensatz)
+        # ------------------------------------------------------------------
+        "wrapper_logicgp_mux": EstimatorSpec(
+            name="wrapper_logicgp_mux",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="logicgp",
+                backend_params={
+                    "trainer": "flcw_macro",
+                    "max_generations": 10_000,
+                    "stagnation_generations": 500,
+                    "population_size": None,  # volle Pareto-Front behalten
+                    "n_adaptations_per_gen": 6,
+                    "n_bins": 2,  # binaere Features → 2 Bins
+                    "validation_fraction": 0.0,
+                    "random_state": 0,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_logicgp_mux_rlcw": EstimatorSpec(
+            name="wrapper_logicgp_mux_rlcw",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="logicgp",
+                backend_params={
+                    "trainer": "rlcw_macro",
+                    "max_generations": 10_000,
+                    "stagnation_generations": 500,
+                    "population_size": 80,
+                    "n_adaptations_per_gen": 12,
+                    "n_bins": 2,
+                    "min_max_weight": 0.1,
+                    "validation_fraction": 0.0,
+                    "random_state": 0,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_cart_mux": EstimatorSpec(
+            name="wrapper_cart_mux",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="cart",
+                backend_params={"max_depth": None},  # unbegrenzte Tiefe
+                random_state=0,
+            ),
+        ),
+        "gp_mux": EstimatorSpec(
+            name="gp_mux",
+            factory=lambda: GeneticScoredRuleSetClassifier(
+                population_size=100,
+                generations=80,
+                max_rules=8,
+                max_atoms_per_rule=4,
+                selection_mode="pareto",
+                final_rule_selection="diverse",
+                evolution_fitness_mode="residual_covering",
+                evolution_context_size=3,
+                residual_focus_weight=0.35,
+                validation_fraction=0.0,  # kein Split, perfekter Fit
+                early_stopping_rounds=20,
+                complexity_penalty=0.02,
+                class_balance_weight=0.3,
+                random_state=0,
+            ),
+        ),
     }

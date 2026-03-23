@@ -15,6 +15,7 @@ class DatasetBundle:
     X: np.ndarray
     y: np.ndarray
     source: str
+    no_split: bool = False
 
 
 @dataclass(frozen=True)
@@ -290,6 +291,7 @@ def _to_label_encoded_1d(y_raw) -> np.ndarray:
 def load_dataset_registry(*, include_online_uci: bool = True) -> dict[str, DatasetBundle]:
     registry = load_sklearn_datasets()
     registry.update(load_local_uci_datasets())
+    registry.update(load_multiplexer_datasets())
     if include_online_uci:
         uci_bundles = load_online_paper_uci_datasets()
         registry.update(uci_bundles)
@@ -327,6 +329,10 @@ def resolve_dataset_names(
             continue
         if normalized == "paper_uci":
             resolved.extend(resolve_paper_uci_dataset_names(registry, strict=paper_uci_strict))
+        elif normalized == "multiplexer":
+            resolved.extend(
+                name for name in registry if name.startswith("mux_")
+            )
         else:
             # Veraltete Aliase automatisch auf kanonischen Namen umschreiben.
             canonical = alias_map.get(normalized, normalized)
@@ -382,3 +388,106 @@ def _looks_like_header(row: np.ndarray) -> bool:
     return non_numeric > 0
 
 
+# ---------------------------------------------------------------------------
+# Multiplexer-Datensaetze (boolesche Klassifikation)
+# ---------------------------------------------------------------------------
+
+_MUX_CONFIGS: tuple[tuple[str, int], ...] = (
+    ("mux_6", 2),     # 2 Adressbits + 4 Datenbits  = 6 Features, 2^6 = 64 Instanzen
+    ("mux_11", 3),    # 3 Adressbits + 8 Datenbits  = 11 Features, 2^11 = 2048 Instanzen
+    ("mux_20", 4),    # 4 Adressbits + 16 Datenbits = 20 Features, 2^20 = 1_048_576 Inst.
+)
+
+
+def generate_multiplexer_dataset(
+    n_address_bits: int,
+    *,
+    max_samples: int | None = None,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Multiplexer-Datensatz.
+
+    Ein k-Multiplexer hat ``k`` Adressbits und ``2**k`` Datenbits.
+    Die Gesamtzahl der Features ist ``k + 2**k``.
+    Der Ausgabewert ist der Datenbit an der durch die Adressbits codierten Position.
+
+    Bei voller Enumeration enthaelt der Datensatz ``2**(k + 2**k)`` Zeilen.
+    Fuer grosse k kann ``max_samples`` die Zeilenanzahl durch zufaelliges Sampling
+    begrenzen.
+
+    Parameters
+    ----------
+    n_address_bits : int
+        Anzahl der Adressbits (1, 2, 3, ...).
+    max_samples : int or None
+        Maximale Zeilenanzahl. ``None`` = volle Enumeration.
+    random_state : int or None
+        Seed fuer reproduzierbares Sampling (nur relevant wenn ``max_samples`` gesetzt).
+
+    Returns
+    -------
+    X : np.ndarray, shape (n_samples, n_features), dtype int
+    y : np.ndarray, shape (n_samples,), dtype int (0 oder 1)
+    """
+    n_data_bits = 1 << n_address_bits  # 2**k
+    n_features = n_address_bits + n_data_bits
+    n_total = 1 << n_features  # 2**(k + 2**k)
+
+    use_sampling = max_samples is not None and max_samples < n_total
+
+    if use_sampling:
+        rng = np.random.default_rng(random_state)
+        indices = rng.choice(n_total, size=max_samples, replace=False)
+        indices.sort()
+    else:
+        indices = np.arange(n_total)
+
+    n_samples = len(indices)
+    X = np.zeros((n_samples, n_features), dtype=int)
+    y = np.zeros(n_samples, dtype=int)
+
+    for row, idx in enumerate(indices):
+        # Binaerdarstellung der Instanz
+        bits = [(idx >> b) & 1 for b in range(n_features)]
+        X[row] = bits
+        # Adressbits → Position im Datenbereich
+        address = sum(bits[a] << a for a in range(n_address_bits))
+        # Datenbit an dieser Position
+        y[row] = bits[n_address_bits + address]
+
+    return X, y
+
+
+def load_multiplexer_datasets(
+    *,
+    max_samples_large: int = 10_000,
+) -> dict[str, DatasetBundle]:
+    """Erzeugt die Standard-Multiplexer-Datensaetze (mux_6 bis mux_37).
+
+    Fuer grosse Multiplexer (>= 2^16 Instanzen) wird Sampling verwendet,
+    um die Laufzeit handhabbar zu halten.
+
+    Parameters
+    ----------
+    max_samples_large : int
+        Maximale Zeilenanzahl fuer grosse Multiplexer (default: 10_000).
+    """
+    bundles: dict[str, DatasetBundle] = {}
+    for name, n_addr in _MUX_CONFIGS:
+        n_features = n_addr + (1 << n_addr)
+        n_total = 1 << n_features
+        # Sampling nur fuer grosse Datensaetze
+        if n_total > max_samples_large:
+            X, y_arr = generate_multiplexer_dataset(
+                n_addr, max_samples=max_samples_large, random_state=42
+            )
+        else:
+            X, y_arr = generate_multiplexer_dataset(n_addr)
+        bundles[name] = DatasetBundle(
+            name=name,
+            X=X,
+            y=y_arr,
+            source=f"multiplexer_{n_addr + (1 << n_addr)}",
+            no_split=True,
+        )
+    return bundles

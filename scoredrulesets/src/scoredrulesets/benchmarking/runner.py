@@ -101,15 +101,21 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
     for dataset_name in dataset_names:
         bundle = dataset_registry[dataset_name]
         test_size = _resolve_test_size(bundle, config)
+        is_no_split = getattr(bundle, "no_split", False)
         for repeat in range(total_repeats):
             split_seed = int(config.random_state + repeat)
-            X_train, X_test, y_train, y_test = train_test_split(
-                bundle.X,
-                bundle.y,
-                test_size=test_size,
-                random_state=split_seed,
-                stratify=bundle.y,
-            )
+            if is_no_split:
+                # No-Split-Modus: Train == Test (Ziel: perfekter Fit)
+                X_train = X_test = bundle.X
+                y_train = y_test = bundle.y
+            else:
+                X_train, X_test, y_train, y_test = train_test_split(
+                    bundle.X,
+                    bundle.y,
+                    test_size=test_size,
+                    random_state=split_seed,
+                    stratify=bundle.y,
+                )
 
             for estimator_name in estimator_names:
                 spec = estimator_registry[estimator_name]
