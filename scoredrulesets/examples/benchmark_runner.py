@@ -67,6 +67,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--aggregate-repeats", action="store_true")
     parser.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="Timeout in seconds per single estimator/dataset run. 0 = no timeout (default: 300).",
+    )
+    parser.add_argument(
         "--error-bar",
         type=str,
         default="std",
@@ -108,6 +114,7 @@ def main() -> None:
         paper_uci_strict=bool(args.paper_uci_strict),
         repeats=args.repeats,
         random_state=args.random_state,
+        timeout_seconds=args.timeout if args.timeout > 0 else None,
     )
     results = run_benchmarks(config)
     payload = results_as_dicts(results)

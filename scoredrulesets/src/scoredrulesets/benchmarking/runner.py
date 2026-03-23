@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from time import perf_counter
 from typing import Any
+import signal
 import warnings
 
 import numpy as np
@@ -12,6 +13,10 @@ from sklearn.model_selection import train_test_split
 from .datasets import load_dataset_registry, resolve_dataset_names
 from .estimators import default_estimator_specs
 from .metrics import model_size_metrics
+
+
+class _RunTimeoutError(Exception):
+    """Raised when a single benchmark run exceeds the configured timeout."""
 
 
 @dataclass
@@ -27,6 +32,7 @@ class BenchmarkConfig:
     repeats: int = 1
     random_state: int = 0
     show_progress: bool = False
+    timeout_seconds: float | None = 300.0  # max Sekunden pro Einzellauf (None = kein Limit)
 
 
 @dataclass
@@ -149,6 +155,7 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                     X_test=X_test,
                     y_train=y_train,
                     y_test=y_test,
+                    timeout_seconds=config.timeout_seconds,
                 )
                 results.append(result)
                 completed_runs += 1
@@ -322,6 +329,72 @@ def build_pareto_per_dataset(
 
 
 def _run_single(
+    estimator_name: str,
+    estimator_factory,
+    dataset_name: str,
+    repeat: int,
+    X_train,
+    X_test,
+    y_train,
+    y_test,
+    timeout_seconds: float | None = None,
+) -> BenchmarkResult:
+    # -- Timeout-Setup (nur UNIX/macOS, Signal-basiert) -----------------------
+    _alarm_was_set = False
+    _old_handler = None
+
+    def _timeout_handler(signum, frame):
+        raise _RunTimeoutError(
+            f"Timeout nach {timeout_seconds:.0f}s fuer '{estimator_name}' "
+            f"auf '{dataset_name}'"
+        )
+
+    if timeout_seconds is not None and timeout_seconds > 0:
+        try:
+            _old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(int(timeout_seconds))
+            _alarm_was_set = True
+        except (AttributeError, OSError):
+            # Windows oder kein SIGALRM verfuegbar → kein Timeout
+            pass
+
+    try:
+        return _run_single_inner(
+            estimator_name=estimator_name,
+            estimator_factory=estimator_factory,
+            dataset_name=dataset_name,
+            repeat=repeat,
+            X_train=X_train,
+            X_test=X_test,
+            y_train=y_train,
+            y_test=y_test,
+        )
+    except _RunTimeoutError as exc:
+        print(f"[TIMEOUT] {exc}", flush=True)
+        return BenchmarkResult(
+            dataset=dataset_name,
+            estimator=estimator_name,
+            repeat=repeat,
+            status="timeout",
+            skip_reason=str(exc),
+            error=str(exc),
+            f1_macro=None,
+            fit_seconds=None,
+            predict_seconds=None,
+            n_rules=None,
+            n_atoms=None,
+            ruleset_json_bytes=None,
+            n_train=len(y_train),
+            n_test=len(y_test),
+        )
+    finally:
+        if _alarm_was_set:
+            signal.alarm(0)  # Alarm aufheben
+            if _old_handler is not None:
+                signal.signal(signal.SIGALRM, _old_handler)
+
+
+def _run_single_inner(
     estimator_name: str,
     estimator_factory,
     dataset_name: str,

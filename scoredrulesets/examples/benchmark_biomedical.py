@@ -81,6 +81,12 @@ def main():
         default=Path("benchmarks/biomedical"),
         help="Ausgabeverzeichnis (default: benchmarks/biomedical)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="Timeout in Sekunden pro Einzellauf (default: 300). 0 = kein Timeout.",
+    )
     args = parser.parse_args()
 
     estimator_names = args.estimators or _DEFAULT_ESTIMATORS
@@ -94,6 +100,7 @@ def main():
         show_progress=True,
         include_online_uci=False,
         include_pmlb=args.include_pmlb,
+        timeout_seconds=args.timeout if args.timeout > 0 else None,
     )
 
     print("=" * 70)
