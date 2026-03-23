@@ -351,6 +351,39 @@ def resolve_dataset_names(
                 name for name in registry
                 if name.startswith("synth_epistasis") or "epistasis" in name.lower()
             )
+        elif normalized == "cart_hard":
+            # Datensaetze, bei denen CART strukturell benachteiligt ist:
+            # DNF-Konzepte, Checkerboard, MONK, ueberlappende Regeln, modulare Summe.
+            _cart_hard_prefixes = (
+                "synth_dnf_", "synth_checkerboard_", "synth_monk",
+                "synth_overlap_", "synth_modsum_",
+            )
+            resolved.extend(
+                name for name in registry
+                if any(name.startswith(p) for p in _cart_hard_prefixes)
+            )
+        elif normalized == "ruleset_hard":
+            # Datensaetze, bei denen Rule Sets strukturell benachteiligt
+            # sind (CART ist besser): tiefe Baeume, sequentielle Splits,
+            # hierarchische Interaktionen.
+            _ruleset_hard_prefixes = (
+                "synth_deeptree_", "synth_seqthresh_", "synth_hierarch_",
+            )
+            resolved.extend(
+                name for name in registry
+                if any(name.startswith(p) for p in _ruleset_hard_prefixes)
+            )
+        elif normalized == "rule_hard":
+            # Datensaetze, die fuer ALLE regelbasierten Schaetzer (CART +
+            # Rule Sets) schwierig sind – nicht achsenparallel trennbar.
+            _rule_hard_prefixes = (
+                "synth_circle", "synth_diagonal_", "synth_spiral",
+                "synth_rings_",
+            )
+            resolved.extend(
+                name for name in registry
+                if any(name.startswith(p) for p in _rule_hard_prefixes)
+            )
         elif normalized == "pmlb":
             resolved.extend(
                 name for name in registry if name.startswith("pmlb_")
@@ -723,6 +756,626 @@ def generate_imbalanced_dataset(
     return X, y
 
 
+# ---------------------------------------------------------------------------
+# Datensaetze, die CART-Schwaechen gezielt exponieren (DNF, Checkerboard, …)
+# ---------------------------------------------------------------------------
+
+
+def generate_dnf_concept_dataset(
+    n_disjuncts: int = 3,
+    n_conjuncts: int = 2,
+    n_noise_features: int = 10,
+    n_samples: int = 2000,
+    noise_rate: float = 0.0,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz mit einer DNF-Entscheidungsregel.
+
+    Das wahre Konzept ist eine Disjunktion von ``n_disjuncts`` Konjunktionen,
+    wobei jede Konjunktion ``n_conjuncts`` verschiedene binaere Features
+    erfordert.  CART muss dafuer Teilbaeume duplizieren; Rule Sets bilden
+    jedes Disjunkt direkt als separate Regel ab.
+
+    Parameters
+    ----------
+    n_disjuncts : int
+        Anzahl der Disjunkte (OR-Glieder).
+    n_conjuncts : int
+        Anzahl der Konjunkte pro Disjunkt (AND-Glieder).
+    n_noise_features : int
+        Zusaetzliche irrelevante binaere Features.
+    n_samples : int
+        Anzahl Instanzen.
+    noise_rate : float
+        Anteil zufaellig geflippter Labels (0 = kein Rauschen).
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    n_relevant = n_disjuncts * n_conjuncts
+    n_features = n_relevant + n_noise_features
+    X = rng.integers(0, 2, size=(n_samples, n_features))
+
+    # DNF: y = OR_d( AND_c( X[:, d*n_conjuncts + c] == 1 ) )
+    y = np.zeros(n_samples, dtype=int)
+    for d in range(n_disjuncts):
+        clause = np.ones(n_samples, dtype=bool)
+        for c in range(n_conjuncts):
+            clause &= X[:, d * n_conjuncts + c] == 1
+        y |= clause.astype(int)
+
+    # Label-Rauschen
+    if noise_rate > 0:
+        flip = rng.random(n_samples) < noise_rate
+        y[flip] = 1 - y[flip]
+
+    # Spalten permutieren
+    perm = rng.permutation(n_features)
+    X = X[:, perm]
+    return X, y
+
+
+def generate_checkerboard_dataset(
+    n_tiles: int = 4,
+    n_noise_features: int = 8,
+    n_samples: int = 2000,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen 2D-Schachbrett-Datensatz mit Rausch-Features.
+
+    Das Schachbrett-Muster (XOR auf quantisierten kontinuierlichen Features)
+    erfordert bei CART O(n_tiles^2) Blaetter, waehrend Rule Sets die
+    Regionen direkt als Regeln formulieren koennen.
+
+    Parameters
+    ----------
+    n_tiles : int
+        Anzahl Kacheln pro Achse (z.B. 4 → 4×4-Schachbrett).
+    n_noise_features : int
+        Zusaetzliche Uniform-Rausch-Features.
+    n_samples : int
+        Anzahl Instanzen.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    X_rel = rng.uniform(0, 1, size=(n_samples, 2))
+    tile_x = np.floor(X_rel[:, 0] * n_tiles).astype(int)
+    tile_y = np.floor(X_rel[:, 1] * n_tiles).astype(int)
+    y = ((tile_x + tile_y) % 2).astype(int)
+
+    X_noise = rng.uniform(0, 1, size=(n_samples, n_noise_features))
+    X = np.hstack([X_rel, X_noise])
+
+    perm = rng.permutation(X.shape[1])
+    X = X[:, perm]
+    return X, y
+
+
+def generate_monk1_dataset(
+    n_samples: int = 2000,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt den MONK-1 Datensatz (Disjunktion: (a1==a2) OR (a5==1)).
+
+    MONK-1 ist ein klassischer Benchmark fuer Regellerner.  Die Entscheidung
+    ist eine Disjunktion, die CART nur durch Subtree-Duplikation abbilden kann.
+
+    Attribute:
+        a1 in {1,2,3}, a2 in {1,2,3}, a3 in {1,2},
+        a4 in {1,2,3}, a5 in {1,2,3,4}, a6 in {1,2}
+
+    Parameters
+    ----------
+    n_samples : int
+        Anzahl Instanzen (Sampling mit Zuruecklegen falls > 432).
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    domains = [3, 3, 2, 3, 4, 2]  # a1..a6
+    n_total = 1
+    for d in domains:
+        n_total *= d  # 432
+
+    # Volle Enumeration
+    rows = np.zeros((n_total, 6), dtype=int)
+    idx = 0
+    for a1 in range(domains[0]):
+        for a2 in range(domains[1]):
+            for a3 in range(domains[2]):
+                for a4 in range(domains[3]):
+                    for a5 in range(domains[4]):
+                        for a6 in range(domains[5]):
+                            rows[idx] = [a1, a2, a3, a4, a5, a6]
+                            idx += 1
+
+    # MONK-1 Regel: (a1 == a2) OR (a5 == 1)
+    # (0-basiert: a5 == 1 → rows[:, 4] == 1)
+    y_full = ((rows[:, 0] == rows[:, 1]) | (rows[:, 4] == 1)).astype(int)
+
+    if n_samples >= n_total:
+        X, y = rows, y_full
+    else:
+        chosen = rng.choice(n_total, size=n_samples, replace=True)
+        X, y = rows[chosen], y_full[chosen]
+
+    return X.astype(float), y
+
+
+def generate_monk3_dataset(
+    n_samples: int = 2000,
+    noise_rate: float = 0.05,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt den MONK-3 Datensatz (Konjunktion + Ausnahme + Rauschen).
+
+    MONK-3 Regel: (a5 != 3 AND a4 != 1) OR (a5 == 3 AND a2 != 3),
+    plus ``noise_rate`` zufaellig geflippter Labels.
+
+    Parameters
+    ----------
+    n_samples : int
+        Anzahl Instanzen.
+    noise_rate : float
+        Anteil zufaellig geflippter Labels (Standard: 5 %).
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    domains = [3, 3, 2, 3, 4, 2]
+    n_total = 1
+    for d in domains:
+        n_total *= d
+
+    rows = np.zeros((n_total, 6), dtype=int)
+    idx = 0
+    for a1 in range(domains[0]):
+        for a2 in range(domains[1]):
+            for a3 in range(domains[2]):
+                for a4 in range(domains[3]):
+                    for a5 in range(domains[4]):
+                        for a6 in range(domains[5]):
+                            rows[idx] = [a1, a2, a3, a4, a5, a6]
+                            idx += 1
+
+    # MONK-3: (a5 != 3 AND a4 != 1) OR (a5 == 3 AND a2 != 3)
+    # 0-basiert: a5 != 3 → rows[:, 4] != 3; a4 != 1 → rows[:, 3] != 1; usw.
+    y_full = (
+        ((rows[:, 4] != 3) & (rows[:, 3] != 1))
+        | ((rows[:, 4] == 3) & (rows[:, 1] != 2))
+    ).astype(int)
+
+    if n_samples >= n_total:
+        X, y = rows, y_full
+    else:
+        chosen = rng.choice(n_total, size=n_samples, replace=True)
+        X, y = rows[chosen], y_full[chosen]
+
+    # Label-Rauschen
+    if noise_rate > 0:
+        flip = rng.random(len(y)) < noise_rate
+        y[flip] = 1 - y[flip]
+
+    return X.astype(float), y
+
+
+def generate_overlapping_rules_dataset(
+    n_rules: int = 4,
+    n_features_per_rule: int = 2,
+    n_noise_features: int = 10,
+    n_samples: int = 2000,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz mit mehreren unabhaengigen, ueberlappenden Regeln.
+
+    Jede Regel definiert eine positive Region durch einen Schwellenwert auf
+    ``n_features_per_rule`` kontinuierlichen Features.  Die Klasse ist 1,
+    wenn mindestens eine Regel feuert.  CART hat Schwierigkeiten, weil die
+    Regeln nicht hierarchisch sind.
+
+    Parameters
+    ----------
+    n_rules : int
+        Anzahl unabhaengiger Regeln.
+    n_features_per_rule : int
+        Anzahl Features pro Regel.
+    n_noise_features : int
+        Zusaetzliche Rausch-Features.
+    n_samples : int
+        Anzahl Instanzen.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    n_relevant = n_rules * n_features_per_rule
+    n_total_features = n_relevant + n_noise_features
+    X = rng.uniform(0, 1, size=(n_samples, n_total_features))
+
+    y = np.zeros(n_samples, dtype=int)
+    for r in range(n_rules):
+        start = r * n_features_per_rule
+        end = start + n_features_per_rule
+        # Regel: alle Features in [0.6, 1.0]
+        fired = np.all(X[:, start:end] > 0.6, axis=1)
+        y[fired] = 1
+
+    # Spalten permutieren
+    perm = rng.permutation(n_total_features)
+    X = X[:, perm]
+    return X, y
+
+
+def generate_modular_sum_dataset(
+    n_relevant: int = 4,
+    n_noise_features: int = 8,
+    n_samples: int = 2000,
+    modulus: int = 3,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz, bei dem die Klasse von einer modularen Summe abhaengt.
+
+    y = (sum(X[:, :n_relevant]) mod modulus == 0).  Dieses Muster erzeugt
+    nicht-achsenparallele Entscheidungsgrenzen, die CART nur ineffizient
+    approximieren kann.
+
+    Parameters
+    ----------
+    n_relevant : int
+        Anzahl relevanter Features.
+    n_noise_features : int
+        Zusaetzliche Rausch-Features.
+    n_samples : int
+        Anzahl Instanzen.
+    modulus : int
+        Modulus fuer die Summenfunktion.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    n_total = n_relevant + n_noise_features
+    X = rng.integers(0, modulus + 1, size=(n_samples, n_total))
+    y = (np.sum(X[:, :n_relevant], axis=1) % modulus == 0).astype(int)
+
+    perm = rng.permutation(n_total)
+    X = X[:, perm]
+    return X.astype(float), y
+
+
+# ---------------------------------------------------------------------------
+# Datensaetze, bei denen CART besser als Rule Sets abschneidet
+# (tiefe Hierarchien, sequentielle Splits – natuerliche Baumstrukturen)
+# ---------------------------------------------------------------------------
+
+
+def generate_deep_tree_dataset(
+    depth: int = 5,
+    n_noise_features: int = 8,
+    n_samples: int = 2000,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz, dessen wahres Konzept ein tiefer Binaerbaum ist.
+
+    An jedem inneren Knoten wird auf ein anderes Feature gesplittet
+    (Feature i, Schwellenwert 0.5).  Das Blatt bestimmt die Klasse (0 oder 1,
+    alternierend).  CART bildet diesen Baum direkt ab; Rule Sets brauchen
+    2^(depth-1) Regeln, weil jeder Pfad eine separate Konjunktion ist.
+
+    Parameters
+    ----------
+    depth : int
+        Tiefe des wahren Baums (benoetigt mindestens ``depth`` Features).
+    n_noise_features : int
+        Zusaetzliche irrelevante Features.
+    n_samples : int
+        Anzahl Instanzen.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    n_relevant = depth
+    n_features = n_relevant + n_noise_features
+    X = rng.uniform(0, 1, size=(n_samples, n_features))
+
+    # Baum-Traversierung: An Tiefe t wird auf Feature t gesplittet (Schwelle 0.5).
+    # Der Blattpfad codiert eine Binärzahl → Klasse = Parität der Pfadrichtungen.
+    y = np.zeros(n_samples, dtype=int)
+    for i in range(n_samples):
+        node = 0
+        for t in range(depth):
+            if X[i, t] > 0.5:
+                node = 2 * node + 2
+            else:
+                node = 2 * node + 1
+        y[i] = node % 2
+
+    perm = rng.permutation(n_features)
+    X = X[:, perm]
+    return X, y
+
+
+def generate_sequential_threshold_dataset(
+    n_bins: int = 5,
+    n_noise_features: int = 8,
+    n_samples: int = 2000,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz mit sequentiellen Schwellenwerten auf einem Feature.
+
+    Die Klasse haengt davon ab, in welches von ``n_bins`` Intervallen ein
+    einziges kontinuierliches Feature faellt: gerade Bins → Klasse 0, ungerade
+    → Klasse 1.  CART braucht nur (n_bins - 1) Splits; Rule Sets muessen
+    fuer jedes Intervall eine eigene Regel mit Ober- und Untergrenze erzeugen.
+
+    Parameters
+    ----------
+    n_bins : int
+        Anzahl Intervalle (abwechselnd Klasse 0/1).
+    n_noise_features : int
+        Zusaetzliche irrelevante Features.
+    n_samples : int
+        Anzahl Instanzen.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    n_features = 1 + n_noise_features
+    X = rng.uniform(0, 1, size=(n_samples, n_features))
+    # Relevantes Feature: Spalte 0
+    bin_idx = np.clip(np.floor(X[:, 0] * n_bins).astype(int), 0, n_bins - 1)
+    y = (bin_idx % 2).astype(int)
+
+    perm = rng.permutation(n_features)
+    X = X[:, perm]
+    return X, y
+
+
+def generate_hierarchical_interaction_dataset(
+    n_context_features: int = 3,
+    n_response_features: int = 3,
+    n_noise_features: int = 8,
+    n_samples: int = 2000,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz mit hierarchischer Feature-Interaktion.
+
+    Erst bestimmt ein Kontext-Feature, welches Response-Feature relevant ist.
+    Die Klasse haengt dann vom Wert des ausgewaehlten Response-Features ab.
+    CART bildet dies natuerlich als Baum (erst split auf Kontext, dann auf
+    Response); Rule Sets koennen die bedingte Relevanz nicht kompakt abbilden.
+
+    Parameters
+    ----------
+    n_context_features : int
+        Anzahl moeglicher Kontexte (ein Feature, n Werte).
+    n_response_features : int
+        Anzahl Response-Features (eins pro Kontext relevant).
+    n_noise_features : int
+        Zusaetzliche irrelevante Features.
+    n_samples : int
+        Anzahl Instanzen.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    n_used_responses = min(n_context_features, n_response_features)
+    n_features = 1 + n_response_features + n_noise_features  # 1 Kontext + Responses + Noise
+    X = rng.uniform(0, 1, size=(n_samples, n_features))
+
+    # Kontext-Feature (Spalte 0) wird in n_context_features Bins quantisiert.
+    context = np.clip(
+        np.floor(X[:, 0] * n_context_features).astype(int), 0, n_context_features - 1
+    )
+    # Je nach Kontext ist ein anderes Response-Feature relevant.
+    y = np.zeros(n_samples, dtype=int)
+    for i in range(n_samples):
+        resp_idx = context[i] % n_used_responses
+        y[i] = int(X[i, 1 + resp_idx] > 0.5)
+
+    perm = rng.permutation(n_features)
+    X = X[:, perm]
+    return X, y
+
+
+# ---------------------------------------------------------------------------
+# Datensaetze, die fuer ALLE regelbasierten Schaetzer schwierig sind
+# (nicht achsenparallel trennbar → SVM, kNN, etc. sind besser)
+# ---------------------------------------------------------------------------
+
+
+def generate_circle_boundary_dataset(
+    n_noise_features: int = 8,
+    n_samples: int = 2000,
+    radius: float = 0.7,
+    noise_std: float = 0.05,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz mit kreisfoermiger Entscheidungsgrenze.
+
+    Klasse 1, wenn der Punkt innerhalb eines Kreises liegt (euklidischer
+    Abstand vom Ursprung < radius).  Achsenparallele Regeln (CART und Rule
+    Sets) muessen den Kreis durch viele Rechtecke approximieren.  SVM mit
+    RBF-Kernel oder kNN loesen dies trivial.
+
+    Parameters
+    ----------
+    n_noise_features : int
+        Zusaetzliche Rausch-Features.
+    n_samples : int
+        Anzahl Instanzen.
+    radius : float
+        Radius der Kreisgrenze (Features in [0, 1], Mittelpunkt (0.5, 0.5)).
+    noise_std : float
+        Gauss-Rauschen auf den Radius.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    X_rel = rng.uniform(0, 1, size=(n_samples, 2))
+    dist = np.sqrt((X_rel[:, 0] - 0.5) ** 2 + (X_rel[:, 1] - 0.5) ** 2)
+    effective_radius = radius / 2  # skaliert auf [0, 1]-Raum
+    y = (dist + rng.normal(0, noise_std, n_samples) < effective_radius).astype(int)
+
+    X_noise = rng.uniform(0, 1, size=(n_samples, n_noise_features))
+    X = np.hstack([X_rel, X_noise])
+    perm = rng.permutation(X.shape[1])
+    X = X[:, perm]
+    return X, y
+
+
+def generate_diagonal_boundary_dataset(
+    n_relevant: int = 4,
+    n_noise_features: int = 8,
+    n_samples: int = 2000,
+    noise_std: float = 0.1,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz mit diagonaler (45°) Entscheidungsgrenze.
+
+    Die wahre Grenze ist eine Hyperebene sum(X[:, :n_relevant]) > Schwelle.
+    Achsenparallele Methoden brauchen eine Treppenfunktion; lineare Modelle,
+    SVM oder kNN loesen dies direkt.
+
+    Parameters
+    ----------
+    n_relevant : int
+        Anzahl relevanter Features (die Summe bestimmt die Klasse).
+    n_noise_features : int
+        Zusaetzliche irrelevante Features.
+    n_samples : int
+        Anzahl Instanzen.
+    noise_std : float
+        Gauss-Rauschen auf die Entscheidungsfunktion.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    n_features = n_relevant + n_noise_features
+    X = rng.uniform(0, 1, size=(n_samples, n_features))
+    decision = np.sum(X[:, :n_relevant], axis=1) + rng.normal(0, noise_std, n_samples)
+    threshold = n_relevant / 2.0  # Mittelpunkt
+    y = (decision > threshold).astype(int)
+
+    perm = rng.permutation(n_features)
+    X = X[:, perm]
+    return X, y
+
+
+def generate_spiral_dataset(
+    n_samples: int = 2000,
+    n_noise_features: int = 8,
+    noise_std: float = 0.15,
+    n_turns: float = 1.5,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Two-Spirals-Datensatz mit Rausch-Features.
+
+    Zwei ineinander verschlungene Spiralen sind ein klassisches Benchmark
+    fuer nichtlineare Klassifizierer.  Weder CART noch Rule Sets koennen
+    die Spiralform effizient approximieren, waehrend kNN und neuronale
+    Netze dies gut schaffen.
+
+    Parameters
+    ----------
+    n_samples : int
+        Gesamtzahl Instanzen (je Haelfte pro Spirale).
+    n_noise_features : int
+        Zusaetzliche Rausch-Features.
+    noise_std : float
+        Radiales Rauschen.
+    n_turns : float
+        Anzahl Spiralwindungen.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    n_half = n_samples // 2
+    theta = np.sqrt(rng.uniform(0, 1, n_half)) * n_turns * 2 * np.pi
+
+    # Spirale 1
+    r1 = theta + rng.normal(0, noise_std, n_half)
+    x1 = r1 * np.cos(theta)
+    y1 = r1 * np.sin(theta)
+
+    # Spirale 2 (180° gedreht)
+    r2 = theta + rng.normal(0, noise_std, n_half)
+    x2 = -r2 * np.cos(theta)
+    y2 = -r2 * np.sin(theta)
+
+    X_rel = np.vstack([
+        np.column_stack([x1, y1]),
+        np.column_stack([x2, y2]),
+    ])
+    labels = np.concatenate([np.zeros(n_half), np.ones(n_half)]).astype(int)
+
+    X_noise = rng.uniform(
+        X_rel.min(), X_rel.max(), size=(n_samples, n_noise_features)
+    )
+    X = np.hstack([X_rel, X_noise])
+
+    # Shuffle und permutiere Spalten
+    shuffle = rng.permutation(n_samples)
+    X = X[shuffle]
+    labels = labels[shuffle]
+    perm = rng.permutation(X.shape[1])
+    X = X[:, perm]
+    return X, labels
+
+
+def generate_concentric_rings_dataset(
+    n_rings: int = 3,
+    n_noise_features: int = 8,
+    n_samples: int = 2000,
+    noise_std: float = 0.05,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz mit konzentrischen Ringen (alternierende Klassen).
+
+    Ring i hat Klasse (i mod 2).  Das Muster erfordert kreisfoermige
+    Entscheidungsgrenzen, die achsenparallele Methoden nur grob approximieren.
+
+    Parameters
+    ----------
+    n_rings : int
+        Anzahl Ringe.
+    n_noise_features : int
+        Zusaetzliche Rausch-Features.
+    n_samples : int
+        Anzahl Instanzen.
+    noise_std : float
+        Radiales Gauss-Rauschen.
+    random_state : int or None
+        Seed.
+    """
+    rng = np.random.default_rng(random_state)
+    angle = rng.uniform(0, 2 * np.pi, n_samples)
+    # Gleichmaessig auf Ringe verteilen
+    ring_idx = rng.integers(0, n_rings, n_samples)
+    # Radius: Ring i hat Radius i/n_rings (normiert)
+    radius = (ring_idx + 0.5) / n_rings + rng.normal(0, noise_std, n_samples)
+    X_rel = np.column_stack([radius * np.cos(angle), radius * np.sin(angle)])
+    y = (ring_idx % 2).astype(int)
+
+    X_noise = rng.uniform(-1, 1, size=(n_samples, n_noise_features))
+    X = np.hstack([X_rel, X_noise])
+    perm = rng.permutation(X.shape[1])
+    X = X[:, perm]
+    return X, y
+
+
 # -- Standardkonfigurationen fuer synthetische Datensaetze ------------------
 
 _SYNTH_CONFIGS: dict[str, dict] = {
@@ -771,6 +1424,129 @@ _SYNTH_CONFIGS: dict[str, dict] = {
     "synth_imbalanced_5pct": dict(
         generator=generate_imbalanced_dataset,
         params=dict(n_samples=2000, n_features=15, n_informative=6, imbalance_ratio=0.05, random_state=42),
+    ),
+    # --- CART-schwierige Datensaetze (Rule Sets sollten besser sein) ---
+    # DNF: einfach – 3 Disjunkte mit je 2 Konjunkten
+    "synth_dnf_3x2": dict(
+        generator=generate_dnf_concept_dataset,
+        params=dict(n_disjuncts=3, n_conjuncts=2, n_noise_features=10, n_samples=2000, random_state=42),
+    ),
+    # DNF: komplex – 5 Disjunkte mit je 3 Konjunkten
+    "synth_dnf_5x3": dict(
+        generator=generate_dnf_concept_dataset,
+        params=dict(n_disjuncts=5, n_conjuncts=3, n_noise_features=15, n_samples=3000, random_state=42),
+    ),
+    # DNF: verrauscht
+    "synth_dnf_3x2_noisy": dict(
+        generator=generate_dnf_concept_dataset,
+        params=dict(n_disjuncts=3, n_conjuncts=2, n_noise_features=10, n_samples=2000, noise_rate=0.05, random_state=42),
+    ),
+    # Checkerboard: 4×4-Schachbrett
+    "synth_checkerboard_4x4": dict(
+        generator=generate_checkerboard_dataset,
+        params=dict(n_tiles=4, n_noise_features=8, n_samples=2000, random_state=42),
+    ),
+    # Checkerboard: 6×6-Schachbrett (schwieriger)
+    "synth_checkerboard_6x6": dict(
+        generator=generate_checkerboard_dataset,
+        params=dict(n_tiles=6, n_noise_features=8, n_samples=3000, random_state=42),
+    ),
+    # MONK-1: Disjunktion (a1==a2) OR (a5==1) – klassischer RL-Benchmark
+    "synth_monk1": dict(
+        generator=generate_monk1_dataset,
+        params=dict(n_samples=2000, random_state=42),
+    ),
+    # MONK-3: Konjunktion + Ausnahme + 5 % Rauschen
+    "synth_monk3": dict(
+        generator=generate_monk3_dataset,
+        params=dict(n_samples=2000, noise_rate=0.05, random_state=42),
+    ),
+    # Ueberlappende Subgruppen: 4 unabhaengige Regeln
+    "synth_overlap_4rules": dict(
+        generator=generate_overlapping_rules_dataset,
+        params=dict(n_rules=4, n_features_per_rule=2, n_noise_features=10, n_samples=2000, random_state=42),
+    ),
+    # Ueberlappende Subgruppen: 6 Regeln (schwieriger)
+    "synth_overlap_6rules": dict(
+        generator=generate_overlapping_rules_dataset,
+        params=dict(n_rules=6, n_features_per_rule=2, n_noise_features=12, n_samples=3000, random_state=42),
+    ),
+    # Modulare Summe: mod 3
+    "synth_modsum_mod3": dict(
+        generator=generate_modular_sum_dataset,
+        params=dict(n_relevant=4, n_noise_features=8, n_samples=2000, modulus=3, random_state=42),
+    ),
+    # Modulare Summe: mod 4 (schwieriger)
+    "synth_modsum_mod4": dict(
+        generator=generate_modular_sum_dataset,
+        params=dict(n_relevant=5, n_noise_features=10, n_samples=2500, modulus=4, random_state=42),
+    ),
+    # --- Ruleset-schwierige Datensaetze (CART sollte besser sein) ---
+    # Tiefer Baum: depth=5 → 16 Blaetter, Rule Sets brauchen 8 Regeln
+    "synth_deeptree_d5": dict(
+        generator=generate_deep_tree_dataset,
+        params=dict(depth=5, n_noise_features=8, n_samples=2000, random_state=42),
+    ),
+    # Tiefer Baum: depth=7 → 64 Blaetter, noch schwieriger fuer Rule Sets
+    "synth_deeptree_d7": dict(
+        generator=generate_deep_tree_dataset,
+        params=dict(depth=7, n_noise_features=8, n_samples=3000, random_state=42),
+    ),
+    # Sequentielle Schwellenwerte: 5 Bins auf einem Feature
+    "synth_seqthresh_5bin": dict(
+        generator=generate_sequential_threshold_dataset,
+        params=dict(n_bins=5, n_noise_features=8, n_samples=2000, random_state=42),
+    ),
+    # Sequentielle Schwellenwerte: 8 Bins (schwieriger)
+    "synth_seqthresh_8bin": dict(
+        generator=generate_sequential_threshold_dataset,
+        params=dict(n_bins=8, n_noise_features=10, n_samples=3000, random_state=42),
+    ),
+    # Hierarchische Interaktion: 3 Kontexte × 3 Responses
+    "synth_hierarch_3x3": dict(
+        generator=generate_hierarchical_interaction_dataset,
+        params=dict(n_context_features=3, n_response_features=3, n_noise_features=8, n_samples=2000, random_state=42),
+    ),
+    # Hierarchische Interaktion: 5 Kontexte × 5 Responses (schwieriger)
+    "synth_hierarch_5x5": dict(
+        generator=generate_hierarchical_interaction_dataset,
+        params=dict(n_context_features=5, n_response_features=5, n_noise_features=10, n_samples=3000, random_state=42),
+    ),
+    # --- Schwierig fuer ALLE regelbasierten Schaetzer (SVM/kNN besser) ---
+    # Kreisfoermige Grenze
+    "synth_circle": dict(
+        generator=generate_circle_boundary_dataset,
+        params=dict(n_noise_features=8, n_samples=2000, radius=0.7, noise_std=0.03, random_state=42),
+    ),
+    # Kreisfoermige Grenze: starkeres Rauschen
+    "synth_circle_noisy": dict(
+        generator=generate_circle_boundary_dataset,
+        params=dict(n_noise_features=8, n_samples=2000, radius=0.7, noise_std=0.08, random_state=42),
+    ),
+    # Diagonale Grenze: 4 relevante Features
+    "synth_diagonal_4d": dict(
+        generator=generate_diagonal_boundary_dataset,
+        params=dict(n_relevant=4, n_noise_features=8, n_samples=2000, noise_std=0.1, random_state=42),
+    ),
+    # Diagonale Grenze: 8 relevante Features (schwieriger)
+    "synth_diagonal_8d": dict(
+        generator=generate_diagonal_boundary_dataset,
+        params=dict(n_relevant=8, n_noise_features=8, n_samples=3000, noise_std=0.1, random_state=42),
+    ),
+    # Two Spirals
+    "synth_spiral": dict(
+        generator=generate_spiral_dataset,
+        params=dict(n_samples=2000, n_noise_features=8, noise_std=0.15, n_turns=1.5, random_state=42),
+    ),
+    # Konzentrische Ringe: 3 Ringe
+    "synth_rings_3": dict(
+        generator=generate_concentric_rings_dataset,
+        params=dict(n_rings=3, n_noise_features=8, n_samples=2000, noise_std=0.04, random_state=42),
+    ),
+    # Konzentrische Ringe: 5 Ringe (schwieriger)
+    "synth_rings_5": dict(
+        generator=generate_concentric_rings_dataset,
+        params=dict(n_rings=5, n_noise_features=8, n_samples=3000, noise_std=0.03, random_state=42),
     ),
 }
 
