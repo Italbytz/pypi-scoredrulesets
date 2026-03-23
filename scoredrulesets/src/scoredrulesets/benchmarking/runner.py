@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+import json as _json
+from dataclasses import asdict, dataclass, fields as dataclass_fields
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 import signal
@@ -33,6 +35,7 @@ class BenchmarkConfig:
     random_state: int = 0
     show_progress: bool = False
     timeout_seconds: float | None = 300.0  # max Sekunden pro Einzellauf (None = kein Limit)
+    checkpoint_path: str | Path | None = None  # JSONL-Datei fuer Checkpoint/Resume (None = deaktiviert)
 
 
 @dataclass
@@ -97,7 +100,25 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
     _validate_names("estimator", estimator_names, estimator_registry)
 
     total_repeats = max(1, int(config.repeats))
+
+    # -- Checkpoint laden (Resume) -------------------------------------------
+    checkpoint_path: Path | None = None
+    if config.checkpoint_path is not None:
+        checkpoint_path = Path(config.checkpoint_path)
+
+    existing_results: list[BenchmarkResult] = []
+    done_keys: set[tuple[str, str, int]] = set()
+    if checkpoint_path is not None:
+        existing_results, done_keys = load_checkpoint_results(checkpoint_path)
+        if done_keys:
+            print(
+                f"[checkpoint] {len(done_keys)} fertige Laeufe aus {checkpoint_path} geladen, "
+                f"ueberspringe diese.",
+                flush=True,
+            )
+
     total_runs = len(dataset_names) * len(estimator_names) * total_repeats
+    skipped_runs = 0
     overall_start = perf_counter()
     completed_runs = 0
 
@@ -109,7 +130,7 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
             total_runs=total_runs,
         )
 
-    results: list[BenchmarkResult] = []
+    new_results: list[BenchmarkResult] = []
     for dataset_name in dataset_names:
         bundle = dataset_registry[dataset_name]
         test_size = _resolve_test_size(bundle, config)
@@ -117,7 +138,6 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
         for repeat in range(total_repeats):
             split_seed = int(config.random_state + repeat)
             if is_no_split:
-                # No-Split-Modus: Train == Test (Ziel: perfekter Fit)
                 X_train = X_test = bundle.X
                 y_train = y_test = bundle.y
             else:
@@ -130,8 +150,22 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                 )
 
             for estimator_name in estimator_names:
+                run_key = (dataset_name, estimator_name, repeat)
+                run_number = completed_runs + skipped_runs + 1
+
+                # -- Resume: Lauf ueberspringen wenn schon im Checkpoint ----
+                if run_key in done_keys:
+                    skipped_runs += 1
+                    if config.show_progress:
+                        print(
+                            f"[progress {run_number}/{total_runs}] SKIP (checkpoint) "
+                            f"dataset={dataset_name} repeat={repeat + 1}/{total_repeats} "
+                            f"estimator={estimator_name}",
+                            flush=True,
+                        )
+                    continue
+
                 spec = estimator_registry[estimator_name]
-                run_number = completed_runs + 1
                 run_started = perf_counter()
                 n_classes = int(len(np.unique(bundle.y)))
                 if config.show_progress:
@@ -157,8 +191,13 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                     y_test=y_test,
                     timeout_seconds=config.timeout_seconds,
                 )
-                results.append(result)
+                new_results.append(result)
                 completed_runs += 1
+
+                # -- Checkpoint sofort schreiben -----------------------------
+                if checkpoint_path is not None:
+                    _append_checkpoint(checkpoint_path, result)
+
                 if config.show_progress:
                     _print_progress_end(
                         result=result,
@@ -168,7 +207,77 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                         total_elapsed=perf_counter() - overall_start,
                         completed_runs=completed_runs,
                     )
-    return results
+
+    if skipped_runs > 0:
+        print(
+            f"[checkpoint] {skipped_runs} Laeufe uebersprungen, "
+            f"{completed_runs} neue Laeufe durchgefuehrt.",
+            flush=True,
+        )
+
+    return existing_results + new_results
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint: JSONL-basiertes Speichern und Laden
+# ---------------------------------------------------------------------------
+
+_CHECKPOINT_VERSION = 1
+
+
+def load_checkpoint_results(
+    path: str | Path,
+) -> tuple[list[BenchmarkResult], set[tuple[str, str, int]]]:
+    """Laedt Ergebnisse aus einer JSONL-Checkpoint-Datei.
+
+    Returns
+    -------
+    results : list[BenchmarkResult]
+        Alle geladenen Ergebnisse.
+    done_keys : set[tuple[str, str, int]]
+        Set der fertigen ``(dataset, estimator, repeat)``-Schluessel.
+    """
+    path = Path(path)
+    results: list[BenchmarkResult] = []
+    done_keys: set[tuple[str, str, int]] = set()
+    if not path.exists():
+        return results, done_keys
+
+    valid_fields = {f.name for f in dataclass_fields(BenchmarkResult)}
+
+    with path.open("r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = _json.loads(line)
+                # Metadaten-Felder entfernen, die nicht zum Dataclass gehoeren
+                d.pop("_checkpoint_version", None)
+                d.pop("_checkpoint_ts", None)
+                # Unbekannte Felder entfernen (Vorwaertskompatibilitaet)
+                filtered = {k: v for k, v in d.items() if k in valid_fields}
+                result = BenchmarkResult(**filtered)
+                results.append(result)
+                done_keys.add((result.dataset, result.estimator, result.repeat))
+            except Exception as exc:
+                warnings.warn(
+                    f"[checkpoint] Zeile {line_no} in {path} uebersprungen "
+                    f"(moeglicherweise korrupt): {exc}",
+                    stacklevel=2,
+                )
+    return results, done_keys
+
+
+def _append_checkpoint(path: Path, result: BenchmarkResult) -> None:
+    """Haengt ein einzelnes BenchmarkResult als JSON-Zeile an die Checkpoint-Datei an."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    d = asdict(result)
+    d["_checkpoint_version"] = _CHECKPOINT_VERSION
+    d["_checkpoint_ts"] = perf_counter()  # monotoner Zeitstempel fuer Sortierung
+    with path.open("a", encoding="utf-8") as f:
+        f.write(_json.dumps(d, default=str) + "\n")
+        f.flush()
 
 
 def _resolve_test_size(bundle, config: BenchmarkConfig) -> float:
@@ -339,6 +448,11 @@ def _run_single(
     y_test,
     timeout_seconds: float | None = None,
 ) -> BenchmarkResult:
+    """Fuehrt einen einzelnen Benchmark-Lauf aus.
+
+    Faengt **alle** Fehler ab (Timeout, RuntimeError, ImportError, etc.) und
+    gibt immer ein BenchmarkResult zurueck – der aeussere Loop crasht nie.
+    """
     # -- Timeout-Setup (nur UNIX/macOS, Signal-basiert) -----------------------
     _alarm_was_set = False
     _old_handler = None
@@ -378,6 +492,27 @@ def _run_single(
             status="timeout",
             skip_reason=str(exc),
             error=str(exc),
+            f1_macro=None,
+            fit_seconds=None,
+            predict_seconds=None,
+            n_rules=None,
+            n_atoms=None,
+            ruleset_json_bytes=None,
+            n_train=len(y_train),
+            n_test=len(y_test),
+        )
+    except Exception as exc:
+        # Generischer Fang: ImportError, RuntimeError, ValueError, ...
+        # → Lauf als "error" markieren, aber weiter zum naechsten Lauf.
+        error_msg = f"{type(exc).__name__}: {exc}"
+        print(f"[ERROR] {estimator_name} | {dataset_name} | {error_msg}", flush=True)
+        return BenchmarkResult(
+            dataset=dataset_name,
+            estimator=estimator_name,
+            repeat=repeat,
+            status="error",
+            skip_reason=None,
+            error=error_msg,
             f1_macro=None,
             fit_seconds=None,
             predict_seconds=None,

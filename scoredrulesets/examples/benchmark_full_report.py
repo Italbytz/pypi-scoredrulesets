@@ -91,6 +91,7 @@ def main(
     timeout_seconds: float | None = 300.0,
     skip_synthetic: bool = False,
     include_pmlb: bool = False,
+    checkpoint_path: str | Path | None = "benchmarks/checkpoint.jsonl",
 ):
     # Alle Estimatoren und Datensaetze sammeln
     all_estimators = list(default_estimator_specs().keys())
@@ -107,14 +108,16 @@ def main(
     dn_display = ", ".join(dataset_names) if dataset_names else "(alle verfuegbaren)"
     en_display = ", ".join(estimator_names)
     timeout_display = f"{timeout_seconds:.0f}s" if timeout_seconds else "deaktiviert"
+    ckpt_display = str(checkpoint_path) if checkpoint_path else "deaktiviert"
 
     print(f"Starte Benchmark mit {len(estimator_names)} Schaetzern...")
-    print(f"  Estimatoren: {en_display}")
-    print(f"  Datensaetze:  {dn_display}")
-    print(f"  Wiederholungen: {repeats}")
-    print(f"  Timeout pro Lauf: {timeout_display}")
-    print(f"  Synthetisch: {'ja' if not skip_synthetic else 'nein'}")
-    print(f"  PMLB: {'ja' if include_pmlb else 'nein'}")
+    print(f"  Estimatoren:       {en_display}")
+    print(f"  Datensaetze:       {dn_display}")
+    print(f"  Wiederholungen:    {repeats}")
+    print(f"  Timeout pro Lauf:  {timeout_display}")
+    print(f"  Checkpoint:        {ckpt_display}")
+    print(f"  Synthetisch:       {'ja' if not skip_synthetic else 'nein'}")
+    print(f"  PMLB:              {'ja' if include_pmlb else 'nein'}")
 
     config = BenchmarkConfig(
         dataset_names=dataset_names,
@@ -128,6 +131,7 @@ def main(
         random_state=42,
         show_progress=True,
         timeout_seconds=timeout_seconds,
+        checkpoint_path=checkpoint_path,
     )
 
     # Fortschrittsanzeige
@@ -304,6 +308,17 @@ if __name__ == "__main__":
         action="store_true",
         help="PMLB-Datensaetze einschliessen (erfordert: pip install pmlb).",
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default="benchmarks/checkpoint.jsonl",
+        help="JSONL-Checkpoint-Datei fuer Resume (default: benchmarks/checkpoint.jsonl).",
+    )
+    parser.add_argument(
+        "--no-checkpoint",
+        action="store_true",
+        help="Checkpoint/Resume deaktivieren.",
+    )
     args = parser.parse_args()
 
     selected_log_file: Path | None
@@ -317,6 +332,7 @@ if __name__ == "__main__":
     ds_names = [x.strip() for x in args.datasets.split(",") if x.strip()] or None
     est_names = [x.strip() for x in args.estimators.split(",") if x.strip()] or None
     timeout = args.timeout if args.timeout > 0 else None
+    ckpt = None if args.no_checkpoint else args.checkpoint
 
     with _maybe_tee_to_file(selected_log_file):
         main(
@@ -327,5 +343,6 @@ if __name__ == "__main__":
             timeout_seconds=timeout,
             skip_synthetic=args.skip_synthetic,
             include_pmlb=args.include_pmlb,
+            checkpoint_path=ckpt,
         )
 

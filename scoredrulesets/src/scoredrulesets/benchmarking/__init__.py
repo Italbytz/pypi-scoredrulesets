@@ -32,6 +32,7 @@ from .runner import (
 	build_benchmark_leaderboard,
 	build_pareto_per_dataset,
 	compute_pareto_front,
+	load_checkpoint_results,
 	run_benchmarks,
 )
 
@@ -58,6 +59,7 @@ __all__ = [
 	"format_pareto_table_markdown",
 	"format_pareto_table_html",
 	"load_aggregated_results_json",
+	"load_checkpoint_results",
 	"plot_benchmark_heatmap",
 	"plot_benchmark_heatmap_combined",
 	"plot_benchmark_results",
