@@ -21,6 +21,8 @@ class BenchmarkConfig:
     test_size: float = 0.3
     use_paper_split_policy: bool = False
     include_online_uci: bool = True
+    include_synthetic: bool = True
+    include_pmlb: bool = False
     paper_uci_strict: bool = False
     repeats: int = 1
     random_state: int = 0
@@ -71,7 +73,11 @@ class AggregatedBenchmarkResult:
 
 
 def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
-    dataset_registry = load_dataset_registry(include_online_uci=bool(config.include_online_uci))
+    dataset_registry = load_dataset_registry(
+        include_online_uci=bool(config.include_online_uci),
+        include_synthetic=bool(config.include_synthetic),
+        include_pmlb=bool(config.include_pmlb),
+    )
     estimator_registry = default_estimator_specs()
 
     dataset_names = resolve_dataset_names(

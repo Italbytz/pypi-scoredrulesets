@@ -24,6 +24,7 @@ benchmark = [
   "pandas>=2.0"
 ]
 benchmark-uci = ["ucimlrepo>=0.0.7"]
+benchmark-pmlb = ["pmlb>=1.0"]
 dev = [
   "pytest>=7.4",
   "pandas>=2.0"

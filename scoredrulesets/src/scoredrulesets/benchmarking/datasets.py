@@ -288,10 +288,19 @@ def _to_label_encoded_1d(y_raw) -> np.ndarray:
     return encoded.astype(int)
 
 
-def load_dataset_registry(*, include_online_uci: bool = True) -> dict[str, DatasetBundle]:
+def load_dataset_registry(
+    *,
+    include_online_uci: bool = True,
+    include_synthetic: bool = True,
+    include_pmlb: bool = False,
+) -> dict[str, DatasetBundle]:
     registry = load_sklearn_datasets()
     registry.update(load_local_uci_datasets())
     registry.update(load_multiplexer_datasets())
+    if include_synthetic:
+        registry.update(load_synthetic_datasets())
+    if include_pmlb:
+        registry.update(load_pmlb_datasets())
     if include_online_uci:
         uci_bundles = load_online_paper_uci_datasets()
         registry.update(uci_bundles)
@@ -332,6 +341,19 @@ def resolve_dataset_names(
         elif normalized == "multiplexer":
             resolved.extend(
                 name for name in registry if name.startswith("mux_")
+            )
+        elif normalized == "synthetic":
+            resolved.extend(
+                name for name in registry if name.startswith("synth_")
+            )
+        elif normalized == "epistasis":
+            resolved.extend(
+                name for name in registry
+                if name.startswith("synth_epistasis") or "epistasis" in name.lower()
+            )
+        elif normalized == "pmlb":
+            resolved.extend(
+                name for name in registry if name.startswith("pmlb_")
             )
         else:
             # Veraltete Aliase automatisch auf kanonischen Namen umschreiben.
@@ -491,3 +513,342 @@ def load_multiplexer_datasets(
             no_split=True,
         )
     return bundles
+
+
+# ---------------------------------------------------------------------------
+# Synthetische biomedizinische / SNP-Datensaetze
+# ---------------------------------------------------------------------------
+
+
+def generate_epistasis_dataset(
+    n_samples: int = 1600,
+    n_snps: int = 20,
+    n_interacting: int = 2,
+    heritability: float = 0.4,
+    minor_allele_freq: float = 0.3,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen synthetischen Epistasie-Datensatz (SNP-SNP-Interaktion).
+
+    Die Klasse wird ausschliesslich durch eine Interaktion zwischen
+    ``n_interacting`` SNPs bestimmt; alle anderen SNPs sind Rausch-Features.
+    Das Modell emuliert das Verhalten von GAMETES: Die kausalen SNPs erzeugen
+    zusammen ein XOR-aehnliches Muster (kein Haupteffekt, nur Interaktion).
+
+    Parameters
+    ----------
+    n_samples : int
+        Anzahl Instanzen.
+    n_snps : int
+        Gesamtzahl der SNP-Features (inklusive kausaler SNPs).
+    n_interacting : int
+        Anzahl kausaler SNPs, die interagieren (2 oder 3 empfohlen).
+    heritability : float
+        Staerke des genetischen Signals (0 = kein Signal, 1 = perfekt trennbar).
+        Steuert die Penetranz-Tabelle.
+    minor_allele_freq : float
+        Minor-Allel-Frequenz fuer das Hardy-Weinberg-Gleichgewicht (0 < maf < 0.5).
+    random_state : int or None
+        Seed fuer Reproduzierbarkeit.
+
+    Returns
+    -------
+    X : np.ndarray, shape (n_samples, n_snps), dtype int  (Werte: 0, 1, 2)
+    y : np.ndarray, shape (n_samples,), dtype int  (0 oder 1)
+    """
+    rng = np.random.default_rng(random_state)
+    assert n_interacting <= n_snps, "n_interacting darf nicht groesser als n_snps sein"
+    assert 0 < minor_allele_freq < 0.5, "minor_allele_freq muss in (0, 0.5) liegen"
+
+    # SNP-Genotypen gemaess Hardy-Weinberg-Gleichgewicht
+    p = minor_allele_freq
+    hw_probs = [(1 - p) ** 2, 2 * p * (1 - p), p ** 2]  # P(0), P(1), P(2)
+    X = rng.choice(3, size=(n_samples, n_snps), p=hw_probs)
+
+    # Kausale SNPs: Die ersten n_interacting Features
+    causal = X[:, :n_interacting]
+
+    # XOR-aehnliche Interaktion: Klasse = 1, wenn die Summe der kausalen
+    # Allele ungerade ist (reine Epistasie, kein Haupteffekt).
+    interaction_signal = np.sum(causal, axis=1) % 2  # 0 oder 1
+
+    # Penetranz gemaess Heritabilitaet: P(krank | Signal=1) = 0.5 + h/2,
+    # P(krank | Signal=0) = 0.5 - h/2.  Bei h=1 → 1.0 / 0.0 (deterministisch).
+    pen_high = min(1.0, 0.5 + heritability / 2)
+    pen_low = max(0.0, 0.5 - heritability / 2)
+    probs = np.where(interaction_signal == 1, pen_high, pen_low)
+    y = (rng.random(n_samples) < probs).astype(int)
+
+    # Permutation der Feature-Spalten, damit die kausalen SNPs nicht immer
+    # vorne stehen (sonst ist der Benchmark zu einfach).
+    perm = rng.permutation(n_snps)
+    X = X[:, perm]
+
+    return X, y
+
+
+def generate_xor_parity_dataset(
+    n_bits: int = 6,
+    n_noise_features: int = 14,
+    n_samples: int = 2000,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen XOR-/Paritaets-Datensatz mit Rausch-Features.
+
+    Die Klasse ist die Paritaet (XOR) der ersten ``n_bits`` binaeren Features.
+    Zusaetzlich werden ``n_noise_features`` zufaellige binaere Features angehaengt.
+    Dieser Datensatz ist nicht-linear trennbar und erfordert konjunktive Regeln.
+
+    Parameters
+    ----------
+    n_bits : int
+        Anzahl der relevanten Paritaets-Bits.
+    n_noise_features : int
+        Anzahl irrelevanter Rausch-Features.
+    n_samples : int
+        Anzahl Instanzen.
+    random_state : int or None
+        Seed.
+
+    Returns
+    -------
+    X : np.ndarray, shape (n_samples, n_bits + n_noise_features), dtype int
+    y : np.ndarray, shape (n_samples,), dtype int (0 oder 1)
+    """
+    rng = np.random.default_rng(random_state)
+    total_features = n_bits + n_noise_features
+    X = rng.integers(0, 2, size=(n_samples, total_features))
+    y = np.bitwise_xor.reduce(X[:, :n_bits], axis=1)
+
+    # Spalten permutieren
+    perm = rng.permutation(total_features)
+    X = X[:, perm]
+
+    return X, y
+
+
+def generate_highdim_lowsample_dataset(
+    n_samples: int = 120,
+    n_features: int = 500,
+    n_informative: int = 5,
+    n_classes: int = 2,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen hochdimensionalen Datensatz mit wenigen Samples (p >> n).
+
+    Typisch fuer Genomik-Szenarien (z.B. Microarray, SNP-Panel): Viele Features,
+    wenige Patienten, nur wenige informative Features.
+
+    Parameters
+    ----------
+    n_samples : int
+        Anzahl Instanzen (typischerweise klein, z.B. 80–200).
+    n_features : int
+        Gesamtzahl Features (typischerweise gross, z.B. 200–2000).
+    n_informative : int
+        Anzahl tatsaechlich informativer Features.
+    n_classes : int
+        Anzahl Klassen.
+    random_state : int or None
+        Seed.
+
+    Returns
+    -------
+    X : np.ndarray, shape (n_samples, n_features)
+    y : np.ndarray, shape (n_samples,), dtype int
+    """
+    from sklearn.datasets import make_classification
+
+    X, y = make_classification(
+        n_samples=n_samples,
+        n_features=n_features,
+        n_informative=n_informative,
+        n_redundant=2,
+        n_clusters_per_class=1,
+        n_classes=n_classes,
+        flip_y=0.03,
+        class_sep=1.0,
+        random_state=random_state,
+    )
+    return X, y
+
+
+def generate_imbalanced_dataset(
+    n_samples: int = 1000,
+    n_features: int = 10,
+    n_informative: int = 5,
+    imbalance_ratio: float = 0.1,
+    *,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Erzeugt einen Datensatz mit starkem Klassen-Ungleichgewicht.
+
+    Simuliert seltene Krankheiten oder seltene Ereignisse.
+
+    Parameters
+    ----------
+    n_samples : int
+        Gesamtzahl Instanzen.
+    n_features : int
+        Anzahl Features.
+    n_informative : int
+        Anzahl informativer Features.
+    imbalance_ratio : float
+        Anteil der Minoritaetsklasse (z.B. 0.1 = 10 %).
+    random_state : int or None
+        Seed.
+
+    Returns
+    -------
+    X : np.ndarray, shape (n_samples, n_features)
+    y : np.ndarray, shape (n_samples,), dtype int (0 oder 1)
+    """
+    from sklearn.datasets import make_classification
+
+    n_minority = max(2, int(n_samples * imbalance_ratio))
+    n_majority = n_samples - n_minority
+    X, y = make_classification(
+        n_samples=n_samples,
+        n_features=n_features,
+        n_informative=n_informative,
+        n_redundant=2,
+        n_clusters_per_class=1,
+        weights=[1 - imbalance_ratio, imbalance_ratio],
+        flip_y=0.01,
+        random_state=random_state,
+    )
+    return X, y
+
+
+# -- Standardkonfigurationen fuer synthetische Datensaetze ------------------
+
+_SYNTH_CONFIGS: dict[str, dict] = {
+    # Epistasie: 2-Weg-Interaktion, mittel
+    "synth_epistasis_2way_easy": dict(
+        generator=generate_epistasis_dataset,
+        params=dict(n_samples=1600, n_snps=20, n_interacting=2, heritability=0.6, random_state=42),
+    ),
+    "synth_epistasis_2way_hard": dict(
+        generator=generate_epistasis_dataset,
+        params=dict(n_samples=1600, n_snps=20, n_interacting=2, heritability=0.2, random_state=42),
+    ),
+    # Epistasie: 3-Weg-Interaktion (schwieriger)
+    "synth_epistasis_3way": dict(
+        generator=generate_epistasis_dataset,
+        params=dict(n_samples=2000, n_snps=30, n_interacting=3, heritability=0.4, random_state=42),
+    ),
+    # Epistasie: hochdimensional (viele Rausch-SNPs)
+    "synth_epistasis_highdim": dict(
+        generator=generate_epistasis_dataset,
+        params=dict(n_samples=1600, n_snps=100, n_interacting=2, heritability=0.4, random_state=42),
+    ),
+    # XOR / Paritaet
+    "synth_xor_3bit": dict(
+        generator=generate_xor_parity_dataset,
+        params=dict(n_bits=3, n_noise_features=7, n_samples=2000, random_state=42),
+    ),
+    "synth_xor_5bit": dict(
+        generator=generate_xor_parity_dataset,
+        params=dict(n_bits=5, n_noise_features=15, n_samples=2000, random_state=42),
+    ),
+    # p >> n (Genomik-Szenario)
+    "synth_highdim_p500_n120": dict(
+        generator=generate_highdim_lowsample_dataset,
+        params=dict(n_samples=120, n_features=500, n_informative=5, random_state=42),
+    ),
+    "synth_highdim_p1000_n80": dict(
+        generator=generate_highdim_lowsample_dataset,
+        params=dict(n_samples=80, n_features=1000, n_informative=4, random_state=42),
+    ),
+    # Imbalanced (seltene Krankheit)
+    "synth_imbalanced_10pct": dict(
+        generator=generate_imbalanced_dataset,
+        params=dict(n_samples=1000, n_features=12, n_informative=5, imbalance_ratio=0.1, random_state=42),
+    ),
+    "synth_imbalanced_5pct": dict(
+        generator=generate_imbalanced_dataset,
+        params=dict(n_samples=2000, n_features=15, n_informative=6, imbalance_ratio=0.05, random_state=42),
+    ),
+}
+
+
+def load_synthetic_datasets() -> dict[str, DatasetBundle]:
+    """Erzeugt alle vordefinierten synthetischen Benchmark-Datensaetze."""
+    bundles: dict[str, DatasetBundle] = {}
+    for name, cfg in _SYNTH_CONFIGS.items():
+        X, y = cfg["generator"](**cfg["params"])
+        bundles[name] = DatasetBundle(
+            name=name,
+            X=np.asarray(X, dtype=float),
+            y=np.asarray(y, dtype=int),
+            source="synthetic",
+        )
+    return bundles
+
+
+# ---------------------------------------------------------------------------
+# pmlb-Datensaetze (Penn Machine Learning Benchmarks)
+# ---------------------------------------------------------------------------
+
+# Kuratierte Auswahl biomedizinisch relevanter pmlb-Datensaetze.
+# Enthaelt GAMETES-Epistasie-Datensaetze und weitere interessante Probleme.
+_PMLB_DATASET_NAMES: tuple[str, ...] = (
+    # GAMETES Epistasie (2-Weg, verschiedene Heritabilitaeten / EDMs)
+    "GAMETES_Epistasis_2-Way_20atts_0.1H_EDM-1_1",
+    "GAMETES_Epistasis_2-Way_20atts_0.4H_EDM-1_1",
+    "GAMETES_Epistasis_2-Way_1000atts_0.4H_EDM-1_EDM-1_1",
+    # GAMETES Epistasie (3-Weg)
+    "GAMETES_Epistasis_3-Way_20atts_0.2H_EDM-1_1",
+    # Heterogeneous (Mischung aus Haupteffekt + Interaktion)
+    "GAMETES_Heterogeneous_20atts_1600_Het_0.4_0.2_50_EDM-2_001",
+    # Weitere biomedizinisch relevante Datensaetze
+    "saheart",       # South-African Heart Disease
+    "pima",          # Pima-Indians Diabetes
+    "analcatdata_aids",  # AIDS-Daten
+)
+
+
+def load_pmlb_datasets() -> dict[str, DatasetBundle]:
+    """Laedt kuratierte Datensaetze aus der Penn Machine Learning Benchmark Suite.
+
+    Benoetigt ``pip install pmlb``.  Gibt ein leeres Dict zurueck, wenn pmlb
+    nicht installiert ist oder der Download fehlschlaegt.
+
+    Returns
+    -------
+    dict[str, DatasetBundle]
+        Mapping ``pmlb_<name>`` → DatasetBundle.
+    """
+    try:
+        import pmlb
+    except ImportError:
+        return {}
+
+    bundles: dict[str, DatasetBundle] = {}
+    for ds_name in _PMLB_DATASET_NAMES:
+        try:
+            df = pmlb.fetch_data(ds_name, local_cache_dir=None)
+            if "target" not in df.columns:
+                continue
+            y_raw = df["target"].values
+            X_raw = df.drop(columns=["target"]).values
+            X = np.asarray(X_raw, dtype=float)
+            _, y = np.unique(y_raw, return_inverse=True)
+            y = y.astype(int)
+            if X.shape[0] < 10 or X.shape[1] < 1:
+                continue
+            bundle_name = f"pmlb_{ds_name}"
+            bundles[bundle_name] = DatasetBundle(
+                name=bundle_name,
+                X=X,
+                y=y,
+                source=f"pmlb:{ds_name}",
+            )
+        except Exception:
+            continue
+    return bundles
+
+
