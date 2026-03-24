@@ -153,7 +153,7 @@ def test_rulekit_wrapper_passes_training_labels_to_transform(monkeypatch):
         _fake_build_backend_estimator,
     )
     monkeypatch.setattr(
-        "scoredrulesets.estimators.sklearn_wrapper.rulekit_to_scored_ruleset",
+        "scoredrulesets.estimators.ruleset_transform.rulekit_to_scored_ruleset",
         _fake_rulekit_to_scored_ruleset,
     )
 

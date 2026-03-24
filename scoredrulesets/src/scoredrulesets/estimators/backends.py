@@ -11,7 +11,9 @@ from sklearn.tree import DecisionTreeClassifier
 
 
 # ---------------------------------------------------------------------------
-# Java / JVM helpers  (needed by rulekit backend)
+# Java / JVM helpers  (needed by rulekit backend — optional extra [rulekit])
+# These functions are only called when backend="rulekit" is selected.
+# Install with: pip install 'scoredrulesets[rulekit]'
 # ---------------------------------------------------------------------------
 
 def _ensure_java_home() -> None:
@@ -187,7 +189,8 @@ def build_backend_estimator(
             jvm_hint = _rulekit_jvm_hint()
             raise ImportError(
                 "backend='rulekit' konnte die JVM nicht starten. "
-                "Pruefe JAVA_HOME und den JPype-JVM-Pfad. "
+                "Installiere mit: pip install 'scoredrulesets[rulekit]' und pruefe "
+                "JAVA_HOME und den JPype-JVM-Pfad. "
                 f"{jvm_hint} Fehler: {e}"
             ) from e
 
@@ -278,7 +281,8 @@ def _resolve_rulekit_class():
     except (FileNotFoundError, sp.TimeoutExpired, RuntimeError) as e:
         raise ImportError(
             "backend='rulekit' benötigt Java, aber kein Java gefunden oder funktionsfähig. "
-            "Bitte installiere Java (JDK 11+). "
+            "Installiere mit: pip install 'scoredrulesets[rulekit]' und stelle sicher, "
+            "dass Java (JDK 11+) installiert ist. "
             f"Fehler: {e}"
         ) from e
 
@@ -302,7 +306,7 @@ def _resolve_rulekit_class():
 
     raise ImportError(
         "backend='rulekit' braucht das 'rulekit' Paket. "
-        "Installiere mit: pip install rulekit. "
+        "Installiere mit: pip install 'scoredrulesets[rulekit]'. "
         "Beachte: RuleKit benötigt Java (JDK 11+). "
         "Geprueft wurden: "
         + ", ".join(tried)
@@ -334,7 +338,7 @@ def _resolve_exstracs_class():
 
     raise ImportError(
         "backend='exstracs' braucht scikit-exstracs (Importnamen: skExSTraCS oder skexstracs). "
-        "Installiere mit: pip install scikit-exstracs. "
+        "Installiere mit: pip install 'scoredrulesets[exstracs]'. "
         "Geprueft wurden: "
         + ", ".join(tried)
     )

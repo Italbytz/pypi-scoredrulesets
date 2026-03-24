@@ -616,7 +616,8 @@ def _run_single_inner(
         )
     except ImportError as exc:
         raise RuntimeError(
-            f"Fehlende Abhängigkeit für '{estimator_name}': {exc}"
+            f"Fehlende Abhängigkeit für '{estimator_name}': {exc}. "
+            f"Tipp: pip install 'scoredrulesets[all]' installiert alle optionalen Backends."
         ) from exc
     except RuntimeError:
         raise  # F1-Validierung und Init-Fehler durchlassen

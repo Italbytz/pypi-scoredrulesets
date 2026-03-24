@@ -19,6 +19,13 @@ dependencies = [
 
 [project.optional-dependencies]
 hs = ["imodels>=1.4.0"]
+exstracs = ["scikit-ExSTraCS>=3.0"]
+rulekit = ["rulekit>=2.0", "jpype1>=1.4"]
+all = [
+  "scoredrulesets[hs]",
+  "scoredrulesets[exstracs]",
+  "scoredrulesets[rulekit]",
+]
 benchmark = [
   "matplotlib>=3.8",
   "pandas>=2.0"
@@ -40,5 +47,7 @@ where = ["src"]
 testpaths = ["tests"]
 markers = [
   "hs: optionaler Integrationstest fuer das HS-Backend (imodels)",
+  "exstracs: optionaler Integrationstest fuer das ExSTraCS-Backend (scikit-ExSTraCS)",
+  "rulekit: optionaler Integrationstest fuer das RuleKit-Backend (rulekit + jpype1 + Java)",
 ]
 

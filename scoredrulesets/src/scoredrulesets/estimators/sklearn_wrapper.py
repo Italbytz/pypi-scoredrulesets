@@ -17,8 +17,6 @@ from ..schema import ScoredRuleSet
 from .backends import build_backend_estimator
 from .base import BaseRuleSetEstimator
 from .tree_transform import TreeTransformParams, estimator_to_scored_ruleset
-from .ruleset_transform import rulekit_to_scored_ruleset, exstracs_to_scored_ruleset
-from .exstracs_shrinking import ExSTraCSPruningParams, exstracs_apply_all_shrinking
 
 
 class ScoredRuleSetClassifier(BaseRuleSetEstimator):
@@ -133,6 +131,8 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         backend_lower = self.backend.lower()
         
         if backend_lower == "rulekit":
+            from .ruleset_transform import rulekit_to_scored_ruleset
+
             self.ruleset_ = rulekit_to_scored_ruleset(
                 self.estimator_,
                 self.classes_.tolist(),
@@ -149,6 +149,8 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "Bitte rulefit.py auf Fehler pruefen."
                 )
         elif backend_lower == "exstracs":
+            from .ruleset_transform import exstracs_to_scored_ruleset
+
             self.ruleset_ = exstracs_to_scored_ruleset(
                 estimator=self.estimator_,
                 class_labels=self.classes_.tolist(),
@@ -207,6 +209,8 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:
         """Wende ExSTraCS Shrinking-Parameter an"""
+        from .exstracs_shrinking import ExSTraCSPruningParams, exstracs_apply_all_shrinking
+
         sanitized = self._sanitize_exstracs_params(self.exstracs_params)
         params = ExSTraCSPruningParams(**sanitized)
 
@@ -232,6 +236,8 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     @staticmethod
     def _sanitize_exstracs_params(exstracs_params: dict[str, Any] | None) -> dict[str, Any]:
         """Filtere unbekannte ExSTraCS-Keys weg, damit Alt-Konfigurationen robust bleiben."""
+        from .exstracs_shrinking import ExSTraCSPruningParams
+
         if not exstracs_params:
             return {}
 
