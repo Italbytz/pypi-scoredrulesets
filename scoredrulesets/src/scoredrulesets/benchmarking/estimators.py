@@ -5,6 +5,7 @@ from typing import Callable
 
 from ..estimators.gp_native import GeneticScoredRuleSetClassifier
 from ..estimators.native import NativeScoredRuleSetClassifier
+from ..estimators.nln import NeuralLogicNetClassifier
 from ..estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
 
@@ -120,69 +121,6 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_michigan": EstimatorSpec(
-            name="wrapper_michigan",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="michigan",
-                backend_params={
-                    "population_size": 60,
-                    "epochs": 8,
-                    "max_atoms_per_rule": 2,
-                    "learning_rate": 0.08,
-                    "mutation_rate": 0.08,
-                    "covering_probability": 0.12,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_michigan_fast": EstimatorSpec(
-            name="wrapper_michigan_fast",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="michigan",
-                backend_params={
-                    "population_size": 36,
-                    "epochs": 5,
-                    "max_atoms_per_rule": 2,
-                    "learning_rate": 0.1,
-                    "mutation_rate": 0.05,
-                    "covering_probability": 0.10,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_michigan_strong": EstimatorSpec(
-            name="wrapper_michigan_strong",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="michigan",
-                backend_params={
-                    "population_size": 100,
-                    "epochs": 14,
-                    "max_atoms_per_rule": 3,
-                    "learning_rate": 0.07,
-                    "mutation_rate": 0.1,
-                    "covering_probability": 0.15,
-                    "min_rule_fitness": 0.015,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_michigan_compact": EstimatorSpec(
-            name="wrapper_michigan_compact",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="michigan",
-                backend_params={
-                    "population_size": 90,
-                    "epochs": 14,
-                    "max_atoms_per_rule": 2,
-                    "learning_rate": 0.07,
-                    "mutation_rate": 0.08,
-                    "covering_probability": 0.14,
-                    "min_rule_fitness": 0.03,
-                    "max_final_rules": 20,
-                },
-                random_state=0,
-            ),
-        ),
         # GP naming:
         # - `gp` is the recommended strong benchmark default (residual covering).
         # - `gp_fast` keeps the earlier lightweight fast configuration.
@@ -207,9 +145,7 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 max_atoms_per_rule=3,
                 selection_mode="pareto",
                 final_rule_selection="diverse",
-                evolution_fitness_mode="residual_covering",
-                evolution_context_size=3,
-                residual_focus_weight=0.35,
+                evolution_fitness_mode="single_rule",
                 validation_fraction=0.25,
                 early_stopping_rounds=12,
                 complexity_penalty=0.05,
@@ -340,10 +276,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 backend="logicgp",
                 backend_params={
                     "trainer": "flcw_macro",
-                    "max_generations": 50,
-                    "stagnation_generations": 20,
-                    "population_size": 30,
-                    "n_adaptations_per_gen": 6,
+                    "max_generations": 500,
+                    "stagnation_generations": 150,
+                    "population_size": 50,
+                    "n_adaptations_per_gen": 8,
                     "n_bins": 5,
                     "random_state": 0,
                 },
@@ -356,11 +292,11 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 backend="logicgp",
                 backend_params={
                     "trainer": "flcw_macro",
-                    "max_generations": 20,
-                    "stagnation_generations": 10,
-                    "population_size": 15,
-                    "n_adaptations_per_gen": 6,
-                    "n_bins": 4,
+                    "max_generations": 50,
+                    "stagnation_generations": 20,
+                    "population_size": 30,
+                    "n_adaptations_per_gen": 8,
+                    "n_bins": 5,
                     "random_state": 0,
                 },
                 random_state=0,
@@ -406,12 +342,12 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 backend="logicgp",
                 backend_params={
                     "trainer": "rlcw_macro",
-                    "max_generations": 100,
-                    "stagnation_generations": 30,
-                    "population_size": 30,
+                    "max_generations": 200,
+                    "stagnation_generations": 60,
+                    "population_size": 40,
                     "n_adaptations_per_gen": 12,
-                    "n_bins": 4,
-                    "min_max_weight": 0.2,
+                    "n_bins": 5,
+                    "min_max_weight": 0.15,
                     "random_state": 0,
                 },
                 random_state=0,
@@ -436,6 +372,74 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                     "max_rules": 20,
                     "tree_size": 3,
                 },
+                random_state=0,
+            ),
+        ),
+        # ------------------------------------------------------------------
+        # Neural Logic Network (NLN) – differentiable logic rule learning
+        # ------------------------------------------------------------------
+        "wrapper_nln": EstimatorSpec(
+            name="wrapper_nln",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="nln",
+                backend_params={
+                    "n_rules": 12,
+                    "n_bins": 5,
+                    "learning_rate": 0.3,
+                    "l1_conj": 0.002,
+                    "l1_score": 0.001,
+                    "epochs": 300,
+                    "early_stopping_rounds": 30,
+                    "atom_threshold": 0.1,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_nln_fast": EstimatorSpec(
+            name="wrapper_nln_fast",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="nln",
+                backend_params={
+                    "n_rules": 8,
+                    "n_bins": 4,
+                    "learning_rate": 0.4,
+                    "l1_conj": 0.005,
+                    "l1_score": 0.003,
+                    "epochs": 100,
+                    "early_stopping_rounds": 15,
+                    "atom_threshold": 0.1,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_nln_strong": EstimatorSpec(
+            name="wrapper_nln_strong",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="nln",
+                backend_params={
+                    "n_rules": 20,
+                    "n_bins": 6,
+                    "learning_rate": 0.2,
+                    "l1_conj": 0.001,
+                    "l1_score": 0.0005,
+                    "epochs": 500,
+                    "early_stopping_rounds": 40,
+                    "atom_threshold": 0.08,
+                },
+                random_state=0,
+            ),
+        ),
+        "nln_native": EstimatorSpec(
+            name="nln_native",
+            factory=lambda: NeuralLogicNetClassifier(
+                n_rules=12,
+                n_bins=5,
+                learning_rate=0.3,
+                l1_conj=0.002,
+                l1_score=0.001,
+                epochs=300,
+                early_stopping_rounds=30,
+                atom_threshold=0.1,
                 random_state=0,
             ),
         ),

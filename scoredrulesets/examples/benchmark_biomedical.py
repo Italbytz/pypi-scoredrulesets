@@ -40,7 +40,6 @@ _DEFAULT_ESTIMATORS = [
     "wrapper_cart",
     "wrapper_hs",
     "wrapper_pittsburgh",
-    "wrapper_michigan",
     "wrapper_logicgp",
     "wrapper_rulefit",
     "gp",

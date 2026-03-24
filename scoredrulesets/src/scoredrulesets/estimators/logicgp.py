@@ -812,8 +812,10 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 "Keine Literale generierbar. Bitte Features oder n_bins pruefen."
             )
 
-        # Initialpopulation: ein Individuum pro Literal
-        population = self._init_population(all_literals, n_classes)
+        # Initialpopulation: ein Individuum pro Literal + Seeds
+        population = self._init_population(
+            all_literals, n_classes, X_disc_train, y_idx_train
+        )
 
         # GP-Schleife (auf Train-Split)
         best_poly = self._run_gp(
@@ -887,9 +889,19 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         self,
         all_literals: list[_SetLiteral],
         n_classes: int,
+        X_disc: np.ndarray | None = None,
+        y_idx: np.ndarray | None = None,
     ) -> list[_Polynomial]:
-        """Erstellt Initialpopulation: ein Individuum pro Literal."""
+        """Erstellt Initialpopulation: ein Individuum pro Literal + Seeds.
+
+        Zusaetzlich zu den Standard-Einzel-Literal-Individuen werden
+        klassen-diskriminative Seed-Individuen erzeugt:
+        1. Fuer jede Klasse: beste 2-Literal-Konjunktion (verschiedene Features)
+        2. Multi-Monom-Individuen: je ein Monom pro Klasse (fuer Mehrklassen)
+        Dies beschleunigt die Konvergenz besonders bei Mehrklassen-Problemen.
+        """
         population = []
+        # Standard: ein Individuum pro Literal
         for lit in all_literals:
             mon = _Monomial(
                 literals=[lit],
@@ -900,7 +912,118 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 default_weights=np.ones(n_classes, dtype=float) / n_classes,
             )
             population.append(poly)
+
+        # Klassen-diskriminatives Seeding (nur wenn X_disc/y_idx vorhanden)
+        if X_disc is not None and y_idx is not None and n_classes >= 2:
+            population.extend(
+                self._seed_class_discriminative(
+                    all_literals, n_classes, X_disc, y_idx
+                )
+            )
         return population
+
+    def _seed_class_discriminative(
+        self,
+        all_literals: list[_SetLiteral],
+        n_classes: int,
+        X_disc: np.ndarray,
+        y_idx: np.ndarray,
+    ) -> list[_Polynomial]:
+        """Erzeugt klassen-diskriminative Seed-Individuen.
+
+        Fuer jede Klasse wird das Literal mit der besten Kombination aus
+        Purity (Anteil der Klasse unter den feuernden Samples) und Coverage
+        (Anteil der korrekt abgedeckten Klasseninstanzen) ermittelt.
+        Daraus werden Multi-Literal-Monome und Multi-Monom-Polynome erzeugt.
+        """
+        seeds: list[_Polynomial] = []
+        n_samples = X_disc.shape[0]
+        unif = np.ones(n_classes, dtype=float) / n_classes
+
+        # Evaluiere Diskriminationskraft jedes Literals pro Klasse
+        lit_fire_masks: list[np.ndarray] = []
+        for lit in all_literals:
+            mask = np.array(
+                [lit.evaluate(X_disc[i, lit.feature_idx]) for i in range(n_samples)],
+                dtype=bool,
+            )
+            lit_fire_masks.append(mask)
+
+        # Finde bestes Literal pro Klasse (nach purity * coverage)
+        best_per_class: list[list[tuple[int, float]]] = [[] for _ in range(n_classes)]
+        for lit_idx, mask in enumerate(lit_fire_masks):
+            n_fire = int(mask.sum())
+            if n_fire == 0:
+                continue
+            for c in range(n_classes):
+                class_mask = y_idx == c
+                n_class = int(class_mask.sum())
+                if n_class == 0:
+                    continue
+                tp = int((mask & class_mask).sum())
+                purity = tp / n_fire
+                coverage = tp / n_class
+                score = purity * coverage
+                best_per_class[c].append((lit_idx, score))
+
+        # Sortiere und behalte Top-5 pro Klasse
+        top_k = 5
+        class_top_lits: list[list[int]] = []
+        for c in range(n_classes):
+            best_per_class[c].sort(key=lambda x: x[1], reverse=True)
+            class_top_lits.append([idx for idx, _ in best_per_class[c][:top_k]])
+
+        # Seed 1: Fuer jede Klasse ein 2-Literal-Monom (verschiedene Features)
+        for c in range(n_classes):
+            if len(class_top_lits[c]) < 2:
+                continue
+            for i in range(min(3, len(class_top_lits[c]))):
+                for j in range(i + 1, min(4, len(class_top_lits[c]))):
+                    lit_i = all_literals[class_top_lits[c][i]]
+                    lit_j = all_literals[class_top_lits[c][j]]
+                    if lit_i.feature_idx != lit_j.feature_idx:
+                        mon = _Monomial(
+                            literals=[lit_i, lit_j],
+                            weights=unif.copy(),
+                        )
+                        poly = _Polynomial(
+                            monomials=[mon],
+                            default_weights=unif.copy(),
+                        )
+                        seeds.append(poly)
+                        break  # ein Seed pro Klasse reicht
+
+        # Seed 2: Multi-Monom-Polynom – ein Monom pro Klasse
+        if n_classes >= 2 and all(len(cl) > 0 for cl in class_top_lits):
+            monomials = []
+            for c in range(n_classes):
+                best_lit = all_literals[class_top_lits[c][0]]
+                monomials.append(_Monomial(
+                    literals=[best_lit],
+                    weights=unif.copy(),
+                ))
+            poly = _Polynomial(
+                monomials=monomials,
+                default_weights=unif.copy(),
+            )
+            seeds.append(poly)
+
+            # Auch eine Variante mit den zweitbesten Literalen
+            if all(len(cl) >= 2 for cl in class_top_lits):
+                monomials2 = []
+                for c in range(n_classes):
+                    lit2 = all_literals[class_top_lits[c][1]]
+                    monomials2.append(_Monomial(
+                        literals=[lit2],
+                        weights=unif.copy(),
+                    ))
+                poly2 = _Polynomial(
+                    monomials=monomials2,
+                    default_weights=unif.copy(),
+                )
+                seeds.append(poly2)
+
+        return seeds
 
     def _run_gp(
         self,
@@ -918,12 +1041,16 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         Unterstuetzt FLCW- und RLCW-Varianten basierend auf ``self.trainer``.
 
         Die finale Modellauswahl bewertet Kandidaten anhand der
-        tatsaechlichen Macro-F1 (statt ``fit.consolidated`` = mean recall).
+        tatsaechlichen F1 (statt ``fit.consolidated`` = mean recall).
+        Macro- oder Micro-Averaging wird aus dem ``trainer``-Suffix
+        abgeleitet (``*_macro`` → ``average="macro"``,
+        ``*_micro`` → ``average="micro"``).
         Wenn ``X_val``/``y_val`` gegeben: F1 auf Validation-Set.
         Sonst: F1 auf Trainingsdaten (kein Datenverlust, zuverlaessiger
         fuer kleine Datensaetze).
         """
         use_rlcw = self.trainer.lower().startswith("rlcw")
+        f1_average = "micro" if self.trainer.lower().endswith("_micro") else "macro"
         has_val = X_val is not None and y_val is not None
 
         # ------------------------------------------------------------------
@@ -956,6 +1083,27 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         all_candidates: list = [
             (poly, fit, fit.consolidated) for poly, fit in evaluated
         ]
+
+        # ------------------------------------------------------------------
+        # Elitismus: Verfolge das beste Individuum nach Macro-F1, um
+        # Regression zu verhindern.  Dies beschleunigt die Konvergenz
+        # besonders bei Mehrklassen-Problemen.
+        # ------------------------------------------------------------------
+        labels = list(range(n_classes))
+        eval_X_elite = X_val if has_val else X_disc
+        eval_y_elite = y_val if has_val else y_idx
+
+        elite_poly: _Polynomial | None = None
+        elite_fit = None
+        elite_f1 = -1.0
+
+        for poly, fit in evaluated:
+            preds = poly.predict_classes(eval_X_elite)
+            f1 = float(_f1_score(eval_y_elite, preds, average=f1_average, labels=labels))
+            if f1 > elite_f1:
+                elite_f1 = f1
+                elite_poly = poly.clone()
+                elite_fit = fit
 
         # Mutationsoperatoren als Liste fuer zyklisches Durchlaufen
         _MUT_OPS = [
@@ -1015,6 +1163,24 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 )
 
             # ------------------------------------------------------------------
+            # Elitismus: Elite-Individuum in Population sicherstellen
+            # ------------------------------------------------------------------
+            if elite_poly is not None and elite_fit is not None:
+                # Prüfe ob Elite noch in der Population ist
+                elite_ids = {id(p) for p, _ in evaluated}
+                if id(elite_poly) not in elite_ids:
+                    evaluated.append((elite_poly, elite_fit))
+
+            # Elite-Update: prüfe ob ein neues bestes Individuum existiert
+            for poly, fit in new_evaluated:
+                preds = poly.predict_classes(eval_X_elite)
+                f1 = float(_f1_score(eval_y_elite, preds, average=f1_average, labels=labels))
+                if f1 > elite_f1:
+                    elite_f1 = f1
+                    elite_poly = poly.clone()
+                    elite_fit = fit
+
+            # ------------------------------------------------------------------
             # Stagnations-Tracking (immer auf consolidated, da guenstig)
             # ------------------------------------------------------------------
             current_best = max(f.consolidated for _, f in evaluated)
@@ -1051,7 +1217,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             if id(poly) not in seen_ids:
                 seen_ids.add(id(poly))
                 preds = poly.predict_classes(eval_X)
-                f1 = float(_f1_score(eval_y, preds, average="macro", labels=labels))
+                f1 = float(_f1_score(eval_y, preds, average=f1_average, labels=labels))
                 f1_candidates.append((poly, fit, f1))
 
         # 2) Historische Top-Kandidaten (nach consolidated) re-evaluieren
@@ -1062,7 +1228,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 continue
             seen_ids.add(id(poly))
             preds = poly.predict_classes(eval_X)
-            f1 = float(_f1_score(eval_y, preds, average="macro", labels=labels))
+            f1 = float(_f1_score(eval_y, preds, average=f1_average, labels=labels))
             f1_candidates.append((poly, fit, f1))
             n_extra += 1
             if n_extra >= 50:

@@ -209,11 +209,6 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return pittsburgh_cls(**params)
 
-    if backend_key == "michigan":
-        michigan_cls = _resolve_michigan_class()
-        if random_state is not None and _supports_kwarg(michigan_cls, "random_state"):
-            params.setdefault("random_state", random_state)
-        return michigan_cls(**params)
 
     if backend_key == "rulefit":
         from .rulefit import RuleFitClassifier
@@ -221,9 +216,15 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return RuleFitClassifier(**params)
 
+    if backend_key == "nln":
+        nln_cls = _resolve_nln_class()
+        if random_state is not None and _supports_kwarg(nln_cls, "random_state"):
+            params.setdefault("random_state", random_state)
+        return nln_cls(**params)
+
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: "
-        f"'cart', 'hs', 'rulekit', 'exstracs', 'logicgp', 'pittsburgh', 'michigan', 'rulefit'."
+        f"'cart', 'hs', 'rulekit', 'exstracs', 'logicgp', 'pittsburgh', 'rulefit', 'nln'."
     )
 
 
@@ -371,18 +372,6 @@ def _resolve_pittsburgh_class():
         ) from e
 
 
-def _resolve_michigan_class():
-    try:
-        from .michigan import MichiganRuleSetClassifier
-
-        return MichiganRuleSetClassifier
-    except ImportError as e:
-        raise ImportError(
-            "backend='michigan' could not load MichiganRuleSetClassifier. "
-            f"Import error: {e}"
-        ) from e
-
-
 def _rulekit_jvm_hint() -> str:
     java_home = os.environ.get("JAVA_HOME", "<unset>")
     hint = f"JAVA_HOME={java_home}."
@@ -393,5 +382,17 @@ def _rulekit_jvm_hint() -> str:
     except Exception:
         hint += " jpype.getDefaultJVMPath()=<unavailable>."
     return hint
+
+
+def _resolve_nln_class():
+    """Load the NeuralLogicNetClassifier from this package."""
+    try:
+        from .nln import NeuralLogicNetClassifier
+        return NeuralLogicNetClassifier
+    except ImportError as e:
+        raise ImportError(
+            "backend='nln' could not load NeuralLogicNetClassifier. "
+            f"Import error: {e}"
+        ) from e
 
 

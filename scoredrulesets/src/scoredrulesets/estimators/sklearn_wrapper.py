@@ -22,7 +22,37 @@ from .exstracs_shrinking import ExSTraCSPruningParams, exstracs_apply_all_shrink
 
 
 class ScoredRuleSetClassifier(BaseRuleSetEstimator):
-    """Sklearn-kompatibler Wrapper mit post-hoc Transformation in Scored Rule Sets."""
+    """Sklearn-compatible wrapper with post-hoc transformation into Scored Rule Sets.
+
+    Parameters
+    ----------
+    backend : str
+        Backend estimator to use (e.g. 'cart', 'hs', 'rulekit', 'exstracs',
+        'logicgp', 'pittsburgh', 'rulefit', 'nln').
+    backend_params : dict, optional
+        Parameters forwarded to the backend estimator constructor.
+    transform_params : dict, optional
+        Parameters for the tree-to-ruleset transformation (CART/HS).
+    exstracs_params : dict, optional
+        Parameters for ExSTraCS shrinking.
+    preprocessing : dict, optional
+        Preprocessing configuration applied *before* the backend sees the data.
+        Supported keys:
+
+        - ``"feature_selection"`` (str): method name for :func:`select_features`
+          (``"kbest"``, ``"rfe"``, ``"boruta"``).
+        - ``"k"`` (int): number of features to keep (default 20).
+        - ``"max_thresholds_per_feature"`` (int): cap on numeric thresholds
+          for native backends that build their own atom candidates
+          (gp, pittsburgh, nln, logicgp).
+    estimator : object, optional
+        A pre-built sklearn-compatible estimator; overrides *backend*.
+    random_state : int, optional
+        Random seed for reproducibility.
+    """
+
+    # Backends whose estimator exposes `max_thresholds_per_feature` attribute
+    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "pittsburgh", "nln", "logicgp"})
 
     def __init__(
         self,
@@ -30,6 +60,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         backend_params: dict[str, Any] | None = None,
         transform_params: dict[str, Any] | None = None,
         exstracs_params: dict[str, Any] | None = None,
+        preprocessing: dict[str, Any] | None = None,
         estimator: Any | None = None,
         random_state: int | None = None,
     ):
@@ -37,14 +68,43 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         self.backend_params = backend_params
         self.transform_params = transform_params
         self.exstracs_params = exstracs_params
+        self.preprocessing = preprocessing
         self.estimator = estimator
         self.random_state = random_state
+
+    # ------------------------------------------------------------------
+    # fit
+    # ------------------------------------------------------------------
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
         self.n_features_in_ = X_valid.shape[1]
         self.feature_names_in_ = self._infer_feature_names(X_valid)
 
+        # ----- Preprocessing: feature selection (Step 1) -----
+        self.selected_feature_indices_: np.ndarray | None = None
+        preproc = self.preprocessing or {}
+        fs_method = preproc.get("feature_selection")
+        if fs_method is not None:
+            from ..utils_feature_selection import select_features
+
+            k = preproc.get("k", min(20, X_valid.shape[1]))
+            X_reduced, selected_names = select_features(
+                X_valid,
+                y_valid,
+                feature_names=list(self.feature_names_in_),
+                method=fs_method,
+                k=int(k),
+            )
+            # Store boolean mask for predict-time slicing
+            mask = np.isin(self.feature_names_in_, selected_names)
+            self.selected_feature_indices_ = np.where(mask)[0]
+            # Update working data – but keep n_features_in_ as the ORIGINAL
+            # width so sklearn checks pass (predict validates against it).
+            X_valid = X_reduced
+            self.feature_names_in_ = list(selected_names)
+
+        # ----- Build backend estimator -----
         if self.estimator is not None:
             self.estimator_ = clone(self.estimator)
         else:
@@ -53,6 +113,18 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 backend_params=self.backend_params,
                 random_state=self.random_state,
             )
+
+        # ----- Preprocessing: threshold budget (Step 2) -----
+        max_thr = preproc.get("max_thresholds_per_feature")
+        if max_thr is not None and self.backend.lower() in self._NATIVE_THRESHOLD_BACKENDS:
+            if hasattr(self.estimator_, "max_thresholds_per_feature"):
+                self.estimator_.max_thresholds_per_feature = int(max_thr)
+            else:
+                # For backends that accept it as a constructor param
+                try:
+                    self.estimator_.set_params(max_thresholds_per_feature=int(max_thr))
+                except (ValueError, TypeError):
+                    pass  # Backend does not support this parameter – skip silently
 
         self.estimator_.fit(X_valid, y_valid)
         self.classes_ = np.asarray(getattr(self.estimator_, "classes_", np.unique(y_valid)))
@@ -107,13 +179,13 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "PittsburghRuleSetClassifier has no 'ruleset_' after fit(). "
                     "Please check pittsburgh.py for errors."
                 )
-        elif backend_lower == "michigan":
+        elif backend_lower == "nln":
             if hasattr(self.estimator_, "ruleset_"):
                 self.ruleset_ = self.estimator_.ruleset_
             else:
                 raise RuntimeError(
-                    "MichiganRuleSetClassifier has no 'ruleset_' after fit(). "
-                    "Please check michigan.py for errors."
+                    "NeuralLogicNetClassifier has no 'ruleset_' after fit(). "
+                    "Please check nln.py for errors."
                 )
         else:
             # Tree-basierte Transformation (CART, HS)
@@ -190,6 +262,13 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
             return X_disc
         return X_valid
 
+    def _apply_feature_selection(self, X: np.ndarray) -> np.ndarray:
+        """Slice X to the features selected during fit(), if applicable."""
+        indices = getattr(self, "selected_feature_indices_", None)
+        if indices is not None:
+            return X[:, indices]
+        return X
+
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
         X_valid: np.ndarray = np.asarray(check_array(X, dtype=None))
@@ -198,6 +277,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
                 f"is expecting {self.n_features_in_} features as input"
             )
+
+        # Apply feature selection if it was used during fit()
+        X_valid = self._apply_feature_selection(X_valid)
 
         if self.is_ruleset_mode_:
             X_prepared = self._prepare_X_for_prediction(X_valid)
@@ -214,6 +296,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
                 f"is expecting {self.n_features_in_} features as input"
             )
+
+        # Apply feature selection if it was used during fit()
+        X_valid = self._apply_feature_selection(X_valid)
 
         if self.is_ruleset_mode_:
             X_prepared = self._prepare_X_for_prediction(X_valid)

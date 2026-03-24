@@ -1,18 +1,20 @@
+from .auto import AutoScoredRuleSetClassifier
 from .base import BaseRuleSetEstimator
 from .gp_native import GeneticScoredRuleSetClassifier
 from .logicgp import LogicGPClassifier
-from .michigan import MichiganRuleSetClassifier
 from .native import NativeScoredRuleSetClassifier
+from .nln import NeuralLogicNetClassifier
 from .pittsburgh import PittsburghRuleSetClassifier
 from .rulefit import RuleFitClassifier
 from .sklearn_wrapper import ScoredRuleSetClassifier
 
 __all__ = [
+	"AutoScoredRuleSetClassifier",
 	"BaseRuleSetEstimator",
 	"GeneticScoredRuleSetClassifier",
 	"LogicGPClassifier",
-	"MichiganRuleSetClassifier",
 	"NativeScoredRuleSetClassifier",
+	"NeuralLogicNetClassifier",
 	"PittsburghRuleSetClassifier",
 	"RuleFitClassifier",
 	"ScoredRuleSetClassifier",

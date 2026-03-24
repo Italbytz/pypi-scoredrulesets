@@ -39,6 +39,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         validation_fraction: float = 0.2,
         complexity_penalty: float = 0.01,
         random_state: int | None = None,
+        max_thresholds_per_feature: int | None = None,
     ):
         self.aggregation = aggregation
         self.temperature = temperature
@@ -53,6 +54,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         self.validation_fraction = validation_fraction
         self.complexity_penalty = complexity_penalty
         self.random_state = random_state
+        self.max_thresholds_per_feature = max_thresholds_per_feature
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
@@ -401,7 +403,13 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         parent_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
         parent_impurity = self._gini(parent_counts)
         best = None
-        for threshold in (unique[:-1] + unique[1:]) / 2.0:
+        thresholds = (unique[:-1] + unique[1:]) / 2.0
+        # Apply threshold cap
+        max_thr = self.max_thresholds_per_feature
+        if max_thr is not None and len(thresholds) > max_thr:
+            idx = np.round(np.linspace(0, len(thresholds) - 1, max_thr)).astype(int)
+            thresholds = thresholds[idx]
+        for threshold in thresholds:
             left_mask = np.asarray(values <= threshold, dtype=bool)
             right_mask = np.asarray(~left_mask, dtype=bool)
             if left_mask.sum() < self.min_samples_leaf or right_mask.sum() < self.min_samples_leaf:
@@ -457,6 +465,11 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         q_points = np.unique(np.quantile(values, [0.1, 0.25, 0.4, 0.6, 0.75, 0.9]))
         if q_points.size < 2:
             return []
+        # Apply threshold cap
+        max_thr = self.max_thresholds_per_feature
+        if max_thr is not None and len(q_points) > max_thr:
+            idx = np.round(np.linspace(0, len(q_points) - 1, max_thr)).astype(int)
+            q_points = q_points[idx]
 
         parent_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
         parent_impurity = self._gini(parent_counts)

@@ -54,6 +54,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         class_diversity_bonus: float = 0.08,
         evolution_context_size: int = 3,
         residual_focus_weight: float = 0.35,
+        max_thresholds_per_feature: int | None = None,
     ):
         self.aggregation = aggregation
         self.temperature = temperature
@@ -79,6 +80,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         self.class_diversity_bonus = class_diversity_bonus
         self.evolution_context_size = evolution_context_size
         self.residual_focus_weight = residual_focus_weight
+        self.max_thresholds_per_feature = max_thresholds_per_feature
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
@@ -215,6 +217,7 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
         return self.ruleset_
 
     def _build_feature_specs(self, X: np.ndarray) -> list[dict[str, object]]:
+        max_thr = self.max_thresholds_per_feature
         specs: list[dict[str, object]] = []
         for feature_idx in range(X.shape[1]):
             col = X[:, feature_idx]
@@ -229,9 +232,15 @@ class GeneticScoredRuleSetClassifier(BaseRuleSetEstimator):
                         thresholds = q.astype(float).tolist()
                 else:
                     thresholds = []
+                # Apply threshold cap
+                if max_thr is not None and len(thresholds) > max_thr:
+                    idx = np.round(np.linspace(0, len(thresholds) - 1, max_thr)).astype(int)
+                    thresholds = [thresholds[i] for i in idx]
                 intervals = []
                 if values.size >= 3:
                     q_points = np.unique(np.quantile(values, [0.15, 0.35, 0.5, 0.65, 0.85]))
+                    if max_thr is not None:
+                        q_points = q_points[:max_thr + 1]
                     for i in range(len(q_points) - 1):
                         low = float(q_points[i])
                         high = float(q_points[i + 1])

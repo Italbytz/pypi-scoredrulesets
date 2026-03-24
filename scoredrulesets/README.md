@@ -76,8 +76,6 @@ See `examples/README.md` for runnable Pittsburgh backend demos:
 
 - direct estimator demo: `examples/example_pittsburgh_backend.py`
 - wrapper backend demo: `examples/example_pittsburgh_wrapper.py`
-- Michigan wrapper demo: `examples/example_michigan_wrapper.py`
-- Michigan direct estimator demo: `examples/example_michigan_backend.py`
 
 ## logicGP-Import
 
@@ -135,9 +133,10 @@ Der GP-Lerner durchsucht ebenfalls Atome mit `<=`, `>`, `between`, `==` und `in`
 
 Fuer das Benchmarking gilt jetzt folgende Nomenklatur:
 
-- `gp`: staerkeres, robusteres Default-Profil fuer Benchmarks (residual covering)
+- `gp`: Basis-GP-Profil (single-rule Fitness, Pareto-Selektion, diverse Endauswahl)
+- `gp_residual`: GP mit Residual-Covering-Fitness (kontextbasierte Bewertung neuer Regeln)
 - `gp_fast`: fruehere schnelle Light-Variante fuer Smoke-Tests
-- `gp_diverse`: vorheriger starker GP-Default mit diverser Endauswahl
+- `gp_diverse`: vorheriger starker GP-Default mit diverser Endauswahl (ohne residual)
 
 ## Benchmarking
 
