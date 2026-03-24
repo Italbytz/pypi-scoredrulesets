@@ -32,7 +32,7 @@ from scoredrulesets.benchmarking.runner import (
 def test_benchmarking_runs_for_core_estimators():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "native", "gp"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast", "gp"],
         repeats=1,
         random_state=0,
     )
@@ -64,7 +64,7 @@ def test_benchmarking_hs_is_ok_or_skipped():
 
 
 def test_benchmarking_unknown_dataset_raises():
-    config = BenchmarkConfig(dataset_names=["does_not_exist"], estimator_names=["native"])
+    config = BenchmarkConfig(dataset_names=["does_not_exist"], estimator_names=["wrapper_cart"])
     try:
         run_benchmarks(config)
     except ValueError as exc:
@@ -76,7 +76,7 @@ def test_benchmarking_unknown_dataset_raises():
 def test_benchmark_plot_is_written_as_png_and_pdf(tmp_path: Path):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "native", "gp"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast", "gp"],
         repeats=1,
         random_state=0,
     )
@@ -96,7 +96,7 @@ def test_benchmark_plot_is_written_as_png_and_pdf(tmp_path: Path):
 def test_benchmarking_aggregation_over_repeats():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "native"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast"],
         repeats=2,
         random_state=0,
     )
@@ -113,7 +113,7 @@ def test_benchmarking_aggregation_over_repeats():
 def test_benchmarking_smoke_compare_pittsburgh_native_gp():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_pittsburgh_fast", "native", "gp"],
+        estimator_names=["wrapper_pittsburgh_fast", "wrapper_cart", "gp"],
         repeats=1,
         random_state=0,
     )
@@ -121,7 +121,7 @@ def test_benchmarking_smoke_compare_pittsburgh_native_gp():
 
     assert len(results) == 3
     by_estimator = {result.estimator: result for result in results}
-    assert set(by_estimator) == {"wrapper_pittsburgh_fast", "native", "gp"}
+    assert set(by_estimator) == {"wrapper_pittsburgh_fast", "wrapper_cart", "gp"}
     assert all(result.status == "ok" for result in results)
     assert all(result.f1_macro is not None for result in results)
     assert all(result.n_rules is not None and result.n_rules > 0 for result in results)
@@ -151,7 +151,7 @@ def test_benchmarking_smoke_compare_pittsburgh_profiles():
 def test_benchmarking_smoke_compare_pittsburgh_native_gp():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_pittsburgh", "native", "gp"],
+        estimator_names=["wrapper_pittsburgh", "wrapper_cart", "gp"],
         repeats=1,
         random_state=0,
     )
@@ -159,7 +159,7 @@ def test_benchmarking_smoke_compare_pittsburgh_native_gp():
 
     assert len(results) == 3
     by_estimator = {result.estimator: result for result in results}
-    assert set(by_estimator) == {"wrapper_pittsburgh", "native", "gp"}
+    assert set(by_estimator) == {"wrapper_pittsburgh", "wrapper_cart", "gp"}
     assert all(result.status == "ok" for result in results)
     assert all(result.f1_macro is not None for result in results)
     assert all(result.n_rules is not None and result.n_rules > 0 for result in results)
@@ -186,7 +186,7 @@ def test_benchmarking_progress_output_is_emitted(capsys):
 def test_benchmark_plot_aggregated_is_written_as_png_and_pdf(tmp_path: Path):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "native"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast"],
         repeats=2,
         random_state=0,
     )
@@ -210,7 +210,7 @@ def test_benchmark_plot_aggregated_is_written_as_png_and_pdf(tmp_path: Path):
 def test_benchmark_plot_multiple_datasets_is_written_as_png_and_pdf(tmp_path: Path):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris", "sklearn_wine"],
-        estimator_names=["wrapper_cart", "native"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast"],
         repeats=2,
         random_state=0,
     )
@@ -234,7 +234,7 @@ def test_benchmark_plot_multiple_datasets_is_written_as_png_and_pdf(tmp_path: Pa
 def test_benchmark_heatmap_is_written_as_png_and_pdf(tmp_path: Path):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris", "sklearn_wine"],
-        estimator_names=["wrapper_cart", "native"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast"],
         repeats=2,
         random_state=0,
     )
@@ -257,7 +257,7 @@ def test_combined_heatmap_cell_uses_shared_colour_scale():
     fit_norm = LogNorm(vmin=0.1, vmax=10.0)
     entry = AggregatedBenchmarkResult(
         dataset="synthetic",
-        estimator="native",
+        estimator="wrapper_pittsburgh_fast",
         n_repeats=1,
         status="ok",
         f1_macro_mean=0.75,
@@ -296,7 +296,7 @@ def test_combined_heatmap_adds_single_unlabelled_legend_bar(tmp_path: Path, monk
     results = [
         BenchmarkResult(
             dataset="synthetic_a",
-            estimator="native",
+            estimator="wrapper_pittsburgh_fast",
             repeat=0,
             status="ok",
             skip_reason=None,
@@ -343,7 +343,7 @@ def test_combined_heatmap_adds_single_unlabelled_legend_bar(tmp_path: Path, monk
 def test_benchmark_leaderboard_sorting_and_markdown_output():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "native", "gp"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast", "gp"],
         repeats=2,
         random_state=0,
     )
@@ -364,7 +364,7 @@ def test_benchmark_leaderboard_sorting_and_markdown_output():
 def test_benchmark_report_markdown_contains_sections_and_artifacts():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "native"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast"],
         repeats=2,
         random_state=0,
     )
@@ -412,7 +412,7 @@ def test_benchmark_report_markdown_contains_sections_and_artifacts():
 def test_benchmark_report_html_contains_sections_and_preview():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "native"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast"],
         repeats=2,
         random_state=0,
     )
@@ -451,7 +451,7 @@ def test_benchmark_report_html_contains_sections_and_preview():
 def test_benchmark_leaderboard_html_contains_table():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "native"],
+        estimator_names=["wrapper_cart", "wrapper_pittsburgh_fast"],
         repeats=2,
         random_state=0,
     )

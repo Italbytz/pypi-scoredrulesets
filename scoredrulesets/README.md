@@ -86,25 +86,23 @@ ruleset = import_logicgp_json("ext/logicgp_model.json")
 dump_ruleset_json(ruleset, "converted_ruleset.json")
 ```
 
-## Nativer Estimator (Skeleton)
+## Pittsburgh-Estimator
 
 ```python
 from sklearn.datasets import load_iris
-from scoredrulesets import NativeScoredRuleSetClassifier
+from scoredrulesets import PittsburghRuleSetClassifier
 
 X, y = load_iris(return_X_y=True)
 
-clf = NativeScoredRuleSetClassifier()
+clf = PittsburghRuleSetClassifier(max_rules=5, random_state=42)
 clf.fit(X, y)
 print(clf.predict(X[:3]))
 
-# Optional: einfache native Regelkomplexitaet steuern
-# NativeScoredRuleSetClassifier(max_rules=6, min_samples_leaf=5)
-# Optional: kategoriale Regelgenerierung abschalten
-# NativeScoredRuleSetClassifier(enable_categorical_rules=False)
+# Optional: Beam-Search-Parameter steuern
+# PittsburghRuleSetClassifier(max_rules=6, beam_width=10, max_iterations=20)
 ```
 
-Der native Lerner erzeugt je nach Datenlage Atome mit `<=`, `>`, `between`, `==` und `in`.
+Der Pittsburgh-Lerner erzeugt je nach Datenlage Atome mit `<=`, `>`, `between`, `==` und `in`.
 
 ## Nativer GP-Estimator
 

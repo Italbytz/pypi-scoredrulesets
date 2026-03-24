@@ -9,7 +9,7 @@ File: `examples/example_pittsburgh_backend.py`
 What it shows:
 - direct training with `PittsburghRuleSetClassifier`
 - metadata and ruleset table output
-- mini comparison against `NativeScoredRuleSetClassifier` and `GeneticScoredRuleSetClassifier`
+- mini comparison against `ScoredRuleSetClassifier(backend="cart")` and `GeneticScoredRuleSetClassifier`
 
 Run:
 
@@ -113,7 +113,7 @@ File: `examples/example_michigan_backend.py`
 What it shows:
 - direct training with `MichiganRuleSetClassifier`
 - metadata and ruleset table output
-- mini comparison against `NativeScoredRuleSetClassifier` and `GeneticScoredRuleSetClassifier`
+- mini comparison against `ScoredRuleSetClassifier(backend="cart")` and `GeneticScoredRuleSetClassifier`
 
 Run:
 

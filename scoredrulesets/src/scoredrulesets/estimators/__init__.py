@@ -2,7 +2,6 @@ from .auto import AutoScoredRuleSetClassifier
 from .base import BaseRuleSetEstimator
 from .gp_native import GeneticScoredRuleSetClassifier
 from .logicgp import LogicGPClassifier
-from .native import NativeScoredRuleSetClassifier
 from .nln import NeuralLogicNetClassifier
 from .pittsburgh import PittsburghRuleSetClassifier
 from .rulefit import RuleFitClassifier
@@ -13,7 +12,6 @@ __all__ = [
 	"BaseRuleSetEstimator",
 	"GeneticScoredRuleSetClassifier",
 	"LogicGPClassifier",
-	"NativeScoredRuleSetClassifier",
 	"NeuralLogicNetClassifier",
 	"PittsburghRuleSetClassifier",
 	"RuleFitClassifier",

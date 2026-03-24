@@ -12,6 +12,14 @@ from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
 from .base import BaseRuleSetEstimator
+from ._split_utils import (
+    best_numeric_split,
+    categorical_group_splits,
+    categorical_splits,
+    distribution_to_scores,
+    gini,
+    numeric_interval_splits,
+)
 
 
 @dataclass(frozen=True)
@@ -385,162 +393,39 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         return sum(len(candidates[idx].rule.atoms) for idx in state)
 
     def _distribution_to_scores(self, counts: np.ndarray) -> list[float]:
-        probs = counts / max(float(np.sum(counts)), 1.0)
-        if self.aggregation == "softmax_sum":
-            return np.log(np.maximum(probs, 1e-12)).tolist()
-        return probs.tolist()
+        return distribution_to_scores(counts, self.aggregation)
 
     def _best_numeric_split(self, feature_values, y_idx: np.ndarray, n_classes: int):
-        values = np.asarray(feature_values)
-        if not np.issubdtype(values.dtype, np.number):
-            return None
-
-        values = values.astype(float)
-        unique = np.unique(values)
-        if unique.size < 2:
-            return None
-
-        parent_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
-        parent_impurity = self._gini(parent_counts)
-        best = None
-        thresholds = (unique[:-1] + unique[1:]) / 2.0
-        # Apply threshold cap
-        max_thr = self.max_thresholds_per_feature
-        if max_thr is not None and len(thresholds) > max_thr:
-            idx = np.round(np.linspace(0, len(thresholds) - 1, max_thr)).astype(int)
-            thresholds = thresholds[idx]
-        for threshold in thresholds:
-            left_mask = np.asarray(values <= threshold, dtype=bool)
-            right_mask = np.asarray(~left_mask, dtype=bool)
-            if left_mask.sum() < self.min_samples_leaf or right_mask.sum() < self.min_samples_leaf:
-                continue
-
-            left_counts = np.bincount(y_idx[left_mask], minlength=n_classes).astype(float)
-            right_counts = np.bincount(y_idx[right_mask], minlength=n_classes).astype(float)
-            left_weight = float(left_mask.mean())
-            child_impurity = left_weight * self._gini(left_counts) + (1.0 - left_weight) * self._gini(right_counts)
-            gain = parent_impurity - child_impurity
-            candidate = (
-                float(threshold),
-                float(gain),
-                left_counts,
-                right_counts,
-                int(left_mask.sum()),
-                int(right_mask.sum()),
-            )
-            if best is None or gain > best[1]:
-                best = candidate
-        return best
+        return best_numeric_split(
+            feature_values, y_idx, n_classes,
+            min_samples_leaf=self.min_samples_leaf,
+            max_thresholds_per_feature=self.max_thresholds_per_feature,
+        )
 
     def _categorical_splits(self, feature_values, y_idx: np.ndarray, n_classes: int):
-        values = np.asarray(feature_values, dtype=object)
-        unique = np.unique(values)
-        if unique.size < 2:
-            return []
-
-        parent_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
-        parent_impurity = self._gini(parent_counts)
-        candidates = []
-        for category in unique.tolist():
-            match_mask = np.asarray(values == category, dtype=bool)
-            non_match_mask = np.asarray(~match_mask, dtype=bool)
-            if match_mask.sum() < self.min_samples_leaf or non_match_mask.sum() < self.min_samples_leaf:
-                continue
-            match_counts = np.bincount(y_idx[match_mask], minlength=n_classes).astype(float)
-            non_match_counts = np.bincount(y_idx[non_match_mask], minlength=n_classes).astype(float)
-            match_weight = float(match_mask.mean())
-            child_impurity = match_weight * self._gini(match_counts) + (1.0 - match_weight) * self._gini(non_match_counts)
-            gain = parent_impurity - child_impurity
-            candidates.append((float(gain), category, match_counts, int(match_mask.sum())))
-        return candidates
+        return categorical_splits(
+            feature_values, y_idx, n_classes,
+            min_samples_leaf=self.min_samples_leaf,
+        )
 
     def _numeric_interval_splits(self, feature_values, y_idx: np.ndarray, n_classes: int):
-        values = np.asarray(feature_values)
-        if not np.issubdtype(values.dtype, np.number):
-            return []
-        values = values.astype(float)
-        if np.unique(values).size < 3:
-            return []
-
-        q_points = np.unique(np.quantile(values, [0.1, 0.25, 0.4, 0.6, 0.75, 0.9]))
-        if q_points.size < 2:
-            return []
-        # Apply threshold cap
-        max_thr = self.max_thresholds_per_feature
-        if max_thr is not None and len(q_points) > max_thr:
-            idx = np.round(np.linspace(0, len(q_points) - 1, max_thr)).astype(int)
-            q_points = q_points[idx]
-
-        parent_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
-        parent_impurity = self._gini(parent_counts)
-        candidates = []
-        for i in range(len(q_points) - 1):
-            for j in range(i + 1, len(q_points)):
-                low = float(q_points[i])
-                high = float(q_points[j])
-                if not low < high:
-                    continue
-                in_mask = (values >= low) & (values <= high)
-                in_mask = np.asarray(in_mask, dtype=bool)
-                out_mask = np.asarray(~in_mask, dtype=bool)
-                if in_mask.sum() < self.min_samples_leaf or out_mask.sum() < self.min_samples_leaf:
-                    continue
-                in_counts = np.bincount(y_idx[in_mask], minlength=n_classes).astype(float)
-                out_counts = np.bincount(y_idx[out_mask], minlength=n_classes).astype(float)
-                in_weight = float(in_mask.mean())
-                child_impurity = in_weight * self._gini(in_counts) + (1.0 - in_weight) * self._gini(out_counts)
-                gain = parent_impurity - child_impurity
-                candidates.append((float(gain), low, high, in_counts, int(in_mask.sum())))
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return candidates[:2]
+        return numeric_interval_splits(
+            feature_values, y_idx, n_classes,
+            min_samples_leaf=self.min_samples_leaf,
+            max_thresholds_per_feature=self.max_thresholds_per_feature,
+            max_results=2,
+        )
 
     def _categorical_group_splits(self, feature_values, y_idx: np.ndarray, n_classes: int):
-        values = np.asarray(feature_values, dtype=object)
-        unique = np.unique(values)
-        if unique.size < 3:
-            return []
-
-        parent_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
-        parent_impurity = self._gini(parent_counts)
-        candidates = []
-        seen_groups: set[tuple[str, ...]] = set()
-
-        for class_idx in range(n_classes):
-            class_mask = y_idx == class_idx
-            if class_mask.sum() == 0:
-                continue
-            class_values = values[class_mask]
-            cats, counts = np.unique(class_values, return_counts=True)
-            order = np.argsort(-counts)
-            ranked_cats = [cats[i] for i in order]
-            for group_size in range(2, min(3, len(ranked_cats)) + 1):
-                group = ranked_cats[:group_size]
-                key = tuple(sorted(str(v) for v in group))
-                if key in seen_groups:
-                    continue
-                seen_groups.add(key)
-                in_mask = np.isin(values, group)
-                in_mask = np.asarray(in_mask, dtype=bool)
-                out_mask = np.asarray(~in_mask, dtype=bool)
-                if in_mask.sum() < self.min_samples_leaf or out_mask.sum() < self.min_samples_leaf:
-                    continue
-                in_counts = np.bincount(y_idx[in_mask], minlength=n_classes).astype(float)
-                out_counts = np.bincount(y_idx[out_mask], minlength=n_classes).astype(float)
-                in_weight = float(in_mask.mean())
-                child_impurity = in_weight * self._gini(in_counts) + (1.0 - in_weight) * self._gini(out_counts)
-                gain = parent_impurity - child_impurity
-                candidates.append((float(gain), list(group), in_counts, int(in_mask.sum())))
-
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return candidates[:2]
+        return categorical_group_splits(
+            feature_values, y_idx, n_classes,
+            min_samples_leaf=self.min_samples_leaf,
+            max_results=2,
+        )
 
     @staticmethod
     def _gini(counts: np.ndarray) -> float:
-        total = float(np.sum(counts))
-        if total <= 0.0:
-            return 0.0
-        probs = counts / total
-        return float(1.0 - np.sum(probs ** 2))
+        return gini(counts)
 
 
 

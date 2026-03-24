@@ -22,10 +22,10 @@ from .benchmarking import (
     plot_benchmark_results,
     run_benchmarks,
 )
+from .estimators.auto import AutoScoredRuleSetClassifier
 from .estimators.gp_native import GeneticScoredRuleSetClassifier
 from .estimators.logicgp import LogicGPClassifier
-from .estimators.michigan import MichiganRuleSetClassifier
-from .estimators.native import NativeScoredRuleSetClassifier
+from .estimators.nln import NeuralLogicNetClassifier
 from .estimators.pittsburgh import PittsburghRuleSetClassifier
 from .estimators.rulefit import RuleFitClassifier
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
@@ -40,13 +40,13 @@ __all__ = [
     "Rule",
     "ScoredRuleSet",
     "AggregatedBenchmarkResult",
+    "AutoScoredRuleSetClassifier",
     "BenchmarkComparisonRow",
     "BenchmarkConfig",
     "BenchmarkResult",
     "GeneticScoredRuleSetClassifier",
     "LogicGPClassifier",
-    "MichiganRuleSetClassifier",
-    "NativeScoredRuleSetClassifier",
+    "NeuralLogicNetClassifier",
     "PittsburghRuleSetClassifier",
     "RuleFitClassifier",
     "ScoredRuleSetClassifier",

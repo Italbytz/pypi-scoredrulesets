@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ..estimators.gp_native import GeneticScoredRuleSetClassifier
-from ..estimators.native import NativeScoredRuleSetClassifier
 from ..estimators.nln import NeuralLogicNetClassifier
 from ..estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
@@ -49,15 +48,6 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                     "prune_atoms": True,
                 },
                 random_state=0,
-            ),
-        ),
-        "native": EstimatorSpec(
-            name="native",
-            factory=lambda: NativeScoredRuleSetClassifier(
-                max_rules=100,
-                max_rules_per_feature=2,
-                min_samples_leaf=3,
-                min_relative_gain=0.35,
             ),
         ),
         "wrapper_pittsburgh": EstimatorSpec(

@@ -4,7 +4,7 @@
 This script demonstrates three things:
 1. Training `PittsburghRuleSetClassifier` directly
 2. Inspecting the learned `ScoredRuleSet` metadata and rule table
-3. Running a small comparison against `NativeScoredRuleSetClassifier`
+3. Running a small comparison against `ScoredRuleSetClassifier(backend="cart")`
    and `GeneticScoredRuleSetClassifier`
 """
 
@@ -24,8 +24,8 @@ from sklearn.model_selection import train_test_split
 
 from scoredrulesets import (
     GeneticScoredRuleSetClassifier,
-    NativeScoredRuleSetClassifier,
     PittsburghRuleSetClassifier,
+    ScoredRuleSetClassifier,
     format_ruleset_table,
 )
 
@@ -126,10 +126,11 @@ def run_demo(random_state: int = 42, profile: str = "default") -> dict[str, obje
 
     comparison_estimators = [
         (
-            "native",
-            NativeScoredRuleSetClassifier(
-                max_rules=6,
-                min_samples_leaf=3,
+            "cart",
+            ScoredRuleSetClassifier(
+                backend="cart",
+                backend_params={"max_depth": 4},
+                random_state=random_state,
             ),
         ),
         (

@@ -122,7 +122,7 @@ def test_pittsburgh_example_run_demo_smoke():
     assert result["pittsburgh"]["metadata"]["source"] == "pittsburgh"
     assert result["pittsburgh"]["n_rules"] > 0
     assert len(result["comparison"]) == 2
-    assert {row["name"] for row in result["comparison"]} == {"native", "gp"}
+    assert {row["name"] for row in result["comparison"]} == {"cart", "gp"}
 
 
 def test_pittsburgh_example_profile_smoke():
