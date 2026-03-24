@@ -3,11 +3,15 @@
 Auswahlkriterien:
 - **Datasets:** 10 Datensaetze mit hoechster Typ-Diskriminierung (aus Pareto-Analyse
   der 2189-Run-Checkpoint-Daten), ergaenzt um 2 reale UCI-Datensaetze.
-- **Estimators:** 11 Schaetzer – ein starker Vertreter pro Typ-Familie plus
-  die Bug-Fix-relevanten Varianten (gp vs gp_residual, rlcw_macro vs rlcw_micro).
+- **Estimators:** 9 Schaetzer – ein starker Vertreter pro Typ-Familie plus
+  die Bug-Fix-relevanten Varianten (rlcw_macro vs rlcw_micro) und NLN-Baseline.
+  Nach Slim-Benchmark-Analyse (03/2026) entfernt:
+  - ``gp`` (100% paretodominiert, immer schlechteste F1)
+  - ``wrapper_rulefit`` (100% paretodominiert trotz schneller Laufzeit)
+  - ``wrapper_nln`` (identisch mit nln_native, 100% paretodominiert)
 
-Insgesamt: 11 Schaetzer × 10 Datasets × 5 Repeats = **550 Laeufe**
-(statt 31 × 24 × N im vollen Benchmark).
+Insgesamt: 9 Schaetzer × 10 Datasets × 5 Repeats = **450 Laeufe**
+(statt 34 × 24 × N im vollen Benchmark).
 
 Produziert die gleichen Reports wie der volle Benchmark:
   CSV, JSON, Aggregationen, Heatmaps, Pareto-Front, Leaderboard (MD + HTML).
@@ -86,14 +90,17 @@ SLIM_DATASETS: list[str] = [
 # tree (pruned)        | wrapper_cart_pruned       | Dominiert wrapper_cart strikt
 # tree (HS)            | wrapper_hs_pruned         | Dominiert wrapper_hs strikt
 # rulekit              | wrapper_rulekit           | Bester Allrounder (F1 0.723)
-# rulefit              | wrapper_rulefit           | Solide (compact dominiert)
-# exstracs             | exstracs_shrink_filter    | Bester F1 (0.778)
-# logicgp (macro)      | logicgp_rlcw_macro        | *Bug-Fix*: jetzt mit Macro-F1
-# logicgp (micro)      | logicgp_rlcw_micro        | *Bug-Fix*: jetzt mit Micro-F1
-# pittsburgh           | pittsburgh_fast           | Ultra-kompakt, selten dominiert
-# gp (base)            | gp                        | *Bug-Fix*: jetzt single_rule
-# gp (residual)        | gp_residual               | *Bug-Fix*: residual_covering
-# native               | native                    | Baseline-Referenz
+# exstracs             | exstracs_shrink_filter    | Bester F1 (0.778), nun aggressiver
+# logicgp (macro)      | logicgp_rlcw_macro        | Kompakteste Modelle, skalierbar
+# logicgp (micro)      | logicgp_rlcw_micro        | Teils besser F1 als Macro
+# pittsburgh           | pittsburgh_fast           | Ultra-kompakt, nie paretodominiert
+# gp (residual)        | gp_residual               | GP-Repraesentant (residual_covering)
+# nln (native)         | nln_native                | NLN-Baseline (identisch mit wrapper)
+#
+# Entfernt (03/2026 Slim-Benchmark-Analyse):
+# - gp: 100% paretodominiert, immer niedrigste F1
+# - wrapper_rulefit: 100% paretodominiert
+# - wrapper_nln: identisch mit nln_native, 100% paretodominiert
 #
 SLIM_ESTIMATORS: list[str] = [
     # Tree-basiert
@@ -101,18 +108,16 @@ SLIM_ESTIMATORS: list[str] = [
     "wrapper_hs_pruned",
     # Externe Regelinduktion
     "wrapper_rulekit",
-    "wrapper_rulefit",
     "wrapper_exstracs_shrink_filter",
     # LogicGP – Bug-Fix-Vergleich Macro vs Micro
     "wrapper_logicgp_rlcw_macro",
     "wrapper_logicgp_rlcw_micro",
     # Pittsburgh (kompakteste Familie)
     "wrapper_pittsburgh_fast",
-    # GP nativ – Bug-Fix-Vergleich single_rule vs residual_covering
-    "gp",
+    # GP nativ – residual_covering als GP-Repraesentant
     "gp_residual",
-    # Baseline
-    "native",
+    # Neural Logic Network (NLN) – differentiable logic rule learning
+    "nln_native",
 ]
 
 
@@ -279,7 +284,7 @@ def main(
             "repeats": repeats,
             "timeout_seconds": timeout_display,
             "design": "10 Datasets mit hoechster Typ-Diskriminierung (TypeSpread ≥ 0.39), "
-                      "11 Schaetzer (ein Vertreter pro Typ + Bug-Fix-Vergleiche)",
+                      "13 Schaetzer (ein Vertreter pro Typ + Bug-Fix-Vergleiche + NLN)",
         },
         artifact_paths={
             "raw_csv": "benchmark_results.csv",
@@ -302,6 +307,7 @@ def main(
             "Datensatz-Auswahl basiert auf TypeSpread-Analyse (Pareto-Checkpoint, 2189 Laeufe, 24 Datasets, 31 Schaetzer).",
             "Bug-Fix-Vergleiche: gp (single_rule) vs gp_residual (residual_covering); "
             "rlcw_macro (F1-macro) vs rlcw_micro (F1-micro).",
+            "NLN-Schaetzer: wrapper_nln (SRS-Wrapper) vs nln_native (direktes NeuralLogicNet).",
             f"Timeout pro Einzellauf: {timeout_display}.",
             f"{repeats} Wiederholungen mit random_state=42.",
         ],
@@ -336,6 +342,7 @@ def main(
         notes=[
             "Schlanker Benchmark, optimiert auf maximale Unterscheidbarkeit der Schaetzer-Typen.",
             "Bug-Fix-Vergleiche: gp vs gp_residual; rlcw_macro vs rlcw_micro.",
+            "NLN-Vergleiche: wrapper_nln vs nln_native.",
         ],
     )
     (out_dir / "benchmark_report.html").write_text(html_report, encoding="utf-8")
@@ -365,8 +372,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Schlanker Benchmark fuer maximale Schaetzer-Typ-Diskriminierung.",
         epilog=(
-            "Design: 10 Datasets (hoechster TypeSpread), 11 Schaetzer "
-            "(ein Vertreter pro Typ + Bug-Fix-Vergleiche)."
+            "Design: 10 Datasets (hoechster TypeSpread), 13 Schaetzer "
+            "(ein Vertreter pro Typ + Bug-Fix-Vergleiche + NLN)."
         ),
     )
     parser.add_argument(

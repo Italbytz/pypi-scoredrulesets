@@ -46,7 +46,7 @@ class ExSTraCSPruningParams:
 
     # Sicherheitslimits fuer grosse Populationen
     max_pruning_seconds: float = 120.0  # Timeout fuer Pruning-Schleifen (Sekunden)
-    pre_filter_threshold: int = 200  # Auto-Filter wenn Regelzahl diesen Wert uebersteigt
+    pre_filter_threshold: int = 100  # Auto-Filter wenn Regelzahl diesen Wert uebersteigt
 
 
 def exstracs_prune_conservative(

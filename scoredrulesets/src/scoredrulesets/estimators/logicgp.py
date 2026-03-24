@@ -42,8 +42,9 @@ GP-Algorithmus
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Protocol, Union
 
 import numpy as np
 from sklearn.metrics import f1_score as _f1_score
@@ -104,7 +105,9 @@ class _Monomial:
         mask = np.ones(X.shape[0], dtype=bool)
         for lit in self.literals:
             col = X[:, lit.feature_idx]
-            mask &= np.asarray([lit.evaluate(v) for v in col])
+            # Vectorized: np.isin statt Python-Loop pro Sample
+            cats = np.array(sorted(lit.category_set))
+            mask &= np.isin(col, cats)
         return mask
 
     def clone(self) -> "_Monomial":
@@ -145,7 +148,18 @@ class _Polynomial:
         return result if any_fired else self.default_weights.copy()
 
     def predict_classes(self, X: np.ndarray) -> np.ndarray:
-        return np.array([np.argmax(self.predict_scores(X[i])) for i in range(X.shape[0])])
+        n = X.shape[0]
+        n_classes = len(self.default_weights)
+        scores = np.tile(self.default_weights, (n, 1))  # (n, n_classes)
+        any_fired = np.zeros(n, dtype=bool)
+        accum = np.zeros((n, n_classes), dtype=float)
+        for mon in self.monomials:
+            mask = mon.fires_mask(X)  # (n,)
+            if mask.any():
+                any_fired |= mask
+                accum[mask] += mon.weights
+        scores[any_fired] = accum[any_fired]
+        return np.argmax(scores, axis=1)
 
     def clone(self) -> "_Polynomial":
         return _Polynomial(
@@ -530,6 +544,59 @@ def _generate_literals(X_disc: np.ndarray) -> list[_SetLiteral]:
     return literals
 
 
+def _generate_singleton_literals(X_disc: np.ndarray) -> list[_SetLiteral]:
+    """
+    Generates only singleton literals (one category per literal) for each
+    feature. This is a more restricted search space than the full power-set
+    approach.  Useful for datasets with many categories per feature.
+    """
+    n_features = X_disc.shape[1]
+    literals: list[_SetLiteral] = []
+    for feat_idx in range(n_features):
+        col = X_disc[:, feat_idx]
+        cats = sorted(set(col.tolist()))
+        if len(cats) < 2:
+            continue
+        all_cats = tuple(cats)
+        for cat in cats:
+            literals.append(_SetLiteral(
+                feature_idx=feat_idx,
+                category_set=frozenset([cat]),
+                all_categories=all_cats,
+            ))
+    return literals
+
+
+# ---------------------------------------------------------------------------
+# Configurable strategy types (Protocol-based for extensibility)
+# ---------------------------------------------------------------------------
+
+# Literal generator: X_disc -> list of _SetLiteral
+LiteralGenerator = Callable[[np.ndarray], list[_SetLiteral]]
+
+# Fitness evaluator: (poly, X_disc, y_idx, n_classes) -> _Fitness | _FitnessRLCW
+FitnessEvaluator = Callable[[_Polynomial, np.ndarray, np.ndarray, int], Any]
+
+# Model selector: (candidates, min_improvement) -> _Polynomial
+#   candidates: list of (poly, fitness, f1_score)
+ModelSelector = Callable[[list, float], _Polynomial]
+
+
+# ---------------------------------------------------------------------------
+# Alternative model selection: best F1 (ignoring model size trade-off)
+# ---------------------------------------------------------------------------
+
+def _select_model_best_f1(
+    candidates: list[tuple[_Polynomial, Any, float]],
+    min_improvement: float = 0.01,
+) -> _Polynomial:
+    """Select the candidate with the highest F1 score (ties broken by smallest size)."""
+    if not candidates:
+        raise ValueError("No candidates available.")
+    best = max(candidates, key=lambda x: (x[2], -x[1].size))
+    return best[0]
+
+
 # ---------------------------------------------------------------------------
 # Finale Modellauswahl (aus paper: Algorithm 1)
 # ---------------------------------------------------------------------------
@@ -718,6 +785,12 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         dann anhand der Training-Macro-F1, die deutlich zuverlaessiger ist
         als ``consolidated`` (mean recall) und keinen Datenverlust verursacht.
         Werte > 0 sind nur fuer grosse Datensaetze empfohlen (n >= 200).
+    max_fit_seconds : float or None
+        Maximale Laufzeit fuer den GP-Loop in Sekunden. Falls gesetzt,
+        wird die Evolution nach Ablauf der Zeit sauber abgebrochen und
+        das bis dahin beste Modell zurueckgegeben. ``None`` (Standard)
+        deaktiviert das Zeitlimit. Empfohlen im Benchmark-Kontext:
+        ein Wert unter dem aeusseren Timeout (z. B. 240 bei 300s-Timeout).
     random_state : int or None
     """
 
@@ -734,6 +807,10 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         tournament_size: int = 5,
         max_model_size: int | None = None,
         validation_fraction: float = 0.0,
+        literal_generator: str | LiteralGenerator = "full",
+        model_selection: str | ModelSelector = "paper",
+        fitness_evaluator: str | FitnessEvaluator | None = None,
+        max_fit_seconds: float | None = None,
         random_state: int | None = None,
     ):
         self.trainer = trainer
@@ -747,6 +824,10 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         self.tournament_size = tournament_size
         self.max_model_size = max_model_size
         self.validation_fraction = validation_fraction
+        self.literal_generator = literal_generator
+        self.model_selection = model_selection
+        self.fitness_evaluator = fitness_evaluator
+        self.max_fit_seconds = max_fit_seconds
         self.random_state = random_state
 
 
@@ -801,8 +882,9 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             X_disc_val = None
             y_idx_val = None
 
-        # Suchraum: alle nicht-trivialen Teilmengenliterale
-        all_literals = _generate_literals(X_disc_train)
+        # Suchraum: Literale via konfigurierbaren Generator
+        lit_gen_fn = self._resolve_literal_generator()
+        all_literals = lit_gen_fn(X_disc_train)
         if self.min_max_weight > 0 and len(all_literals) > 0:
             all_literals = self._filter_literals(
                 all_literals, X_disc_train, y_idx_train, n_classes
@@ -864,6 +946,77 @@ class LogicGPClassifier(BaseRuleSetEstimator):
     # Interne Methoden
     # ------------------------------------------------------------------
 
+    def _resolve_literal_generator(self) -> LiteralGenerator:
+        """Resolve the literal_generator parameter to a callable."""
+        gen = self.literal_generator
+        if callable(gen) and not isinstance(gen, str):
+            return gen
+        if isinstance(gen, str):
+            _GENERATORS: dict[str, LiteralGenerator] = {
+                "full": _generate_literals,
+                "singleton": _generate_singleton_literals,
+            }
+            if gen in _GENERATORS:
+                return _GENERATORS[gen]
+            raise ValueError(
+                f"Unknown literal_generator '{gen}'. "
+                f"Choose from {list(_GENERATORS.keys())} or pass a callable."
+            )
+        raise ValueError(
+            f"literal_generator must be a string or callable, got {type(gen)}."
+        )
+
+    def _resolve_model_selector(self) -> ModelSelector:
+        """Resolve the model_selection parameter to a callable."""
+        sel = self.model_selection
+        if callable(sel) and not isinstance(sel, str):
+            return sel
+        if isinstance(sel, str):
+            _SELECTORS: dict[str, ModelSelector] = {
+                "paper": _final_model_selection,
+                "best_f1": _select_model_best_f1,
+            }
+            if sel in _SELECTORS:
+                return _SELECTORS[sel]
+            raise ValueError(
+                f"Unknown model_selection '{sel}'. "
+                f"Choose from {list(_SELECTORS.keys())} or pass a callable."
+            )
+        raise ValueError(
+            f"model_selection must be a string or callable, got {type(sel)}."
+        )
+
+    def _resolve_fitness_evaluator(self) -> FitnessEvaluator | None:
+        """Resolve the fitness_evaluator parameter to a callable, or None for auto."""
+        fe = self.fitness_evaluator
+        if fe is None:
+            return None
+        if callable(fe) and not isinstance(fe, str):
+            return fe
+        if isinstance(fe, str):
+            _EVALUATORS: dict[str, FitnessEvaluator] = {
+                "flcw": _evaluate_fitness,
+                "rlcw": _evaluate_fitness_rlcw,
+            }
+            if fe in _EVALUATORS:
+                return _EVALUATORS[fe]
+            raise ValueError(
+                f"Unknown fitness_evaluator '{fe}'. "
+                f"Choose from {list(_EVALUATORS.keys())} or pass a callable."
+            )
+        raise ValueError(
+            f"fitness_evaluator must be a string, callable, or None, got {type(fe)}."
+        )
+
+    @staticmethod
+    def _strategy_name(strategy) -> str:
+        """Return a human-readable name for a strategy parameter."""
+        if isinstance(strategy, str):
+            return strategy
+        if callable(strategy):
+            return getattr(strategy, "__name__", repr(strategy))
+        return repr(strategy)
+
     def _filter_literals(
         self,
         literals: list[_SetLiteral],
@@ -874,7 +1027,9 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         """Filtert Literale heraus, deren maximales Klassengewicht zu gering ist."""
         filtered = []
         for lit in literals:
-            mask = np.asarray([lit.evaluate(X_disc[i, lit.feature_idx]) for i in range(X_disc.shape[0])])
+            col = X_disc[:, lit.feature_idx]
+            cats = np.array(sorted(lit.category_set))
+            mask = np.isin(col, cats)
             if mask.sum() == 0:
                 continue
             counts = np.bincount(y_idx[mask], minlength=n_classes).astype(float)
@@ -943,10 +1098,9 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         # Evaluiere Diskriminationskraft jedes Literals pro Klasse
         lit_fire_masks: list[np.ndarray] = []
         for lit in all_literals:
-            mask = np.array(
-                [lit.evaluate(X_disc[i, lit.feature_idx]) for i in range(n_samples)],
-                dtype=bool,
-            )
+            col = X_disc[:, lit.feature_idx]
+            cats = np.array(sorted(lit.category_set))
+            mask = np.isin(col, cats)
             lit_fire_masks.append(mask)
 
         # Finde bestes Literal pro Klasse (nach purity * coverage)
@@ -1053,24 +1207,27 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         f1_average = "micro" if self.trainer.lower().endswith("_micro") else "macro"
         has_val = X_val is not None and y_val is not None
 
+        # Konfigurierbare Strategien aufloesen
+        resolved_fe = self._resolve_fitness_evaluator()
+        if resolved_fe is not None:
+            evaluate_fn = resolved_fe
+            use_rlcw = (evaluate_fn is _evaluate_fitness_rlcw)
+        else:
+            evaluate_fn = _evaluate_fitness_rlcw if use_rlcw else _evaluate_fitness
+        pareto_fn = _pareto_front_rlcw if use_rlcw else _pareto_front
+        select_model_fn = self._resolve_model_selector()
+
         # ------------------------------------------------------------------
         # Gewichte berechnen und Initialpopulation evaluieren
         # ------------------------------------------------------------------
         for poly in population:
             _compute_weights(poly, X_disc, y_idx, n_classes)
 
-        if use_rlcw:
-            evaluated: list = [
-                (poly, _evaluate_fitness_rlcw(poly, X_disc, y_idx, n_classes))
-                for poly in population
-            ]
-            evaluated = _pareto_front_rlcw(evaluated)
-        else:
-            evaluated = [
-                (poly, _evaluate_fitness(poly, X_disc, y_idx, n_classes))
-                for poly in population
-            ]
-            evaluated = _pareto_front(evaluated)
+        evaluated: list = [
+            (poly, evaluate_fn(poly, X_disc, y_idx, n_classes))
+            for poly in population
+        ]
+        evaluated = pareto_fn(evaluated)
 
         # Populationsgroesse begrenzen (RLCW mit population_size)
         if self.population_size is not None and len(evaluated) > self.population_size:
@@ -1115,7 +1272,17 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         ]
         n_adapt = max(1, self.n_adaptations_per_gen)
 
+        # Zeitbudget fuer fruehzeitigen Abbruch (max_fit_seconds)
+        _gp_start_time = time.monotonic()
+        _time_budget = self.max_fit_seconds  # None = kein Limit
+
         for _gen in range(self.max_generations):
+            # Zeitbudget pruefen
+            if _time_budget is not None:
+                elapsed = time.monotonic() - _gp_start_time
+                if elapsed >= _time_budget:
+                    break
+
             # ------------------------------------------------------------------
             # Neue Individuen generieren (n_adaptations_per_gen Stueck)
             # ------------------------------------------------------------------
@@ -1142,20 +1309,14 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 if self.max_model_size is not None and poly.size > self.max_model_size:
                     continue
                 _compute_weights(poly, X_disc, y_idx, n_classes)
-                if use_rlcw:
-                    fit = _evaluate_fitness_rlcw(poly, X_disc, y_idx, n_classes)
-                else:
-                    fit = _evaluate_fitness(poly, X_disc, y_idx, n_classes)
+                fit = evaluate_fn(poly, X_disc, y_idx, n_classes)
                 new_evaluated.append((poly, fit))
 
             # ------------------------------------------------------------------
             # Pareto-Selektion + optionale Populationsgroessen-Begrenzung
             # ------------------------------------------------------------------
             combined = evaluated + new_evaluated
-            if use_rlcw:
-                evaluated = _pareto_front_rlcw(combined)
-            else:
-                evaluated = _pareto_front(combined)
+            evaluated = pareto_fn(combined)
 
             if self.population_size is not None and len(evaluated) > self.population_size:
                 evaluated = _tournament_trim(
@@ -1234,7 +1395,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             if n_extra >= 50:
                 break
 
-        return _final_model_selection(f1_candidates, min_improvement=self.min_improvement_pct)
+        return select_model_fn(f1_candidates, self.min_improvement_pct)
 
     def _select_two_parents(self, evaluated: list) -> tuple[_Polynomial, _Polynomial]:
         """Waehlt zwei Eltern per Domination-Turnier."""
@@ -1289,6 +1450,8 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 "population_size": self.population_size,
                 "n_adaptations_per_gen": self.n_adaptations_per_gen,
                 "max_model_size": self.max_model_size,
+                "literal_generator": self._strategy_name(self.literal_generator),
+                "model_selection": self._strategy_name(self.model_selection),
             },
         )
 

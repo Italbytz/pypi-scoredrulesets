@@ -240,7 +240,12 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 backend_params={},
                 exstracs_params={
                     "filter_weak_rules": True,
-                    "min_fitness_percentile": 0.2,  # Behalte top 80%
+                    "min_fitness_percentile": 0.4,  # Behalte top 60% (vorher 80%)
+                    "conservative_prune": True,
+                    "consolidate_similar": True,
+                    "interval_merge": True,
+                    "aggressive_prune": True,
+                    "max_f1_loss": 0.02,  # 2% F1-Verlust akzeptabel
                 },
                 random_state=0,
             ),
@@ -298,12 +303,13 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 backend="logicgp",
                 backend_params={
                     "trainer": "rlcw_macro",
-                    "max_generations": 500,
-                    "stagnation_generations": 100,
+                    "max_generations": 200,
+                    "stagnation_generations": 40,
                     "population_size": 50,
                     "n_adaptations_per_gen": 12,
                     "n_bins": 5,
                     "min_max_weight": 0.1,
+                    "max_fit_seconds": 240,
                     "random_state": 0,
                 },
                 random_state=0,

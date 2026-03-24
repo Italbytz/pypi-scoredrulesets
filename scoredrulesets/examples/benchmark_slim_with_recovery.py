@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Slim-Benchmark mit automatischem Resume bei Abbruch/Crash.",
         epilog="Design: 10 Datasets (maximale Typ-Diskriminierung), "
-               "11 Schaetzer (ein Vertreter pro Typ + Bug-Fix-Vergleiche).",
+               "13 Schaetzer (ein Vertreter pro Typ + Bug-Fix-Vergleiche + NLN).",
     )
     parser.add_argument(
         "--max-attempts", type=int, default=3,
