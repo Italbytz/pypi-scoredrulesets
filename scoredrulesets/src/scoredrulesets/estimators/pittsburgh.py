@@ -30,7 +30,24 @@ class _CandidateRule:
 
 
 class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
-    """Simple Pittsburgh-style rule-set learner with beam search over rule subsets."""
+    """Pittsburgh-style rule-set learner with beam search over rule subsets.
+
+    Supports several BioHEL-inspired enhancements beyond a simple beam search:
+
+    * **Sequential Covering (IRL)** – when ``sequential_covering=True``, rules
+      are learned iteratively: after each rule is selected, the correctly covered
+      examples are removed and candidates are rebuilt on the residual dataset.
+    * **Token Competition** – ``token_competition_weight`` adds an overlap
+      penalty to the fitness so that rules covering the same examples as already
+      selected rules are penalized, promoting specialization.
+    * **Post-hoc Rule Compaction** – ``enable_compaction=True`` runs a backward
+      elimination step after fitting: rules are greedily removed if removal does
+      not decrease macro-F1 on the evaluation set.
+    * **Windowing** – ``window_fraction`` (0–1] controls stochastic subset
+      evaluation.  When set to less than 1.0, each beam-search iteration
+      evaluates candidates on a random subset of the evaluation indices,
+      significantly speeding up large datasets.
+    """
 
     def __init__(
         self,
@@ -48,6 +65,11 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         complexity_penalty: float = 0.01,
         random_state: int | None = None,
         max_thresholds_per_feature: int | None = None,
+        # -- BioHEL-inspired enhancements --
+        sequential_covering: bool = False,
+        token_competition_weight: float = 0.0,
+        enable_compaction: bool = False,
+        window_fraction: float = 1.0,
     ):
         self.aggregation = aggregation
         self.temperature = temperature
@@ -63,6 +85,10 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         self.complexity_penalty = complexity_penalty
         self.random_state = random_state
         self.max_thresholds_per_feature = max_thresholds_per_feature
+        self.sequential_covering = sequential_covering
+        self.token_competition_weight = token_competition_weight
+        self.enable_compaction = enable_compaction
+        self.window_fraction = window_fraction
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
@@ -81,12 +107,61 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         prior_counts = np.bincount(train_y, minlength=n_classes).astype(float)
         self._default_scores_ = self._distribution_to_scores(prior_counts)
 
+        if self.sequential_covering:
+            selected_rules, iterations_ran = self._fit_sequential_covering(
+                X_valid, y_idx, n_classes, train_idx, val_idx,
+            )
+        else:
+            selected_rules, iterations_ran = self._fit_beam_search(
+                X_valid, y_idx, n_classes, train_idx, val_idx,
+            )
+
+        # -- Post-hoc Rule Compaction (BioHEL-inspired) --
+        if self.enable_compaction and len(selected_rules) > 1:
+            selected_rules = self._compact_rules(selected_rules, X_valid, y_idx, train_idx, val_idx)
+
+        ruleset = self._build_ruleset(selected_rules)
+        ruleset.metadata.update(
+            {
+                "source": "pittsburgh",
+                "model_type": "pittsburgh_rule_set_search",
+                "candidate_pool_size": int(self._candidate_count_),
+                "beam_width": int(self.beam_width),
+                "max_iterations": int(self.max_iterations),
+                "iterations_ran": int(iterations_ran),
+                "selected_rule_count": int(len(selected_rules)),
+                "used_validation": bool(val_idx is not None),
+                "validation_fraction": float(self.validation_fraction),
+                "sequential_covering": bool(self.sequential_covering),
+                "token_competition_weight": float(self.token_competition_weight),
+                "compaction_enabled": bool(self.enable_compaction),
+                "window_fraction": float(self.window_fraction),
+            }
+        )
+        ruleset.validate()
+        self.ruleset_ = ruleset
+        return self
+
+    # ------------------------------------------------------------------
+    # Standard beam search (original approach)
+    # ------------------------------------------------------------------
+
+    def _fit_beam_search(
+        self,
+        X_valid: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        train_idx: np.ndarray,
+        val_idx: np.ndarray | None,
+    ) -> tuple[list[Rule], int]:
+        """Run the classic beam-search over rule subsets."""
+        train_X = X_valid[train_idx]
+        train_y = y_idx[train_idx]
         candidates = self._build_candidate_rules(train_X, train_y, n_classes)
         self._candidate_count_ = len(candidates)
 
         if not candidates:
-            self.ruleset_ = self._build_ruleset([])
-            return self
+            return [], 0
 
         initial_states = {tuple()}
         initial_states.update((idx,) for idx in range(min(len(candidates), self.beam_width)))
@@ -154,24 +229,143 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
                 break
 
         selected_rules = [candidates[idx].rule for idx in best_state]
-        ruleset = self._build_ruleset(selected_rules)
-        ruleset.metadata.update(
-            {
-                "source": "pittsburgh",
-                "model_type": "pittsburgh_rule_set_search",
-                "candidate_pool_size": int(self._candidate_count_),
-                "beam_width": int(self.beam_width),
-                "max_iterations": int(self.max_iterations),
-                "iterations_ran": int(iterations_ran),
-                "selected_rule_count": int(len(selected_rules)),
-                "used_validation": bool(val_idx is not None),
-                "validation_fraction": float(self.validation_fraction),
-                "best_state_score": float(best_score),
-            }
-        )
-        ruleset.validate()
-        self.ruleset_ = ruleset
-        return self
+        return selected_rules, iterations_ran
+
+    # ------------------------------------------------------------------
+    # Sequential Covering / Iterative Rule Learning (BioHEL-inspired)
+    # ------------------------------------------------------------------
+
+    def _fit_sequential_covering(
+        self,
+        X_valid: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        train_idx: np.ndarray,
+        val_idx: np.ndarray | None,
+    ) -> tuple[list[Rule], int]:
+        """Learn rules one at a time, removing covered examples after each round.
+
+        This is the *Iterative Rule Learning* (IRL) strategy used in BioHEL.
+        After each rule is selected the correctly covered training examples are
+        removed so the next round focuses on the residual (uncovered) data.
+        """
+        max_rules = max(1, int(self.max_rules))
+        remaining_train_idx = train_idx.copy()
+        selected_rules: list[Rule] = []
+        total_iterations = 0
+        self._candidate_count_ = 0
+
+        for _round in range(max_rules):
+            if remaining_train_idx.size < max(2, self.min_samples_leaf):
+                break
+
+            residual_X = X_valid[remaining_train_idx]
+            residual_y = y_idx[remaining_train_idx]
+            candidates = self._build_candidate_rules(residual_X, residual_y, n_classes)
+            self._candidate_count_ += len(candidates)
+
+            if not candidates:
+                break
+
+            # Pick the single best rule via beam search with max_rules=1
+            best_rule, best_score = None, -np.inf
+            for cand in candidates:
+                score = self._single_rule_score(
+                    cand.rule, X_valid, y_idx, remaining_train_idx, val_idx,
+                )
+                if score > best_score:
+                    best_score = score
+                    best_rule = cand.rule
+            total_iterations += 1
+
+            if best_rule is None:
+                break
+
+            selected_rules.append(best_rule)
+
+            # Remove correctly covered training examples (IRL core step)
+            ruleset_so_far = self._build_ruleset(selected_rules)
+            preds = predict_from_ruleset(ruleset_so_far, X_valid[remaining_train_idx])
+            y_true_str = np.asarray(self.classes_[y_idx[remaining_train_idx]], dtype=str)
+            preds_str = np.asarray(preds, dtype=str)
+            correctly_covered = preds_str == y_true_str
+            # Keep only incorrectly classified examples for the next round
+            remaining_train_idx = remaining_train_idx[~correctly_covered]
+
+            if remaining_train_idx.size == 0:
+                break
+
+        # Recompute default rule on residual (BioHEL-style dynamic default)
+        if remaining_train_idx.size > 0:
+            residual_counts = np.bincount(y_idx[remaining_train_idx], minlength=n_classes).astype(float)
+            self._default_scores_ = self._distribution_to_scores(residual_counts)
+
+        return selected_rules, total_iterations
+
+    def _single_rule_score(
+        self,
+        rule: Rule,
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        train_idx: np.ndarray,
+        val_idx: np.ndarray | None,
+    ) -> float:
+        """Evaluate a single rule wrapped in a ruleset."""
+        ruleset = self._build_ruleset([rule])
+        eval_idx = val_idx if val_idx is not None else train_idx
+        y_pred = predict_from_ruleset(ruleset, X[eval_idx])
+        y_true = np.asarray(self.classes_[y_idx[eval_idx]], dtype=str)
+        y_pred = np.asarray(y_pred, dtype=str)
+        return float(f1_score(y_true, y_pred, average="macro"))
+
+    # ------------------------------------------------------------------
+    # Post-hoc Rule Compaction (BioHEL-inspired)
+    # ------------------------------------------------------------------
+
+    def _compact_rules(
+        self,
+        rules: list[Rule],
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        train_idx: np.ndarray,
+        val_idx: np.ndarray | None,
+    ) -> list[Rule]:
+        """Backward elimination: greedily remove rules that don't help F1."""
+        eval_idx = val_idx if val_idx is not None else train_idx
+        current_rules = list(rules)
+        current_f1 = self._evaluate_rule_list_f1(current_rules, X, y_idx, eval_idx)
+
+        improved = True
+        while improved and len(current_rules) > 1:
+            improved = False
+            best_drop_idx = None
+            best_drop_f1 = -np.inf
+            for i in range(len(current_rules)):
+                reduced = current_rules[:i] + current_rules[i + 1:]
+                reduced_f1 = self._evaluate_rule_list_f1(reduced, X, y_idx, eval_idx)
+                if reduced_f1 >= current_f1 - 1e-9 and reduced_f1 > best_drop_f1:
+                    best_drop_f1 = reduced_f1
+                    best_drop_idx = i
+
+            if best_drop_idx is not None:
+                current_rules = current_rules[:best_drop_idx] + current_rules[best_drop_idx + 1:]
+                current_f1 = best_drop_f1
+                improved = True
+
+        return current_rules
+
+    def _evaluate_rule_list_f1(
+        self,
+        rules: list[Rule],
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        eval_idx: np.ndarray,
+    ) -> float:
+        ruleset = self._build_ruleset(rules)
+        y_pred = predict_from_ruleset(ruleset, X[eval_idx])
+        y_true = np.asarray(self.classes_[y_idx[eval_idx]], dtype=str)
+        y_pred = np.asarray(y_pred, dtype=str)
+        return float(f1_score(y_true, y_pred, average="macro"))
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
@@ -377,8 +571,17 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         selected_rules = [candidates[idx].rule for idx in state]
         ruleset = self._build_ruleset(selected_rules)
         eval_idx = val_idx if val_idx is not None else train_idx
-        y_pred = predict_from_ruleset(ruleset, X[eval_idx])
-        y_true = np.asarray(self.classes_[y_idx[eval_idx]], dtype=str)
+
+        # -- Windowing (BioHEL-inspired): stochastic subset evaluation --
+        wf = float(self.window_fraction)
+        if 0.0 < wf < 1.0 and eval_idx.size > 10:
+            window_size = max(5, int(round(eval_idx.size * wf)))
+            window_idx = self._rng_.choice(eval_idx, size=window_size, replace=False)
+        else:
+            window_idx = eval_idx
+
+        y_pred = predict_from_ruleset(ruleset, X[window_idx])
+        y_true = np.asarray(self.classes_[y_idx[window_idx]], dtype=str)
         y_pred = np.asarray(y_pred, dtype=str)
         f1 = float(f1_score(y_true, y_pred, average="macro"))
         n_rules = len(selected_rules)
@@ -387,7 +590,28 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
             n_rules + n_atoms / max(1.0, float(self.max_rules))
         )
         coverage_bonus = 0.001 * sum(candidates[idx].coverage for idx in state) / max(1, len(train_idx))
-        return f1 - complexity + coverage_bonus
+
+        # -- Token Competition (BioHEL-inspired): penalize rule overlap --
+        token_penalty = 0.0
+        tc_weight = float(self.token_competition_weight)
+        if tc_weight > 0.0 and len(state) >= 2:
+            # Count how many rules fire per example; penalize multi-coverage
+            fire_count = np.zeros(window_idx.size, dtype=int)
+            for idx in state:
+                rule = candidates[idx].rule
+                # Build a minimal single-rule ruleset to get firing mask
+                single_rs = self._build_ruleset([rule])
+                single_pred = predict_from_ruleset(single_rs, X[window_idx])
+                # A rule "fires" if it changes the prediction from default
+                default_rs = self._build_ruleset([])
+                default_pred = predict_from_ruleset(default_rs, X[window_idx])
+                fires = np.asarray(single_pred, dtype=str) != np.asarray(default_pred, dtype=str)
+                fire_count += fires.astype(int)
+            # Fraction of examples covered by >1 rule
+            overlap_fraction = float((fire_count > 1).mean())
+            token_penalty = tc_weight * overlap_fraction
+
+        return f1 - complexity + coverage_bonus - token_penalty
 
     def _state_atom_count(self, state: tuple[int, ...], candidates: list[_CandidateRule]) -> int:
         return sum(len(candidates[idx].rule.atoms) for idx in state)
