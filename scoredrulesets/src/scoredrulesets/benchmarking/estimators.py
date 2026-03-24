@@ -14,9 +14,15 @@ class EstimatorSpec:
     factory: Callable[[], object]
 
 
+# Global mutable registry – external scripts (e.g. benchmark_logicgp_variants)
+# can add specs here at runtime.  `default_estimator_specs()` merges
+# these into its result so that `run_benchmarks()` picks them up.
+ESTIMATOR_SPECS: dict[str, EstimatorSpec] = {}
+
+
 def default_estimator_specs() -> dict[str, EstimatorSpec]:
     # ...existing code...
-    return {
+    specs = {
         "wrapper_cart": EstimatorSpec(
             name="wrapper_cart",
             factory=lambda: ScoredRuleSetClassifier(
@@ -505,3 +511,8 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
             ),
         ),
     }
+
+    # Merge any dynamically registered specs (external benchmarks etc.)
+    specs.update(ESTIMATOR_SPECS)
+    return specs
+
