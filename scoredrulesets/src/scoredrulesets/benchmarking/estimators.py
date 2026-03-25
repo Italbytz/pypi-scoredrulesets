@@ -31,78 +31,33 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_cart_pruned": EstimatorSpec(
-            name="wrapper_cart_pruned",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="cart",
-                backend_params={"max_depth": 4},
-                transform_params={
-                    "prune_atoms": True,
-                },
-                random_state=0,
-            ),
-        ),
+        # "wrapper_cart_pruned": EstimatorSpec(
+        #     name="wrapper_cart_pruned",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="cart",
+        #         backend_params={"max_depth": 4},
+        #         transform_params={
+        #             "prune_atoms": True,
+        #         },
+        #         random_state=0,
+        #     ),
+        # ),
         "wrapper_hs": EstimatorSpec(
             name="wrapper_hs",
             factory=lambda: ScoredRuleSetClassifier(backend="hs", random_state=0),
         ),
-        "wrapper_hs_pruned": EstimatorSpec(
-            name="wrapper_hs_pruned",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="hs",
-                transform_params={
-                    "prune_atoms": True,
-                },
-                random_state=0,
-            ),
-        ),
+        # "wrapper_hs_pruned": EstimatorSpec(
+        #     name="wrapper_hs_pruned",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="hs",
+        #         transform_params={
+        #             "prune_atoms": True,
+        #         },
+        #         random_state=0,
+        #     ),
+        # ),
         "wrapper_pittsburgh": EstimatorSpec(
             name="wrapper_pittsburgh",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="pittsburgh",
-                backend_params={
-                    "max_rules": 5,
-                    "candidate_pool_size": 20,
-                    "beam_width": 6,
-                    "max_iterations": 12,
-                    "validation_fraction": 0.2,
-                    "complexity_penalty": 0.01,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_pittsburgh_fast": EstimatorSpec(
-            name="wrapper_pittsburgh_fast",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="pittsburgh",
-                backend_params={
-                    "max_rules": 4,
-                    "candidate_pool_size": 12,
-                    "beam_width": 4,
-                    "max_iterations": 6,
-                    "validation_fraction": 0.15,
-                    "complexity_penalty": 0.012,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_pittsburgh_strong": EstimatorSpec(
-            name="wrapper_pittsburgh_strong",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="pittsburgh",
-                backend_params={
-                    "max_rules": 6,
-                    "candidate_pool_size": 32,
-                    "beam_width": 10,
-                    "max_iterations": 20,
-                    "validation_fraction": 0.25,
-                    "complexity_penalty": 0.008,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_pittsburgh_diverse": EstimatorSpec(
-            name="wrapper_pittsburgh_diverse",
             factory=lambda: ScoredRuleSetClassifier(
                 backend="pittsburgh",
                 backend_params={
@@ -125,35 +80,8 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        # -- RuleKit pure-Python re-implementation (no JVM required) --
         "wrapper_rulekit_native": EstimatorSpec(
             name="wrapper_rulekit_native",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="rulekit_native",
-                backend_params={
-                    "max_rules": 20,
-                    "max_conditions": 5,
-                    "min_samples_leaf": 5,
-                    "enable_pruning": True,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_rulekit_native_fast": EstimatorSpec(
-            name="wrapper_rulekit_native_fast",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="rulekit_native",
-                backend_params={
-                    "max_rules": 10,
-                    "max_conditions": 3,
-                    "min_samples_leaf": 5,
-                    "enable_pruning": True,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_rulekit_native_strong": EstimatorSpec(
-            name="wrapper_rulekit_native_strong",
             factory=lambda: ScoredRuleSetClassifier(
                 backend="rulekit_native",
                 backend_params={
@@ -166,69 +94,42 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "rulekit_native": EstimatorSpec(
-            name="rulekit_native",
-            factory=lambda: RuleKitNativeClassifier(
-                max_rules=20,
-                max_conditions=5,
-                min_samples_leaf=5,
-                enable_pruning=True,
-                random_state=0,
-            ),
-        ),
-        "wrapper_exstracs": EstimatorSpec(
-            name="wrapper_exstracs",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="exstracs",
-                backend_params={},
-                random_state=0,
-            ),
-        ),
+        # "wrapper_exstracs": EstimatorSpec(
+        #     name="wrapper_exstracs",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="exstracs",
+        #         backend_params={},
+        #         random_state=0,
+        #     ),
+        # ),
         # -- ExSTraCS pruned: conservative atom pruning (≤1.5% F1 loss, 20–77% reduction) --
-        "wrapper_exstracs_pruned": EstimatorSpec(
-            name="wrapper_exstracs_pruned",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="exstracs",
-                backend_params={},
-                exstracs_params={
-                    "conservative_prune": True,
-                },
-                random_state=0,
-            ),
-        ),
+        # "wrapper_exstracs_pruned": EstimatorSpec(
+        #     name="wrapper_exstracs_pruned",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="exstracs",
+        #         backend_params={},
+        #         exstracs_params={
+        #             "conservative_prune": True,
+        #         },
+        #         random_state=0,
+        #     ),
+        # ),
         # -- ExSTraCS compact: interval merge + conservative (0–6% F1 loss, 29–98% reduction) --
-        "wrapper_exstracs_compact": EstimatorSpec(
-            name="wrapper_exstracs_compact",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="exstracs",
-                backend_params={},
-                exstracs_params={
-                    "interval_merge": True,
-                    "interval_merge_iou_threshold": 0.3,
-                    "conservative_prune": True,
-                },
-                random_state=0,
-            ),
-        ),
+        # "wrapper_exstracs_compact": EstimatorSpec(
+        #     name="wrapper_exstracs_compact",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="exstracs",
+        #         backend_params={},
+        #         exstracs_params={
+        #             "interval_merge": True,
+        #             "interval_merge_iou_threshold": 0.3,
+        #             "conservative_prune": True,
+        #         },
+        #         random_state=0,
+        #     ),
+        # ),
         "wrapper_logicgp": EstimatorSpec(
             name="wrapper_logicgp",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="logicgp",
-                backend_params={
-                    "trainer": "rlcw",
-                    "f1_averaging": "micro",
-                    "max_generations": 200,
-                    "stagnation_generations": 40,
-                    "population_size": 50,
-                    "n_adaptations_per_gen": 12,
-                    "n_bins": 5,
-                    "random_state": 0,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_logicgp_rlcw_macro": EstimatorSpec(
-            name="wrapper_logicgp_rlcw_macro",
             factory=lambda: ScoredRuleSetClassifier(
                 backend="logicgp",
                 backend_params={
@@ -245,26 +146,6 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_logicgp_flcw": EstimatorSpec(
-            name="wrapper_logicgp_flcw",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="logicgp",
-                backend_params={
-                    "trainer": "flcw",
-                    "f1_averaging": "micro",
-                    "max_generations": 200,
-                    "stagnation_generations": 40,
-                    "population_size": 50,
-                    "n_adaptations_per_gen": 8,
-                    "n_bins": 5,
-                    "random_state": 0,
-                },
-                random_state=0,
-            ),
-        ),
-        # ------------------------------------------------------------------
-        # Neural Logic Network (NLN) – differentiable logic rule learning
-        # ------------------------------------------------------------------
         "wrapper_nln": EstimatorSpec(
             name="wrapper_nln",
             factory=lambda: ScoredRuleSetClassifier(
@@ -378,7 +259,6 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        # -- ruleGP: full-ruleset GP with NSGA-II --
         "wrapper_rulegp": EstimatorSpec(
             name="wrapper_rulegp",
             factory=lambda: ScoredRuleSetClassifier(
