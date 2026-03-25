@@ -10,15 +10,21 @@ features.  The algorithm works as follows:
 2. **Growing** – greedily add the best condition (highest quality gain) to the
    current rule.  Conditions are of the form ``feature op threshold`` where
    *op* ∈ {<=, >, ==} for numeric features and ``== category`` for nominal
-   features.  RuleKit uses an entropy- or C2-based quality measure; we
-   approximate this with Gini-based information gain to reuse the shared
-   ``_split_utils`` infrastructure.
+   features.  RuleKit uses the C2 quality measure: ``(p - n) / (P + N)``
+   where *p*/*n* are covered positives/negatives and *P*/*N* are total
+   positives/negatives in the full dataset.
 3. **Pruning** – after growing, conditions are removed one at a time (back to
-   front) if removal does not decrease rule quality on a held-out validation
+   front) if removal does not decrease rule quality on a held-out pruning
    set (Reduced Error Pruning, REP).
 
-The resulting classifier exposes the standard ``BaseRuleSetEstimator`` API and
-produces a ``ScoredRuleSet`` that can be evaluated by the common runtime.
+For each round the algorithm grows a candidate rule for **every** class and
+selects the one with the highest quality.  After selection all examples
+of the rule's target class that are covered by the rule are removed from
+the uncovered set.
+
+Each induced rule receives a **one-hot score** weighted by its precision
+(confidence) on the covered examples — this matches the Java-RuleKit
+voting scheme.
 
 The existing Java-based backend (``backend="rulekit"``) is **not** changed –
 this module provides an independent ``backend="rulekit_native"`` alternative
@@ -39,12 +45,7 @@ from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
 from .base import BaseRuleSetEstimator
-from ._split_utils import (
-    best_numeric_split,
-    categorical_splits,
-    distribution_to_scores,
-    gini,
-)
+from ._split_utils import distribution_to_scores
 
 
 # ---------------------------------------------------------------------------
@@ -53,25 +54,15 @@ from ._split_utils import (
 
 @dataclass
 class _ElementaryCondition:
-    """A single condition ``feature op value``."""
+    """A single condition ``feature op value``.
+
+    For interval conditions (like Java RuleKit), *op* is ``"in"`` and *value*
+    is a tuple ``(lower, upper)`` representing ``lower <= feature < upper``.
+    """
     feature_idx: int
     feature_name: str
-    op: str  # one of <=, >, <, >=, ==
+    op: str          # one of <=, >, <, >=, ==, in
     value: Any
-
-    def matches(self, row: np.ndarray) -> bool:
-        v = row[self.feature_idx]
-        if self.op == "<=":
-            return v <= self.value
-        if self.op == ">":
-            return v > self.value
-        if self.op == "<":
-            return v < self.value
-        if self.op == ">=":
-            return v >= self.value
-        if self.op == "==":
-            return v == self.value
-        raise ValueError(f"Unsupported op: {self.op}")
 
     def matches_array(self, X: np.ndarray) -> np.ndarray:
         """Return boolean mask of shape (n_samples,)."""
@@ -86,6 +77,9 @@ class _ElementaryCondition:
             return col >= self.value
         if self.op == "==":
             return np.asarray(col == self.value, dtype=bool)
+        if self.op == "in":
+            lo, hi = self.value
+            return (col >= lo) & (col < hi)
         raise ValueError(f"Unsupported op: {self.op}")
 
 
@@ -94,114 +88,51 @@ class _InducedRule:
     """An induced rule: conjunction of elementary conditions + predicted class."""
     conditions: list[_ElementaryCondition]
     class_idx: int
-    quality: float  # rule quality on training or pruning data
-    coverage: int  # number of examples covered
+    quality: float       # C2 quality
+    coverage: int        # number of examples covered
+    precision: float     # p / (p + n) on covered examples
 
 
 # ---------------------------------------------------------------------------
-# Quality measure (approximation of RuleKit's C2 / entropy gain)
+# Quality measure – RuleKit C2
 # ---------------------------------------------------------------------------
 
-def _rule_quality(
-    covered_counts: np.ndarray,
-    total_counts: np.ndarray,
-    class_idx: int,
+def _c2_quality(
+    p: float,
+    n: float,
+    P: float,
+    N: float,
 ) -> float:
-    """Compute rule quality for the target class.
+    """RuleKit C2 quality measure: (p - n) / (P + N).
 
-    We use a precision × coverage heuristic similar to RuleKit's default C2
-    measure:  quality = (p - n) / (P + N)  where
-      p = covered positives,  n = covered negatives,
-      P = total positives,   N = total negatives.
+    Parameters
+    ----------
+    p : covered positives (target class)
+    n : covered negatives (other classes)
+    P : total positives in full dataset
+    N : total negatives in full dataset
     """
-    p = covered_counts[class_idx]
-    n = float(np.sum(covered_counts)) - p
-    P = total_counts[class_idx]
-    N = float(np.sum(total_counts)) - P
     denom = P + N
     if denom <= 0:
         return 0.0
     return float((p - n) / denom)
 
 
-def _rule_precision(covered_counts: np.ndarray, class_idx: int) -> float:
-    total = float(np.sum(covered_counts))
-    if total <= 0:
-        return 0.0
-    return float(covered_counts[class_idx] / total)
-
-
 # ---------------------------------------------------------------------------
 # Growing: greedy condition addition
 # ---------------------------------------------------------------------------
 
-def _best_condition_for_feature(
-    col: np.ndarray,
+def _compute_covered_pn(
     y_idx: np.ndarray,
-    n_classes: int,
+    mask: np.ndarray,
     class_idx: int,
-    total_counts: np.ndarray,
-    min_samples_leaf: int,
-    max_thresholds: int | None,
-) -> tuple[_ElementaryCondition, float] | None:
-    """Find the best elementary condition on a single feature column.
-
-    Returns ``(condition, quality)`` or ``None``.
-    """
-    is_numeric = np.issubdtype(col.dtype, np.number)
-
-    best: tuple[_ElementaryCondition, float] | None = None
-
-    if is_numeric:
-        values = col.astype(float)
-        unique_vals = np.unique(values)
-        if unique_vals.size < 2:
-            return None
-
-        thresholds = (unique_vals[:-1] + unique_vals[1:]) / 2.0
-        if max_thresholds is not None and len(thresholds) > max_thresholds:
-            idx = np.round(np.linspace(0, len(thresholds) - 1, max_thresholds)).astype(int)
-            thresholds = thresholds[idx]
-
-        for threshold in thresholds:
-            for op in ("<=", ">"):
-                if op == "<=":
-                    mask = values <= threshold
-                else:
-                    mask = values > threshold
-                if mask.sum() < min_samples_leaf or (~mask).sum() < min_samples_leaf:
-                    continue
-                covered_counts = np.bincount(y_idx[mask], minlength=n_classes).astype(float)
-                q = _rule_quality(covered_counts, total_counts, class_idx)
-                if best is None or q > best[1]:
-                    cond = _ElementaryCondition(
-                        feature_idx=-1,  # will be set by caller
-                        feature_name="",
-                        op=op,
-                        value=float(threshold),
-                    )
-                    best = (cond, q)
-    else:
-        # Categorical feature
-        categories = np.unique(col)
-        if categories.size < 2:
-            return None
-        for cat in categories:
-            mask = np.asarray(col == cat, dtype=bool)
-            if mask.sum() < min_samples_leaf or (~mask).sum() < min_samples_leaf:
-                continue
-            covered_counts = np.bincount(y_idx[mask], minlength=n_classes).astype(float)
-            q = _rule_quality(covered_counts, total_counts, class_idx)
-            if best is None or q > best[1]:
-                cond = _ElementaryCondition(
-                    feature_idx=-1,
-                    feature_name="",
-                    op="==",
-                    value=cat,
-                )
-                best = (cond, q)
-
-    return best
+    n_classes: int,
+) -> tuple[float, float]:
+    """Return (p, n) for the subset of y_idx selected by *mask*."""
+    counts = np.bincount(y_idx[mask], minlength=n_classes).astype(float)
+    p = counts[class_idx]
+    n = float(np.sum(counts)) - p
+    return p, n
 
 
 def _grow_rule(
@@ -213,79 +144,145 @@ def _grow_rule(
     min_samples_leaf: int,
     max_conditions: int,
     max_thresholds: int | None,
+    P: float,
+    N: float,
+    enable_intervals: bool = True,
 ) -> _InducedRule | None:
-    """Grow a single rule by greedy condition addition (RuleKit growing phase).
+    """Grow a single rule by greedy condition addition.
 
-    Starting from the full dataset the algorithm repeatedly adds the
-    elementary condition that maximises the C2-like quality measure until
-    no improvement is possible or the maximum number of conditions is reached.
+    At each step we evaluate *all* candidate elementary conditions on the
+    examples currently covered by the partial rule and add the one that
+    maximises the C2 quality measure.  Growing stops when:
+      * the rule is pure (no negatives covered),
+      * no condition improves quality,
+      * the minimum-leaf constraint cannot be met, or
+      * the maximum number of conditions is reached.
+
+    When *enable_intervals* is True (the default), interval conditions of the
+    form ``lower <= feature < upper`` are evaluated as single candidates –
+    matching the Java RuleKit approach where each elementary condition is an
+    interval.  This allows the algorithm to learn intervals in a single growing
+    step rather than requiring two steps.
+
+    ``P`` and ``N`` are the *full-dataset* class counts so that the quality
+    measure is comparable across growing steps and across rules for different
+    classes.
     """
     n_samples = X.shape[0]
-    total_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
-
     conditions: list[_ElementaryCondition] = []
     active_mask = np.ones(n_samples, dtype=bool)
 
-    for _ in range(max_conditions):
+    p_cur, n_cur = _compute_covered_pn(y_idx, active_mask, class_idx, n_classes)
+    current_quality = -np.inf
+
+    for step in range(max_conditions):
         if active_mask.sum() < min_samples_leaf:
             break
-
-        active_X = X[active_mask]
-        active_y = y_idx[active_mask]
-        active_total = np.bincount(active_y, minlength=n_classes).astype(float)
+        if n_cur <= 0:
+            break
 
         best_cond: _ElementaryCondition | None = None
-        best_quality = -np.inf
+        best_q = current_quality  # must *strictly* improve
+        best_cov: int = 0         # tiebreaker: prefer more coverage
+
+        def _evaluate_candidate(
+            cand: _ElementaryCondition,
+            new_mask: np.ndarray,
+        ) -> None:
+            """Check if *cand* is better than the current best."""
+            nonlocal best_cond, best_q, best_cov
+            n_cov = int(new_mask.sum())
+            if n_cov < min_samples_leaf:
+                return
+            p_c, n_c = _compute_covered_pn(y_idx, new_mask, class_idx, n_classes)
+            q = _c2_quality(p_c, n_c, P, N)
+            # Strict improvement OR same quality but more coverage (broader rule)
+            if q > best_q + 1e-12 or (abs(q - best_q) <= 1e-12 and n_cov > best_cov):
+                best_q = q
+                best_cov = n_cov
+                best_cond = cand
 
         for feat_idx in range(X.shape[1]):
-            col = active_X[:, feat_idx]
-            result = _best_condition_for_feature(
-                col, active_y, n_classes, class_idx,
-                active_total, min_samples_leaf, max_thresholds,
-            )
-            if result is None:
-                continue
-            cond, quality = result
-            if quality > best_quality:
-                best_quality = quality
-                best_cond = _ElementaryCondition(
-                    feature_idx=feat_idx,
-                    feature_name=feature_names[feat_idx],
-                    op=cond.op,
-                    value=cond.value,
-                )
+            col = X[:, feat_idx]
+            is_numeric = np.issubdtype(col.dtype, np.number)
+
+            if is_numeric:
+                vals = col.astype(float)
+                active_vals = vals[active_mask]
+                unique_vals = np.unique(active_vals)
+                if unique_vals.size < 2:
+                    continue
+                thresholds = (unique_vals[:-1] + unique_vals[1:]) / 2.0
+                if max_thresholds is not None and len(thresholds) > max_thresholds:
+                    idx = np.round(
+                        np.linspace(0, len(thresholds) - 1, max_thresholds)
+                    ).astype(int)
+                    thresholds = thresholds[idx]
+
+                # --- Single-threshold conditions (<=, >) ---
+                for thr in thresholds:
+                    for op in ("<=", ">"):
+                        cand_mask = (vals <= thr) if op == "<=" else (vals > thr)
+                        new_mask = active_mask & cand_mask
+                        _evaluate_candidate(
+                            _ElementaryCondition(feat_idx, feature_names[feat_idx], op, float(thr)),
+                            new_mask,
+                        )
+
+                # --- Interval conditions [lower, upper) ---
+                if enable_intervals and len(thresholds) >= 2:
+                    if len(thresholds) > 30:
+                        iv_idx = np.round(
+                            np.linspace(0, len(thresholds) - 1, 30)
+                        ).astype(int)
+                        iv_thresholds = thresholds[iv_idx]
+                    else:
+                        iv_thresholds = thresholds
+
+                    for i_lo in range(len(iv_thresholds)):
+                        lo = float(iv_thresholds[i_lo])
+                        for i_hi in range(i_lo + 1, len(iv_thresholds)):
+                            hi = float(iv_thresholds[i_hi])
+                            cand_mask = (vals >= lo) & (vals < hi)
+                            new_mask = active_mask & cand_mask
+                            _evaluate_candidate(
+                                _ElementaryCondition(feat_idx, feature_names[feat_idx], "in", (lo, hi)),
+                                new_mask,
+                            )
+            else:
+                # Categorical
+                active_col = col[active_mask]
+                categories = np.unique(active_col)
+                if categories.size < 2:
+                    continue
+                for cat in categories:
+                    cand_mask = np.asarray(col == cat, dtype=bool)
+                    new_mask = active_mask & cand_mask
+                    _evaluate_candidate(
+                        _ElementaryCondition(feat_idx, feature_names[feat_idx], "==", cat),
+                        new_mask,
+                    )
 
         if best_cond is None:
             break
 
-        # Check that adding the condition actually improves quality
-        new_mask = active_mask & best_cond.matches_array(X)
-        if new_mask.sum() < min_samples_leaf:
-            break
-
-        # Check improvement over current quality
-        current_covered = np.bincount(y_idx[active_mask], minlength=n_classes).astype(float)
-        current_q = _rule_quality(current_covered, total_counts, class_idx)
-        new_covered = np.bincount(y_idx[new_mask], minlength=n_classes).astype(float)
-        new_q = _rule_quality(new_covered, total_counts, class_idx)
-
-        if new_q <= current_q and len(conditions) > 0:
-            break
-
         conditions.append(best_cond)
-        active_mask = new_mask
+        active_mask = active_mask & best_cond.matches_array(X)
+        p_cur, n_cur = _compute_covered_pn(y_idx, active_mask, class_idx, n_classes)
+        current_quality = best_q
 
     if not conditions:
         return None
 
-    covered_counts = np.bincount(y_idx[active_mask], minlength=n_classes).astype(float)
-    quality = _rule_quality(covered_counts, total_counts, class_idx)
+    coverage = int(active_mask.sum())
+    precision = float(p_cur / max(p_cur + n_cur, 1e-12))
 
     return _InducedRule(
         conditions=conditions,
         class_idx=class_idx,
-        quality=quality,
-        coverage=int(active_mask.sum()),
+        quality=current_quality,
+        coverage=coverage,
+        precision=precision,
     )
 
 
@@ -298,17 +295,15 @@ def _prune_rule(
     X_prune: np.ndarray,
     y_prune: np.ndarray,
     n_classes: int,
+    P: float,
+    N: float,
 ) -> _InducedRule:
     """Remove conditions from the rule (back to front) if quality does not drop.
 
-    This implements RuleKit's post-growing pruning phase: conditions are
-    tentatively removed and the rule is kept shorter if quality on the
-    pruning set stays the same or improves.
+    This implements RuleKit's post-growing pruning phase.
     """
     if len(rule.conditions) <= 1:
         return rule
-
-    total_counts = np.bincount(y_prune, minlength=n_classes).astype(float)
 
     def _quality_of(conditions: list[_ElementaryCondition]) -> float:
         mask = np.ones(X_prune.shape[0], dtype=bool)
@@ -316,13 +311,13 @@ def _prune_rule(
             mask &= c.matches_array(X_prune)
         if mask.sum() == 0:
             return -np.inf
-        covered = np.bincount(y_prune[mask], minlength=n_classes).astype(float)
-        return _rule_quality(covered, total_counts, rule.class_idx)
+        p, n = _compute_covered_pn(y_prune, mask, rule.class_idx, n_classes)
+        return _c2_quality(p, n, P, N)
 
     current_conditions = list(rule.conditions)
     current_quality = _quality_of(current_conditions)
 
-    # Iterate backwards (most recently added condition first)
+    # Iterate backwards; restart scan after each removal
     changed = True
     while changed and len(current_conditions) > 1:
         changed = False
@@ -335,53 +330,55 @@ def _prune_rule(
                 current_conditions = reduced
                 current_quality = q
                 changed = True
-                break  # restart backward scan
+                break
 
+    # Recompute coverage and precision on prune set
     mask = np.ones(X_prune.shape[0], dtype=bool)
     for c in current_conditions:
         mask &= c.matches_array(X_prune)
     coverage = int(mask.sum())
+    p, n = _compute_covered_pn(y_prune, mask, rule.class_idx, n_classes)
+    precision = float(p / max(p + n, 1e-12))
 
     return _InducedRule(
         conditions=current_conditions,
         class_idx=rule.class_idx,
         quality=current_quality,
         coverage=coverage,
+        precision=precision,
     )
 
 
 # ---------------------------------------------------------------------------
-# Conflict resolution / voting scheme
+# Conversion to ScoredRuleSet Rules
 # ---------------------------------------------------------------------------
 
 def _induced_rule_to_scored_rule(
     rule: _InducedRule,
     n_classes: int,
     rule_idx: int,
-    X: np.ndarray,
-    y_idx: np.ndarray,
-    aggregation: str,
 ) -> Rule:
-    """Convert an _InducedRule into a ScoredRuleSet Rule."""
-    atoms: list[Atom] = []
-    for cond in rule.conditions:
-        atoms.append(Atom(
-            feature=cond.feature_name,
-            op=cond.op,
-            value=cond.value,
-        ))
+    """Convert an _InducedRule to a ScoredRuleSet Rule.
 
-    # Compute class distribution of covered examples
-    mask = np.ones(X.shape[0], dtype=bool)
-    for cond in rule.conditions:
-        mask &= cond.matches_array(X)
+    Uses **one-hot scoring** weighted by the rule's precision (confidence),
+    matching the Java-RuleKit voting scheme where each rule votes for its
+    predicted class with a strength proportional to its confidence.
 
-    if mask.sum() > 0:
-        covered_counts = np.bincount(y_idx[mask], minlength=n_classes).astype(float)
-    else:
-        covered_counts = np.zeros(n_classes, dtype=float)
+    Interval conditions (``op="in"``, ``value=(lo, hi)``) are expanded into
+    two atoms: ``feature >= lo`` and ``feature < hi``.
+    """
+    atoms = []
+    for c in rule.conditions:
+        if c.op == "in":
+            lo, hi = c.value
+            atoms.append(Atom(feature=c.feature_name, op=">=", value=lo))
+            atoms.append(Atom(feature=c.feature_name, op="<", value=hi))
+        else:
+            atoms.append(Atom(feature=c.feature_name, op=c.op, value=c.value))
 
-    scores = distribution_to_scores(covered_counts, aggregation)
+    # One-hot score: only the target class gets a non-zero score
+    scores = [0.0] * n_classes
+    scores[rule.class_idx] = max(rule.precision, 1e-6)
 
     return Rule(
         atoms=atoms,
@@ -391,6 +388,7 @@ def _induced_rule_to_scored_rule(
             "source": "rulekit_native",
             "class_idx": rule.class_idx,
             "quality": rule.quality,
+            "precision": rule.precision,
             "coverage": rule.coverage,
             "n_conditions": len(rule.conditions),
         },
@@ -420,8 +418,18 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         Stop learning rules when fewer than this many uncovered examples remain.
     enable_pruning : bool
         Whether to apply Reduced Error Pruning after growing each rule.
+    pruning_mode : str
+        How to split data for pruning.  ``"same"`` (default) grows and prunes
+        on the same data – matching the Java RuleKit behaviour.  ``"split"``
+        reserves a fraction (see *pruning_fraction*) of each uncovered set
+        as a held-out pruning set.
     pruning_fraction : float
-        Fraction of training data reserved for pruning (only if enable_pruning).
+        Fraction of training data reserved for pruning (only used when
+        *pruning_mode* is ``"split"``).
+    enable_intervals : bool
+        If True (default), interval conditions ``[lower, upper)`` are
+        evaluated as single candidates during growing – matching Java
+        RuleKit's approach.
     validation_fraction : float
         Fraction of training data used as validation set for overall stopping.
     max_thresholds_per_feature : int | None
@@ -442,7 +450,9 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         min_samples_leaf: int = 5,
         min_rule_covered: int = 5,
         enable_pruning: bool = True,
+        pruning_mode: str = "same",
         pruning_fraction: float = 0.33,
+        enable_intervals: bool = True,
         validation_fraction: float = 0.0,
         max_thresholds_per_feature: int | None = None,
         aggregation: str = "argmax_sum",
@@ -454,7 +464,9 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         self.min_samples_leaf = min_samples_leaf
         self.min_rule_covered = min_rule_covered
         self.enable_pruning = enable_pruning
+        self.pruning_mode = pruning_mode
         self.pruning_fraction = pruning_fraction
+        self.enable_intervals = enable_intervals
         self.validation_fraction = validation_fraction
         self.max_thresholds_per_feature = max_thresholds_per_feature
         self.aggregation = aggregation
@@ -477,7 +489,6 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         class_to_idx = {label: idx for idx, label in enumerate(self.classes_)}
         y_idx = np.asarray([class_to_idx[v] for v in y_valid], dtype=int)
         n_classes = len(self.classes_)
-
         feature_names = self.feature_names_in_.tolist()
 
         # Optional validation split
@@ -497,81 +508,120 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         else:
             X_work, y_work = X_valid, y_idx
 
-        # ---- Sequential Covering ----
+        # Full-dataset class counts (constant for C2 quality measure)
+        full_counts = np.bincount(y_work, minlength=n_classes).astype(float)
+
+        # ---- Sequential Covering (class-first, like Java RuleKit) ----
+        # For each class c, learn rules until no uncovered positives remain
+        # or no improving rule can be found.  Then move to the next class.
         induced_rules: list[_InducedRule] = []
-        uncovered_mask = np.ones(X_work.shape[0], dtype=bool)
+        uncovered_masks: list[np.ndarray] = [
+            np.ones(X_work.shape[0], dtype=bool) for _ in range(n_classes)
+        ]
 
-        for _round in range(self.max_rules):
-            if uncovered_mask.sum() < self.min_rule_covered:
-                break
+        for c_idx in range(n_classes):
+            P = full_counts[c_idx]
+            N = float(np.sum(full_counts)) - P
+            if P <= 0:
+                continue
 
-            X_uncovered = X_work[uncovered_mask]
-            y_uncovered = y_work[uncovered_mask]
+            rules_for_class = 0
+            max_rules_per_class = max(1, self.max_rules)
 
-            # Determine target class for this round (class with most
-            # remaining uncovered examples, cycling through classes)
-            remaining_counts = np.bincount(y_uncovered, minlength=n_classes)
-            if remaining_counts.sum() == 0:
-                break
-            target_class = int(np.argmax(remaining_counts))
+            while rules_for_class < max_rules_per_class:
+                # Count uncovered positives for this class
+                uncov = uncovered_masks[c_idx]
+                n_uncov_pos = int(np.sum(
+                    (y_work == c_idx) & uncov
+                ))
+                if n_uncov_pos < self.min_rule_covered:
+                    break
 
-            # Split uncovered data into grow/prune sets
-            if self.enable_pruning and self.pruning_fraction > 0 and X_uncovered.shape[0] >= 2 * self.min_samples_leaf:
-                _, uc_counts = np.unique(y_uncovered, return_counts=True)
-                if np.all(uc_counts >= 2):
-                    grow_idx, prune_idx = train_test_split(
-                        np.arange(X_uncovered.shape[0]),
-                        test_size=float(self.pruning_fraction),
-                        random_state=self.random_state,
-                        stratify=y_uncovered,
-                    )
-                    X_grow = X_uncovered[grow_idx]
-                    y_grow = y_uncovered[grow_idx]
-                    X_prune = X_uncovered[prune_idx]
-                    y_prune = y_uncovered[prune_idx]
+                # Working set: all uncovered examples for this class
+                X_uncov = X_work[uncov]
+                y_uncov = y_work[uncov]
+
+                if X_uncov.shape[0] < self.min_samples_leaf:
+                    break
+
+                # ---- Grow/Prune split ----
+                if (self.enable_pruning
+                        and self.pruning_mode == "split"
+                        and self.pruning_fraction > 0
+                        and X_uncov.shape[0] >= 2 * self.min_samples_leaf):
+                    _, uc_counts = np.unique(y_uncov, return_counts=True)
+                    if np.all(uc_counts >= 2):
+                        grow_idx, prune_idx = train_test_split(
+                            np.arange(X_uncov.shape[0]),
+                            test_size=float(self.pruning_fraction),
+                            random_state=self.random_state,
+                            stratify=y_uncov,
+                        )
+                        X_grow, y_grow = X_uncov[grow_idx], y_uncov[grow_idx]
+                        X_prune, y_prune = X_uncov[prune_idx], y_uncov[prune_idx]
+                    else:
+                        X_grow, y_grow = X_uncov, y_uncov
+                        X_prune, y_prune = X_uncov, y_uncov
                 else:
-                    X_grow, y_grow = X_uncovered, y_uncovered
-                    X_prune, y_prune = X_uncovered, y_uncovered
-            else:
-                X_grow, y_grow = X_uncovered, y_uncovered
-                X_prune, y_prune = X_uncovered, y_uncovered
+                    # Default: grow and prune on same data (like Java RuleKit)
+                    X_grow, y_grow = X_uncov, y_uncov
+                    X_prune, y_prune = X_uncov, y_uncov
 
-            # Growing phase
-            rule = _grow_rule(
-                X_grow, y_grow, n_classes, target_class,
-                feature_names, self.min_samples_leaf,
-                self.max_conditions, self.max_thresholds_per_feature,
-            )
-            if rule is None:
-                break
+                # ---- Grow rule for this class ----
+                candidate = _grow_rule(
+                    X_grow, y_grow, n_classes, c_idx,
+                    feature_names, self.min_samples_leaf,
+                    self.max_conditions, self.max_thresholds_per_feature,
+                    P, N,
+                    enable_intervals=self.enable_intervals,
+                )
+                if candidate is None:
+                    break
 
-            # Pruning phase
-            if self.enable_pruning:
-                rule = _prune_rule(rule, X_prune, y_prune, n_classes)
+                # ---- Prune ----
+                if self.enable_pruning:
+                    candidate = _prune_rule(
+                        candidate, X_prune, y_prune, n_classes, P, N,
+                    )
 
-            induced_rules.append(rule)
+                # Quality gate
+                if candidate.quality <= 0 or candidate.precision <= 0:
+                    break
 
-            # Remove covered examples (correctly classified ones)
-            indices = np.where(uncovered_mask)[0]
-            X_active = X_work[uncovered_mask]
-            y_active = y_work[uncovered_mask]
-            rule_mask = np.ones(X_active.shape[0], dtype=bool)
-            for cond in rule.conditions:
-                rule_mask &= cond.matches_array(X_active)
-            correctly_covered = rule_mask & (y_active == rule.class_idx)
+                # Duplicate check
+                cond_sig = tuple(
+                    (c.feature_idx, c.op, c.value) for c in candidate.conditions
+                )
+                existing_sigs = {
+                    tuple((c.feature_idx, c.op, c.value) for c in r.conditions)
+                    for r in induced_rules
+                }
+                if cond_sig in existing_sigs:
+                    break
 
-            # Mark correctly covered examples as covered
-            cover_indices = indices[correctly_covered]
-            uncovered_mask[cover_indices] = False
+                induced_rules.append(candidate)
+                rules_for_class += 1
 
-            if uncovered_mask.sum() == 0:
-                break
+                # ---- Remove covered positives of this class ----
+                indices = np.where(uncov)[0]
+                X_active = X_work[uncov]
+                y_active = y_work[uncov]
+                rule_mask = np.ones(X_active.shape[0], dtype=bool)
+                for cond in candidate.conditions:
+                    rule_mask &= cond.matches_array(X_active)
+                positive_covered = rule_mask & (y_active == c_idx)
+                cover_indices = indices[positive_covered]
+                uncovered_masks[c_idx][cover_indices] = False
+
+                # If this rule didn't cover any new positives, stop
+                if not positive_covered.any():
+                    break
 
         # ---- Build ScoredRuleSet ----
         rules: list[Rule] = []
 
-        # Default rule from class prior
-        prior_counts = np.bincount(y_work, minlength=n_classes).astype(float)
+        # Default rule from class prior (weak uniform fallback)
+        prior_counts = full_counts.copy()
         default_scores = distribution_to_scores(prior_counts, self.aggregation)
         rules.append(Rule(
             atoms=[],
@@ -581,9 +631,7 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         ))
 
         for i, irule in enumerate(induced_rules):
-            rules.append(_induced_rule_to_scored_rule(
-                irule, n_classes, i, X_work, y_work, self.aggregation,
-            ))
+            rules.append(_induced_rule_to_scored_rule(irule, n_classes, i))
 
         self.ruleset_ = ScoredRuleSet(
             class_labels=self.classes_.tolist(),
@@ -597,6 +645,8 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
                 "model_type": "separate_and_conquer",
                 "n_rules_induced": len(induced_rules),
                 "enable_pruning": self.enable_pruning,
+                "pruning_mode": self.pruning_mode,
+                "enable_intervals": self.enable_intervals,
                 "max_rules": self.max_rules,
                 "max_conditions": self.max_conditions,
             },
