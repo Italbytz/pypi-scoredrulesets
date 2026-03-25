@@ -50,7 +50,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     """
 
     # Backends whose estimator exposes `max_thresholds_per_feature` attribute
-    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "pittsburgh", "nln", "logicgp"})
+    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "pittsburgh", "nln", "logicgp", "rulegp"})
 
     def __init__(
         self,
@@ -196,6 +196,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 raise RuntimeError(
                     "RuleKitNativeClassifier has no 'ruleset_' after fit(). "
                     "Please check rulekit_native.py for errors."
+                )
+        elif backend_lower == "rulegp":
+            if hasattr(self.estimator_, "ruleset_"):
+                self.ruleset_ = self.estimator_.ruleset_
+            else:
+                raise RuntimeError(
+                    "RuleGPClassifier has no 'ruleset_' after fit(). "
+                    "Please check rulegp.py for errors."
                 )
         else:
             # Tree-basierte Transformation (CART, HS)

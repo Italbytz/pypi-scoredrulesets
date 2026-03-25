@@ -267,8 +267,9 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_exstracs_shrink_conservative": EstimatorSpec(
-            name="wrapper_exstracs_shrink_conservative",
+        # -- ExSTraCS pruned: conservative atom pruning (≤1.5% F1 loss, 20–77% reduction) --
+        "wrapper_exstracs_pruned": EstimatorSpec(
+            name="wrapper_exstracs_pruned",
             factory=lambda: ScoredRuleSetClassifier(
                 backend="exstracs",
                 backend_params={},
@@ -278,46 +279,16 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_exstracs_shrink_aggressive": EstimatorSpec(
-            name="wrapper_exstracs_shrink_aggressive",
+        # -- ExSTraCS compact: interval merge + conservative (0–6% F1 loss, 29–98% reduction) --
+        "wrapper_exstracs_compact": EstimatorSpec(
+            name="wrapper_exstracs_compact",
             factory=lambda: ScoredRuleSetClassifier(
                 backend="exstracs",
                 backend_params={},
                 exstracs_params={
-                    "aggressive_prune": True,
-                    "max_f1_loss": 0.01,  # 1% F1-Verlust akzeptabel
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_exstracs_shrink_filter": EstimatorSpec(
-            name="wrapper_exstracs_shrink_filter",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="exstracs",
-                backend_params={},
-                exstracs_params={
-                    "filter_weak_rules": True,
-                    "min_fitness_percentile": 0.4,  # Behalte top 60% (vorher 80%)
-                    "conservative_prune": True,
-                    "consolidate_similar": True,
                     "interval_merge": True,
-                    "aggressive_prune": True,
-                    "max_f1_loss": 0.02,  # 2% F1-Verlust akzeptabel
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_exstracs_shrink_all": EstimatorSpec(
-            name="wrapper_exstracs_shrink_all",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="exstracs",
-                backend_params={},
-                exstracs_params={
+                    "interval_merge_iou_threshold": 0.3,
                     "conservative_prune": True,
-                    "filter_weak_rules": True,
-                    "consolidate_similar": True,
-                    "aggressive_prune": True,
-                    "max_f1_loss": 0.01,
                 },
                 random_state=0,
             ),
@@ -528,6 +499,21 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 early_stopping_rounds=20,
                 complexity_penalty=0.02,
                 class_balance_weight=0.3,
+                random_state=0,
+            ),
+        ),
+        # -- ruleGP: full-ruleset GP with NSGA-II --
+        "wrapper_rulegp": EstimatorSpec(
+            name="wrapper_rulegp",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulegp",
+                backend_params={
+                    "population_size": 60,
+                    "generations": 100,
+                    "max_rules": 8,
+                    "max_atoms_per_rule": 4,
+                    "enable_compaction": True,
+                },
                 random_state=0,
             ),
         ),

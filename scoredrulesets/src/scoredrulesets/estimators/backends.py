@@ -231,9 +231,16 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return nln_cls(**params)
 
+    if backend_key == "rulegp":
+        from .rulegp import RuleGPClassifier
+        if random_state is not None:
+            params.setdefault("random_state", random_state)
+        return RuleGPClassifier(**params)
+
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: "
-        f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', 'pittsburgh', 'rulefit', 'nln'."
+        f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', "
+        f"'pittsburgh', 'rulefit', 'nln', 'rulegp'."
     )
 
 

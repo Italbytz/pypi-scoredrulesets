@@ -506,7 +506,7 @@ def test_transformation_gap_standard_estimators_still_abort_on_large_gap():
 
 def test_transformation_gap_exstracs_shrink_warns_on_moderate_gap():
     action, message = _evaluate_transformation_gap(
-        estimator_name="wrapper_exstracs_shrink_conservative",
+        estimator_name="wrapper_exstracs_pruned",
         is_lossy=False,
         f1_native=0.91,
         f1_transformed=0.73,
@@ -519,7 +519,7 @@ def test_transformation_gap_exstracs_shrink_warns_on_moderate_gap():
 
 def test_transformation_gap_exstracs_shrink_still_aborts_on_very_large_gap():
     action, message = _evaluate_transformation_gap(
-        estimator_name="wrapper_exstracs_shrink_conservative",
+        estimator_name="wrapper_exstracs_pruned",
         is_lossy=False,
         f1_native=0.91,
         f1_transformed=0.16,
@@ -534,7 +534,7 @@ def test_aggregate_benchmark_results_persists_warning_metadata():
     results = [
         BenchmarkResult(
             dataset="sklearn_iris",
-            estimator="wrapper_exstracs_shrink_conservative",
+            estimator="wrapper_exstracs_pruned",
             repeat=0,
             status="ok",
             skip_reason=None,
@@ -552,7 +552,7 @@ def test_aggregate_benchmark_results_persists_warning_metadata():
         ),
         BenchmarkResult(
             dataset="sklearn_iris",
-            estimator="wrapper_exstracs_shrink_conservative",
+            estimator="wrapper_exstracs_pruned",
             repeat=1,
             status="ok",
             skip_reason=None,
@@ -581,7 +581,7 @@ def test_report_outputs_include_warning_information():
     rows = [
         AggregatedBenchmarkResult(
             dataset="sklearn_iris",
-            estimator="wrapper_exstracs_shrink_conservative",
+            estimator="wrapper_exstracs_pruned",
             n_repeats=3,
             status="ok",
             f1_macro_mean=0.80,

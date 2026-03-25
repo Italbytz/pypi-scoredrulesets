@@ -691,8 +691,10 @@ def _evaluate_transformation_gap(
         f"(Verlust={f1_drop:.4f}, {rel_drop*100:.1f}%)."
     )
 
-    # ExSTraCS shrinking: moderate degradation => warning, only large degradation => abort.
-    if estimator_name.startswith("wrapper_exstracs_shrink"):
+    # ExSTraCS shrinking/pruning: moderate degradation => warning, only large degradation => abort.
+    if estimator_name.startswith("wrapper_exstracs_shrink") or estimator_name in (
+        "wrapper_exstracs_pruned", "wrapper_exstracs_compact",
+    ):
         warn_abs_drop = 0.10
         warn_rel_drop = 0.15
         abort_abs_drop = 0.25

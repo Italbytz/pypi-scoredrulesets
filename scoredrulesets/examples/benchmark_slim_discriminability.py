@@ -108,7 +108,7 @@ SLIM_ESTIMATORS: list[str] = [
     "wrapper_hs_pruned",
     # Externe Regelinduktion
     "wrapper_rulekit",
-    "wrapper_exstracs_shrink_filter",
+    "wrapper_exstracs_compact",
     # LogicGP – Bug-Fix-Vergleich Macro vs Micro
     "wrapper_logicgp_rlcw_macro",
     "wrapper_logicgp_rlcw_micro",
