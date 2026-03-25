@@ -70,6 +70,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         token_competition_weight: float = 0.0,
         enable_compaction: bool = False,
         window_fraction: float = 1.0,
+        # -- Multi-class strategy --
+        multiclass_strategy: str = "direct",
     ):
         self.aggregation = aggregation
         self.temperature = temperature
@@ -89,6 +91,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         self.token_competition_weight = token_competition_weight
         self.enable_compaction = enable_compaction
         self.window_fraction = window_fraction
+        self.multiclass_strategy = multiclass_strategy
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
@@ -107,7 +110,18 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         prior_counts = np.bincount(train_y, minlength=n_classes).astype(float)
         self._default_scores_ = self._distribution_to_scores(prior_counts)
 
-        if self.sequential_covering:
+        if self.multiclass_strategy not in ("direct", "ovr"):
+            raise ValueError(
+                f"multiclass_strategy must be 'direct' or 'ovr', got {self.multiclass_strategy!r}"
+            )
+
+        use_ovr = self.multiclass_strategy == "ovr" and n_classes > 2
+
+        if use_ovr:
+            selected_rules, iterations_ran = self._fit_ovr(
+                X_valid, y_idx, n_classes, train_idx, val_idx,
+            )
+        elif self.sequential_covering:
             selected_rules, iterations_ran = self._fit_sequential_covering(
                 X_valid, y_idx, n_classes, train_idx, val_idx,
             )
@@ -136,6 +150,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
                 "token_competition_weight": float(self.token_competition_weight),
                 "compaction_enabled": bool(self.enable_compaction),
                 "window_fraction": float(self.window_fraction),
+                "multiclass_strategy": str(self.multiclass_strategy),
             }
         )
         ruleset.validate()
@@ -301,6 +316,106 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
             self._default_scores_ = self._distribution_to_scores(residual_counts)
 
         return selected_rules, total_iterations
+
+    # ------------------------------------------------------------------
+    # One-vs-Rest (OvR) Multi-class Strategy
+    # ------------------------------------------------------------------
+
+    def _fit_ovr(
+        self,
+        X_valid: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        train_idx: np.ndarray,
+        val_idx: np.ndarray | None,
+    ) -> tuple[list[Rule], int]:
+        """Learn rules via One-vs-Rest decomposition.
+
+        For each class *c* the labels are binarised (class *c* → 1, rest → 0)
+        and either beam search or sequential covering is run on the resulting
+        2-class problem.  The binary score vectors are then expanded back to
+        the full *n_classes* dimensions so that all per-class rules can be
+        combined into a single :class:`ScoredRuleSet`.
+        """
+        all_rules: list[Rule] = []
+        total_iterations = 0
+        self._candidate_count_ = 0
+
+        # Save originals – will be restored after all OvR rounds
+        saved_default_scores = list(self._default_scores_)
+        saved_classes = self.classes_.copy()
+
+        max_rules_per_class = max(1, int(self.max_rules))
+        binary_classes = np.array([0, 1])
+
+        for class_idx in range(n_classes):
+            # Binarise: class_idx → 1, everything else → 0
+            y_bin = (y_idx == class_idx).astype(int)
+
+            # Temporarily set up binary environment so _build_ruleset
+            # and the runtime create consistent 2-class rulesets.
+            self.classes_ = binary_classes
+
+            # Temporary binary defaults
+            bin_train_y = y_bin[train_idx]
+            bin_counts = np.bincount(bin_train_y, minlength=2).astype(float)
+            self._default_scores_ = self._distribution_to_scores(bin_counts)
+
+            if self.sequential_covering:
+                class_rules, iters = self._fit_sequential_covering(
+                    X_valid, y_bin, 2, train_idx, val_idx,
+                )
+            else:
+                class_rules, iters = self._fit_beam_search(
+                    X_valid, y_bin, 2, train_idx, val_idx,
+                )
+
+            total_iterations += iters
+
+            # Expand binary scores to full n_classes vector and relabel rules
+            for rule in class_rules:
+                expanded = self._expand_binary_scores_to_multiclass(
+                    rule, class_idx, n_classes,
+                )
+                all_rules.append(expanded)
+
+        # Restore originals
+        self.classes_ = saved_classes
+        self._default_scores_ = saved_default_scores
+
+        # Limit total rules: keep at most max_rules (round-robin across classes)
+        if len(all_rules) > max_rules_per_class * n_classes:
+            all_rules = all_rules[: max_rules_per_class * n_classes]
+
+        return all_rules, total_iterations
+
+    @staticmethod
+    def _expand_binary_scores_to_multiclass(
+        rule: Rule,
+        class_idx: int,
+        n_classes: int,
+    ) -> Rule:
+        """Convert a 2-class score vector to an *n_classes* vector.
+
+        The positive-class score (``scores[1]``) is placed at position
+        *class_idx*; all other positions receive 0.0.
+        """
+        binary_scores = rule.scores
+        # The "positive" score in the binary sub-problem
+        pos_score = binary_scores[1] if len(binary_scores) >= 2 else binary_scores[0]
+
+        full_scores = [0.0] * n_classes
+        full_scores[class_idx] = float(pos_score)
+
+        new_metadata = dict(rule.metadata) if rule.metadata else {}
+        new_metadata["ovr_class_index"] = class_idx
+
+        return Rule(
+            atoms=rule.atoms,
+            scores=full_scores,
+            rule_id=f"pittsburgh_ovr_c{class_idx}_{rule.rule_id or 'rule'}",
+            metadata=new_metadata,
+        )
 
     def _single_rule_score(
         self,

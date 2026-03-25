@@ -1,8 +1,9 @@
 import numpy as np
+import pytest
 import runpy
 from pathlib import Path
 
-from sklearn.datasets import load_iris
+from sklearn.datasets import load_iris, load_breast_cancer
 
 from scoredrulesets import PittsburghRuleSetClassifier, ScoredRuleSetClassifier
 from scoredrulesets.benchmarking.estimators import default_estimator_specs
@@ -172,3 +173,186 @@ def test_pittsburgh_wrapper_example_profile_smoke():
     assert meta["beam_width"] >= 6
 
 
+# ---------------------------------------------------------------------------
+# Multi-class (OvR) Tests
+# ---------------------------------------------------------------------------
+
+
+class TestPittsburghOvRMulticlass:
+    """Tests for the One-vs-Rest multiclass strategy."""
+
+    def test_ovr_multiclass_iris(self):
+        """OvR on Iris (3 classes): correct shapes, proba sums to 1, metadata."""
+        X, y = load_iris(return_X_y=True)
+        clf = PittsburghRuleSetClassifier(
+            max_rules=4,
+            candidate_pool_size=16,
+            beam_width=5,
+            max_iterations=8,
+            random_state=0,
+            multiclass_strategy="ovr",
+        )
+        clf.fit(X, y)
+
+        pred = clf.predict(X)
+        proba = clf.predict_proba(X)
+
+        assert pred.shape == (len(y),)
+        assert set(pred).issubset(set(y))
+        assert proba.shape == (len(y), 3)
+        assert np.allclose(proba.sum(axis=1), 1.0)
+
+        ruleset = clf.to_ruleset()
+        assert ruleset.metadata["multiclass_strategy"] == "ovr"
+        assert ruleset.metadata["source"] == "pittsburgh"
+
+        # At least some rules should carry ovr_class_index metadata
+        ovr_rules = [
+            r for r in ruleset.rules
+            if r.metadata and r.metadata.get("ovr_class_index") is not None
+        ]
+        assert len(ovr_rules) > 0
+
+        # Rules should cover multiple classes
+        ovr_classes = {r.metadata["ovr_class_index"] for r in ovr_rules}
+        assert len(ovr_classes) >= 2
+
+    def test_ovr_binary_skips_decomposition(self):
+        """With 2 classes, OvR should fall back to direct (no decomposition)."""
+        X, y = load_breast_cancer(return_X_y=True)
+        clf = PittsburghRuleSetClassifier(
+            max_rules=3,
+            candidate_pool_size=12,
+            beam_width=4,
+            max_iterations=6,
+            random_state=0,
+            multiclass_strategy="ovr",
+        )
+        clf.fit(X, y)
+
+        pred = clf.predict(X[:10])
+        proba = clf.predict_proba(X[:10])
+
+        assert pred.shape == (10,)
+        assert proba.shape == (10, 2)
+        assert np.allclose(proba.sum(axis=1), 1.0)
+
+        # Binary: no OvR decomposition, so no ovr_class_index in metadata
+        ruleset = clf.to_ruleset()
+        ovr_rules = [
+            r for r in ruleset.rules
+            if r.metadata and r.metadata.get("ovr_class_index") is not None
+        ]
+        assert len(ovr_rules) == 0
+
+    def test_direct_unchanged_regression(self):
+        """Default 'direct' strategy on Iris should work as before."""
+        X, y = load_iris(return_X_y=True)
+        clf = PittsburghRuleSetClassifier(
+            max_rules=4,
+            candidate_pool_size=16,
+            beam_width=5,
+            max_iterations=8,
+            random_state=0,
+            multiclass_strategy="direct",
+        )
+        clf.fit(X, y)
+
+        pred = clf.predict(X[:10])
+        proba = clf.predict_proba(X[:10])
+
+        assert pred.shape == (10,)
+        assert proba.shape == (10, 3)
+        assert np.allclose(proba.sum(axis=1), 1.0)
+        assert clf.to_ruleset().metadata["multiclass_strategy"] == "direct"
+
+    def test_ovr_sequential_covering(self):
+        """OvR combined with sequential covering on Iris."""
+        X, y = load_iris(return_X_y=True)
+        clf = PittsburghRuleSetClassifier(
+            max_rules=4,
+            candidate_pool_size=16,
+            beam_width=5,
+            max_iterations=8,
+            random_state=0,
+            multiclass_strategy="ovr",
+            sequential_covering=True,
+        )
+        clf.fit(X, y)
+
+        pred = clf.predict(X)
+        proba = clf.predict_proba(X)
+
+        assert pred.shape == (len(y),)
+        assert proba.shape == (len(y), 3)
+        assert np.allclose(proba.sum(axis=1), 1.0)
+
+    def test_ovr_via_wrapper(self):
+        """OvR through the ScoredRuleSetClassifier wrapper."""
+        X, y = load_iris(return_X_y=True)
+        clf = ScoredRuleSetClassifier(
+            backend="pittsburgh",
+            backend_params={
+                "max_rules": 4,
+                "candidate_pool_size": 16,
+                "beam_width": 5,
+                "max_iterations": 8,
+                "multiclass_strategy": "ovr",
+            },
+            random_state=0,
+        )
+        clf.fit(X, y)
+
+        pred = clf.predict(X[:6])
+        proba = clf.predict_proba(X[:6])
+        assert pred.shape == (6,)
+        assert proba.shape == (6, 3)
+        assert clf.to_ruleset().metadata["multiclass_strategy"] == "ovr"
+
+    def test_ovr_with_compaction(self):
+        """OvR with post-hoc compaction enabled."""
+        X, y = load_iris(return_X_y=True)
+        clf = PittsburghRuleSetClassifier(
+            max_rules=5,
+            candidate_pool_size=20,
+            beam_width=6,
+            max_iterations=10,
+            random_state=0,
+            multiclass_strategy="ovr",
+            enable_compaction=True,
+        )
+        clf.fit(X, y)
+
+        pred = clf.predict(X)
+        assert pred.shape == (len(y),)
+        assert set(pred).issubset(set(y))
+
+    def test_invalid_strategy_raises(self):
+        """Unknown multiclass_strategy should raise ValueError."""
+        X, y = load_iris(return_X_y=True)
+        clf = PittsburghRuleSetClassifier(
+            max_rules=3,
+            random_state=0,
+            multiclass_strategy="foo",
+        )
+        with pytest.raises(ValueError, match="multiclass_strategy"):
+            clf.fit(X, y)
+
+    def test_ovr_score_vector_length(self):
+        """Each OvR rule should have a score vector of length n_classes."""
+        X, y = load_iris(return_X_y=True)
+        clf = PittsburghRuleSetClassifier(
+            max_rules=3,
+            candidate_pool_size=12,
+            beam_width=4,
+            max_iterations=6,
+            random_state=0,
+            multiclass_strategy="ovr",
+        )
+        clf.fit(X, y)
+        ruleset = clf.to_ruleset()
+        n_classes = len(clf.classes_)
+        for rule in ruleset.rules:
+            assert len(rule.scores) == n_classes, (
+                f"Rule {rule.rule_id} has {len(rule.scores)} scores, expected {n_classes}"
+            )
