@@ -5,7 +5,6 @@ This script demonstrates three things:
 1. Training `PittsburghRuleSetClassifier` directly
 2. Inspecting the learned `ScoredRuleSet` metadata and rule table
 3. Running a small comparison against `ScoredRuleSetClassifier(backend="cart")`
-   and `GeneticScoredRuleSetClassifier`
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 
 from scoredrulesets import (
-    GeneticScoredRuleSetClassifier,
     PittsburghRuleSetClassifier,
     ScoredRuleSetClassifier,
     format_ruleset_table,
@@ -130,17 +128,6 @@ def run_demo(random_state: int = 42, profile: str = "default") -> dict[str, obje
             ScoredRuleSetClassifier(
                 backend="cart",
                 backend_params={"max_depth": 4},
-                random_state=random_state,
-            ),
-        ),
-        (
-            "gp",
-            GeneticScoredRuleSetClassifier(
-                population_size=20,
-                generations=8,
-                max_rules=4,
-                early_stopping_rounds=3,
-                validation_fraction=0.2,
                 random_state=random_state,
             ),
         ),

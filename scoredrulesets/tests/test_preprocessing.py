@@ -90,24 +90,6 @@ class TestFeatureSelection:
 class TestThresholdBudget:
     """max_thresholds_per_feature for native backends."""
 
-    def test_gp_threshold_cap(self, iris_data):
-        """GeneticScoredRuleSetClassifier respects max_thresholds_per_feature."""
-        from scoredrulesets.estimators.gp_native import GeneticScoredRuleSetClassifier
-
-        X, y = iris_data
-        clf = GeneticScoredRuleSetClassifier(
-            max_thresholds_per_feature=3,
-            random_state=0,
-        )
-        # Build specs directly to check threshold count
-        clf.n_features_in_ = X.shape[1]
-        specs = clf._build_feature_specs(X)
-        for spec in specs:
-            if spec["kind"] == "num":
-                assert len(spec["thresholds"]) <= 3, (
-                    f"Feature {spec['idx']} has {len(spec['thresholds'])} thresholds, "
-                    f"expected <= 3"
-                )
 
     def test_pittsburgh_threshold_cap_fit(self, iris_data):
         """PittsburghRuleSetClassifier with max_thresholds_per_feature fits OK."""

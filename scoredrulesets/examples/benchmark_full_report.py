@@ -97,7 +97,7 @@ def main(
     all_estimators = list(default_estimator_specs().keys())
     # Multiplexer-/MUX-spezifische Varianten werden nur auf MUX-Datensaetzen
     # benoetigt und verzerren das allgemeine Ranking → standardmaessig ausschliessen.
-    _MUX_ONLY = {"wrapper_logicgp_mux", "wrapper_logicgp_mux_rlcw", "wrapper_cart_mux", "gp_mux"}
+    _MUX_ONLY = {"wrapper_logicgp_mux", "wrapper_logicgp_mux_rlcw", "wrapper_cart_mux"}
     if estimator_names is None:
         estimator_names = [e for e in all_estimators if e not in _MUX_ONLY]
 

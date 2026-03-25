@@ -82,7 +82,6 @@ _MUX_ONLY: set[str] = {
     "wrapper_logicgp_mux_rlcw",
     "wrapper_logicgp_mux_rlcw_macro",
     "wrapper_cart_mux",
-    "gp_mux",
 }
 
 

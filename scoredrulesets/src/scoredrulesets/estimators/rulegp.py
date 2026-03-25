@@ -4,13 +4,12 @@ ruleGP – Genetic Programming on full Scored Rule Set individuals
 
 Combines ideas from:
 - **logicGP**: Pareto-based GP, FLCW weight computation, model-size objective
-- **gp_native**: residual covering, contribution-based selection, native atoms
 - **pittsburgh**: post-hoc compaction (backward elimination)
 - **NSGA-II**: crowding-distance for diversity on the Pareto front
 
 Key differences from existing estimators:
 - Each GP individual is a *complete rule set* (multiple rules + default),
-  not a single rule (gp_native) or a polynomial with set-literals (logicGP).
+  not a single rule or a polynomial with set-literals (logicGP).
 - Two-objective NSGA-II: maximize F1, minimize model complexity (total atoms).
 - Works natively on numeric and categorical features (no forced discretisation).
 - Post-hoc backward elimination + atom pruning for maximum compactness.
@@ -161,7 +160,7 @@ def _nsga2_select(pop: list[_Individual], n_select: int) -> list[_Individual]:
 
 
 # ---------------------------------------------------------------------------
-# Feature spec builder (reused from gp_native pattern)
+# Feature spec builder
 # ---------------------------------------------------------------------------
 
 def _build_feature_specs(

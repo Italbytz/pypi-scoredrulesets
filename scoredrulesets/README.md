@@ -104,38 +104,6 @@ print(clf.predict(X[:3]))
 
 Der Pittsburgh-Lerner erzeugt je nach Datenlage Atome mit `<=`, `>`, `between`, `==` und `in`.
 
-## Nativer GP-Estimator
-
-```python
-from sklearn.datasets import load_iris
-from scoredrulesets import GeneticScoredRuleSetClassifier
-
-X, y = load_iris(return_X_y=True)
-
-gp = GeneticScoredRuleSetClassifier(
-    population_size=40,
-    generations=20,
-    max_rules=6,
-    score_mode="auto",  # "auto" | "log_proba" | "proba"
-    selection_mode="fitness",  # "fitness" | "pareto"
-    final_rule_selection="fitness",  # "fitness" | "diverse"
-    validation_fraction=0.2,
-    early_stopping_rounds=5,
-    random_state=0,
-)
-gp.fit(X, y)
-print(gp.predict(X[:3]))
-```
-
-Der GP-Lerner durchsucht ebenfalls Atome mit `<=`, `>`, `between`, `==` und `in`.
-
-Fuer das Benchmarking gilt jetzt folgende Nomenklatur:
-
-- `gp`: Basis-GP-Profil (single-rule Fitness, Pareto-Selektion, diverse Endauswahl)
-- `gp_residual`: GP mit Residual-Covering-Fitness (kontextbasierte Bewertung neuer Regeln)
-- `gp_fast`: fruehere schnelle Light-Variante fuer Smoke-Tests
-- `gp_diverse`: vorheriger starker GP-Default mit diverser Endauswahl (ohne residual)
-
 ## Benchmarking
 
 Benchmarking vergleicht die Estimatoren ueber:
@@ -155,7 +123,7 @@ Beispielaufruf:
 ```bash
 python examples/benchmark_runner.py \
   --datasets sklearn_iris,sklearn_wine \
-  --estimators wrapper_cart,native,gp,gp_diverse,gp_fast,wrapper_hs \
+  --estimators wrapper_cart,native,wrapper_hs \
   --repeats 2 \
   --aggregate-repeats \
   --error-bar std \
@@ -174,7 +142,7 @@ Paper-vergleichbarer Lauf (inkl. Paper-Split-Policy):
 python examples/benchmark_runner.py \
   --paper-uci \
   --paper-split-policy \
-  --estimators wrapper_cart,wrapper_hs,gp,gp_diverse,gp_fast,native \
+  --estimators wrapper_cart,wrapper_hs,native \
   --repeats 10 \
   --aggregate-repeats \
   --output-markdown benchmarks/2026-03-paper-uci/benchmark_report.md \
@@ -187,28 +155,6 @@ Fuer lokale UCI-CSVs setze `SCORERULESETS_UCI_DIR` auf ein Verzeichnis mit CSV-D
 Mit `--paper-uci-strict` faellt der Lauf sofort aus, wenn nicht alle 8 Paper-Datensaetze verfuegbar sind.
 Mit `--offline-uci` werden Online-Quellen (ucimlrepo/OpenML) deaktiviert.
 
-Wenn du nur die GP-Profile gegeneinander vergleichen willst:
-
-```bash
-python examples/benchmark_runner.py \
-  --datasets sklearn_iris,sklearn_wine,sklearn_breast_cancer \
-  --estimators gp,gp_diverse,gp_fast,native,wrapper_cart \
-  --repeats 3 \
-  --aggregate-repeats \
-  --output-markdown benchmarks/2026-03-gp-final/benchmark_report.md \
-  --output-csv benchmarks/2026-03-gp-final/benchmark_results.csv \
-  --output-json benchmarks/2026-03-gp-final/benchmark_results.json
-```
-
-Aktueller Referenzstand fuer GP-Vergleiche:
-
-- `benchmarks/2026-03-gp-final/`
-
-Archivierte, aeltere GP-Laeufe (nur zur historischen Einordnung):
-
-- `benchmarks/2026-03-gp-default-check/`
-- `benchmarks/2026-03-gp-full/`
-- `benchmarks/2026-03-gp-tune/`
 
 Dabei werden standardmaessig folgende Dateien geschrieben:
 

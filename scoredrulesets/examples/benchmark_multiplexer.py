@@ -36,7 +36,6 @@ _DEFAULT_MUX_ESTIMATORS = [
     "wrapper_logicgp_mux",
     "wrapper_logicgp_mux_rlcw",
     "wrapper_cart_mux",
-    "gp_mux",
 ]
 
 

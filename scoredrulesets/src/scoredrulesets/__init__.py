@@ -23,7 +23,6 @@ from .benchmarking import (
     run_benchmarks,
 )
 from .estimators.auto import AutoScoredRuleSetClassifier
-from .estimators.gp_native import GeneticScoredRuleSetClassifier
 from .estimators.logicgp import LogicGPClassifier
 from .estimators.nln import NeuralLogicNetClassifier
 from .estimators.pittsburgh import PittsburghRuleSetClassifier
@@ -46,7 +45,6 @@ __all__ = [
     "BenchmarkComparisonRow",
     "BenchmarkConfig",
     "BenchmarkResult",
-    "GeneticScoredRuleSetClassifier",
     "LogicGPClassifier",
     "NeuralLogicNetClassifier",
     "PittsburghRuleSetClassifier",

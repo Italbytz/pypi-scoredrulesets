@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from ..estimators.gp_native import GeneticScoredRuleSetClassifier
 from ..estimators.nln import NeuralLogicNetClassifier
 from ..estimators.rulekit_native import RuleKitNativeClassifier
 from ..estimators.sklearn_wrapper import ScoredRuleSetClassifier
@@ -115,89 +114,6 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                     "validation_fraction": 0.25,
                     "complexity_penalty": 0.01,
                 },
-                random_state=0,
-            ),
-        ),
-        # GP naming:
-        # - `gp` is the recommended strong benchmark default (residual covering).
-        # - `gp_fast` keeps the earlier lightweight fast configuration.
-        # - `gp_diverse` keeps the previous strong default with diverse final selection.
-        "gp_fast": EstimatorSpec(
-            name="gp_fast",
-            factory=lambda: GeneticScoredRuleSetClassifier(
-                population_size=25,
-                generations=10,
-                max_rules=8,
-                validation_fraction=0.2,
-                early_stopping_rounds=3,
-                random_state=0,
-            ),
-        ),
-        "gp": EstimatorSpec(
-            name="gp",
-            factory=lambda: GeneticScoredRuleSetClassifier(
-                population_size=100,
-                generations=60,
-                max_rules=5,
-                max_atoms_per_rule=3,
-                selection_mode="pareto",
-                final_rule_selection="diverse",
-                evolution_fitness_mode="single_rule",
-                validation_fraction=0.25,
-                early_stopping_rounds=12,
-                complexity_penalty=0.05,
-                class_balance_weight=0.35,
-                random_state=0,
-            ),
-        ),
-        "gp_diverse": EstimatorSpec(
-            name="gp_diverse",
-            factory=lambda: GeneticScoredRuleSetClassifier(
-                population_size=100,
-                generations=60,
-                max_rules=5,
-                max_atoms_per_rule=3,
-                selection_mode="pareto",
-                final_rule_selection="diverse",
-                validation_fraction=0.25,
-                early_stopping_rounds=12,
-                complexity_penalty=0.05,
-                class_balance_weight=0.35,
-                random_state=0,
-            ),
-        ),
-        "gp_residual": EstimatorSpec(
-            name="gp_residual",
-            factory=lambda: GeneticScoredRuleSetClassifier(
-                population_size=100,
-                generations=60,
-                max_rules=5,
-                max_atoms_per_rule=3,
-                selection_mode="pareto",
-                final_rule_selection="diverse",
-                evolution_fitness_mode="residual_covering",
-                evolution_context_size=3,
-                residual_focus_weight=0.35,
-                validation_fraction=0.25,
-                early_stopping_rounds=12,
-                complexity_penalty=0.05,
-                class_balance_weight=0.35,
-                random_state=0,
-            ),
-        ),
-        "gp_contrib": EstimatorSpec(
-            name="gp_contrib",
-            factory=lambda: GeneticScoredRuleSetClassifier(
-                population_size=100,
-                generations=60,
-                max_rules=5,
-                max_atoms_per_rule=3,
-                selection_mode="pareto",
-                final_rule_selection="contribution",
-                validation_fraction=0.25,
-                early_stopping_rounds=12,
-                complexity_penalty=0.05,
-                class_balance_weight=0.35,
                 random_state=0,
             ),
         ),
@@ -481,25 +397,6 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
             factory=lambda: ScoredRuleSetClassifier(
                 backend="cart",
                 backend_params={"max_depth": None},  # unbegrenzte Tiefe
-                random_state=0,
-            ),
-        ),
-        "gp_mux": EstimatorSpec(
-            name="gp_mux",
-            factory=lambda: GeneticScoredRuleSetClassifier(
-                population_size=100,
-                generations=80,
-                max_rules=8,
-                max_atoms_per_rule=4,
-                selection_mode="pareto",
-                final_rule_selection="diverse",
-                evolution_fitness_mode="residual_covering",
-                evolution_context_size=3,
-                residual_focus_weight=0.35,
-                validation_fraction=0.0,  # kein Split, perfekter Fit
-                early_stopping_rounds=20,
-                complexity_penalty=0.02,
-                class_balance_weight=0.3,
                 random_state=0,
             ),
         ),
