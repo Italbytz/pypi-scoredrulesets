@@ -883,13 +883,17 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         generations_ran: int,
     ) -> ScoredRuleSet:
         rules: list[Rule] = []
+        class_counts = np.bincount(y, minlength=n_classes).astype(float)
+        class_counts = np.maximum(class_counts, 1.0)
+
         for ri, gene in enumerate(ind.rules):
             mask = self._rule_mask(gene, X)
             if mask.sum() < 1:
                 continue
             counts = np.bincount(y[mask], minlength=n_classes).astype(float)
-            total = max(counts.sum(), 1.0)
-            scores = (counts / total).tolist()
+            balanced = counts / class_counts
+            bal_total = balanced.sum()
+            scores = (balanced / bal_total).tolist() if bal_total > 0 else [1.0 / n_classes] * n_classes
             atoms = [
                 Atom(
                     feature=str(self.feature_names_in_[a.feature_idx]),
@@ -912,7 +916,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         no_fire = ~any_fired
         if no_fire.any():
             counts = np.bincount(y[no_fire], minlength=n_classes).astype(float)
-            default_scores = (counts / max(counts.sum(), 1.0)).tolist()
+            balanced = counts / class_counts
+            bal_total = balanced.sum()
+            default_scores = (balanced / bal_total).tolist() if bal_total > 0 else [1.0 / n_classes] * n_classes
         else:
             default_scores = [1.0 / n_classes] * n_classes
         rules.append(Rule(
