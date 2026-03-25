@@ -30,7 +30,7 @@ from .base import BaseRuleSetEstimator
 from .sklearn_wrapper import ScoredRuleSetClassifier
 
 
-_DEFAULT_BACKENDS = ["cart", "hs", "pittsburgh", "rulefit"]
+_DEFAULT_BACKENDS = ["cart", "hs", "pittsburgh"]
 
 
 class AutoScoredRuleSetClassifier(BaseRuleSetEstimator):
@@ -40,7 +40,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator):
     ----------
     candidate_backends : list[str] | None
         List of backend names to evaluate (default: ``["cart", "hs",
-        "pittsburgh", "rulefit"]``).  Any backend supported by
+        "pittsburgh"]``).  Any backend supported by
         :class:`ScoredRuleSetClassifier` can be listed.
     backend_params : dict[str, dict] | None
         Per-backend constructor parameters.  Keys are backend names, values

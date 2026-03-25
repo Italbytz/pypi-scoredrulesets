@@ -219,11 +219,6 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return rulekit_native_cls(**params)
 
-    if backend_key == "rulefit":
-        from .rulefit import RuleFitClassifier
-        if random_state is not None:
-            params.setdefault("random_state", random_state)
-        return RuleFitClassifier(**params)
 
     if backend_key == "nln":
         nln_cls = _resolve_nln_class()
@@ -240,7 +235,7 @@ def build_backend_estimator(
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: "
         f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', "
-        f"'pittsburgh', 'rulefit', 'nln', 'rulegp'."
+        f"'pittsburgh', 'nln', 'rulegp'."
     )
 
 

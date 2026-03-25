@@ -41,8 +41,6 @@ _DEFAULT_ESTIMATORS = [
     "wrapper_hs",
     "wrapper_pittsburgh",
     "wrapper_logicgp",
-    "wrapper_rulefit",
-    "gp",
 ]
 
 

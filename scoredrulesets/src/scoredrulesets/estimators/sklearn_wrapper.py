@@ -26,7 +26,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     ----------
     backend : str
         Backend estimator to use (e.g. 'cart', 'hs', 'rulekit', 'exstracs',
-        'logicgp', 'pittsburgh', 'rulefit', 'nln').
+        'logicgp', 'pittsburgh', 'nln').
     backend_params : dict, optional
         Parameters forwarded to the backend estimator constructor.
     transform_params : dict, optional
@@ -139,15 +139,6 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 self.feature_names_in_,
                 y_valid,
             )
-        elif backend_lower == "rulefit":
-            # RuleFitClassifier verwaltet sein ScoredRuleSet intern
-            if hasattr(self.estimator_, "to_ruleset"):
-                self.ruleset_ = self.estimator_.to_ruleset()
-            else:
-                raise RuntimeError(
-                    "RuleFitClassifier hat kein 'to_ruleset()' nach fit(). "
-                    "Bitte rulefit.py auf Fehler pruefen."
-                )
         elif backend_lower == "exstracs":
             from .ruleset_transform import exstracs_to_scored_ruleset
 
@@ -219,8 +210,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         # Alle Backends: Prediction immer ueber ScoredRuleSet routen,
         # damit der Benchmark das tatsaechliche ScoredRuleSet testet.
         self.is_ruleset_mode_ = True
-        # RuleFit-Transformation ist verlustbehaftet (lineare Features werden ignoriert)
-        self.transformation_lossy_ = backend_lower in ("rulefit",)
+        self.transformation_lossy_ = False
         return self
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:

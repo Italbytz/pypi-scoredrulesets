@@ -104,6 +104,6 @@ class TestAutoEstimator:
         X, y = iris_data
         clf = AutoScoredRuleSetClassifier(cv=2, random_state=0)
         clf.fit(X, y)
-        assert clf.best_backend_ in ("cart", "hs", "pittsburgh", "rulefit")
+        assert clf.best_backend_ in ("cart", "hs", "pittsburgh")
 
 

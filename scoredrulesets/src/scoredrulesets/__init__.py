@@ -26,7 +26,6 @@ from .estimators.auto import AutoScoredRuleSetClassifier
 from .estimators.logicgp import LogicGPClassifier
 from .estimators.nln import NeuralLogicNetClassifier
 from .estimators.pittsburgh import PittsburghRuleSetClassifier
-from .estimators.rulefit import RuleFitClassifier
 from .estimators.rulegp import RuleGPClassifier
 from .estimators.rulekit_native import RuleKitNativeClassifier
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
@@ -48,7 +47,6 @@ __all__ = [
     "LogicGPClassifier",
     "NeuralLogicNetClassifier",
     "PittsburghRuleSetClassifier",
-    "RuleFitClassifier",
     "RuleGPClassifier",
     "RuleKitNativeClassifier",
     "ScoredRuleSetClassifier",
