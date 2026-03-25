@@ -47,6 +47,12 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
       evaluation.  When set to less than 1.0, each beam-search iteration
       evaluates candidates on a random subset of the evaluation indices,
       significantly speeding up large datasets.
+    * **Low-Cardinality Detection** – ``low_cardinality_threshold`` (default 10)
+      causes numeric features with at most that many unique values to be
+      additionally treated as categorical: equality splits (``== value``) are
+      generated alongside the standard threshold splits (``<=`` / ``>``).  This
+      is essential for datasets where categorical features are integer-encoded
+      (e.g. MONK, car_evaluation).
     """
 
     def __init__(
@@ -72,6 +78,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         window_fraction: float = 1.0,
         # -- Multi-class strategy --
         multiclass_strategy: str = "direct",
+        # -- Low-cardinality detection --
+        low_cardinality_threshold: int = 10,
     ):
         self.aggregation = aggregation
         self.temperature = temperature
@@ -92,6 +100,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         self.enable_compaction = enable_compaction
         self.window_fraction = window_fraction
         self.multiclass_strategy = multiclass_strategy
+        self.low_cardinality_threshold = low_cardinality_threshold
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
@@ -541,6 +550,18 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         for feature_idx in range(X.shape[1]):
             column = X[:, feature_idx]
             feature_name = str(self.feature_names_in_[feature_idx])
+
+            # -- Low-cardinality detection: numeric features with few
+            #    unique values are *also* treated as categorical so that
+            #    equality splits (== value) are generated in addition to
+            #    the standard threshold splits (<= / >).
+            col_arr = np.asarray(column)
+            is_numeric = np.issubdtype(col_arr.dtype, np.number)
+            n_unique = len(np.unique(col_arr))
+            is_low_cardinality = (
+                is_numeric and n_unique <= self.low_cardinality_threshold
+            )
+
             split = self._best_numeric_split(column, y_idx, n_classes)
             if split is not None:
                 threshold, gain, left_counts, right_counts, left_cov, right_cov = split
@@ -590,9 +611,14 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
                             seen_signatures,
                         )
                     )
-                continue
 
-            if self.enable_categorical_rules:
+                # For high-cardinality numeric features we are done;
+                # for low-cardinality ones fall through to the categorical block.
+                if not is_low_cardinality:
+                    continue
+
+            # -- Categorical / low-cardinality equality splits --
+            if self.enable_categorical_rules or is_low_cardinality:
                 for category_idx, (gain, category, match_counts, coverage) in enumerate(
                     self._categorical_splits(column, y_idx, n_classes)
                 ):

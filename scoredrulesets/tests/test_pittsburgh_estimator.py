@@ -89,24 +89,28 @@ def test_sklearn_wrapper_pittsburgh_backend():
 def test_benchmarking_estimator_specs_include_pittsburgh():
     specs = default_estimator_specs()
     assert "wrapper_pittsburgh" in specs
-    assert "wrapper_pittsburgh_fast" in specs
     assert "wrapper_pittsburgh_strong" in specs
-    assert "wrapper_pittsburgh_diverse" in specs
+    assert "wrapper_pittsburgh_ovr" in specs
 
 
 def test_pittsburgh_benchmark_profiles_use_expected_backend_and_budget():
     specs = default_estimator_specs()
 
+    base = specs["wrapper_pittsburgh"].factory()
     strong = specs["wrapper_pittsburgh_strong"].factory()
-    diverse = specs["wrapper_pittsburgh_diverse"].factory()
+    ovr = specs["wrapper_pittsburgh_ovr"].factory()
+
+    assert base.backend == "pittsburgh"
+    assert base.backend_params["candidate_pool_size"] >= 48
+    assert base.backend_params["max_rules"] >= 10
 
     assert strong.backend == "pittsburgh"
-    assert strong.backend_params["beam_width"] >= 10
-    assert strong.backend_params["candidate_pool_size"] >= 32
+    assert strong.backend_params["beam_width"] >= 16
+    assert strong.backend_params["candidate_pool_size"] >= 64
+    assert strong.backend_params["sequential_covering"] is True
 
-    assert diverse.backend == "pittsburgh"
-    assert diverse.backend_params["max_rules"] >= 7
-    assert diverse.backend_params["candidate_pool_size"] >= 36
+    assert ovr.backend == "pittsburgh"
+    assert ovr.backend_params["multiclass_strategy"] == "ovr"
 
 
 def test_pittsburgh_example_run_demo_smoke():
@@ -356,3 +360,128 @@ class TestPittsburghOvRMulticlass:
             assert len(rule.scores) == n_classes, (
                 f"Rule {rule.rule_id} has {len(rule.scores)} scores, expected {n_classes}"
             )
+
+
+class TestPittsburghLowCardinality:
+    """Tests for low-cardinality detection (Fix 1).
+
+    Integer-encoded categorical features (≤ k unique values) should
+    produce equality splits (== value) in addition to threshold splits.
+    """
+
+    @staticmethod
+    def _monk_like_data(n=200, rng_seed=42):
+        """Generate MONK-style data: all features are small integers."""
+        rng = np.random.default_rng(rng_seed)
+        # 6 features with cardinalities 3, 3, 2, 3, 4, 2  (like MONK)
+        X = np.column_stack([
+            rng.integers(1, 4, size=n),   # {1,2,3}
+            rng.integers(1, 4, size=n),   # {1,2,3}
+            rng.integers(1, 3, size=n),   # {1,2}
+            rng.integers(1, 4, size=n),   # {1,2,3}
+            rng.integers(1, 5, size=n),   # {1,2,3,4}
+            rng.integers(1, 3, size=n),   # {1,2}
+        ])
+        # Label depends on single feature equality: class 1 iff f0 == 2
+        y = (X[:, 0] == 2).astype(int)
+        return X, y
+
+    def test_equality_splits_generated(self):
+        """Low-cardinality numeric features should produce == rules."""
+        X, y = self._monk_like_data()
+        clf = PittsburghRuleSetClassifier(
+            max_rules=6,
+            candidate_pool_size=32,
+            beam_width=6,
+            max_iterations=10,
+            random_state=0,
+            low_cardinality_threshold=10,
+        )
+        clf.fit(X, y)
+        ruleset = clf.to_ruleset()
+        ops = [atom.op for rule in ruleset.rules for atom in rule.atoms]
+        # Must contain at least one equality or "in" split
+        assert any(op in ("==", "in") for op in ops), (
+            f"Expected equality splits for low-cardinality features, got ops: {ops}"
+        )
+
+    def test_nonzero_atoms_on_low_cardinality(self):
+        """Pittsburgh must not return 0 atoms on integer-encoded data."""
+        X, y = self._monk_like_data()
+        clf = PittsburghRuleSetClassifier(
+            max_rules=6,
+            candidate_pool_size=32,
+            beam_width=6,
+            max_iterations=10,
+            random_state=0,
+        )
+        clf.fit(X, y)
+        ruleset = clf.to_ruleset()
+        n_atoms = sum(len(r.atoms) for r in ruleset.rules)
+        assert n_atoms > 0, "Expected at least 1 atom on low-cardinality data"
+
+    def test_threshold_disabled_does_not_generate_equality(self):
+        """With low_cardinality_threshold=0, no extra equality splits."""
+        X, y = self._monk_like_data()
+        clf = PittsburghRuleSetClassifier(
+            max_rules=4,
+            candidate_pool_size=16,
+            beam_width=4,
+            max_iterations=6,
+            random_state=0,
+            low_cardinality_threshold=0,
+            enable_categorical_rules=False,
+        )
+        clf.fit(X, y)
+        ruleset = clf.to_ruleset()
+        ops = [atom.op for rule in ruleset.rules for atom in rule.atoms]
+        # Only numeric ops should appear (no == or in)
+        assert all(op in ("<=", ">", "between") for op in ops), (
+            f"Expected only numeric ops when low-cardinality disabled, got: {ops}"
+        )
+
+    def test_multiclass_low_cardinality(self):
+        """Low-cardinality detection works with multiclass data."""
+        rng = np.random.default_rng(123)
+        X = np.column_stack([
+            rng.integers(0, 4, size=300),
+            rng.integers(0, 3, size=300),
+            rng.integers(0, 5, size=300),
+        ])
+        y = X[:, 0] % 3  # 3 classes
+        clf = PittsburghRuleSetClassifier(
+            max_rules=6,
+            candidate_pool_size=24,
+            beam_width=5,
+            max_iterations=8,
+            random_state=0,
+            low_cardinality_threshold=10,
+        )
+        clf.fit(X, y)
+        ruleset = clf.to_ruleset()
+        n_atoms = sum(len(r.atoms) for r in ruleset.rules)
+        assert n_atoms > 0, "Expected non-zero atoms on multiclass low-cardinality data"
+
+    def test_high_cardinality_skips_equality(self):
+        """Features above the threshold get only numeric splits."""
+        rng = np.random.default_rng(42)
+        # Feature with 50 unique values → above default threshold of 10
+        X = rng.uniform(0, 10, size=(200, 3))
+        y = (X[:, 0] > 5).astype(int)
+        clf = PittsburghRuleSetClassifier(
+            max_rules=4,
+            candidate_pool_size=16,
+            beam_width=4,
+            max_iterations=6,
+            random_state=0,
+            low_cardinality_threshold=10,
+            enable_categorical_rules=False,
+        )
+        clf.fit(X, y)
+        ruleset = clf.to_ruleset()
+        ops = [atom.op for rule in ruleset.rules for atom in rule.atoms]
+        assert all(op in ("<=", ">", "between") for op in ops), (
+            f"High-cardinality numeric features should not get == splits, got: {ops}"
+        )
+
+

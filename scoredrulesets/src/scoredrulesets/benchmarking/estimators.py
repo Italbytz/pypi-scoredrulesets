@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from ..estimators.nln import NeuralLogicNetClassifier
-from ..estimators.rulekit_native import RuleKitNativeClassifier
 from ..estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
 
@@ -61,13 +59,49 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
             factory=lambda: ScoredRuleSetClassifier(
                 backend="pittsburgh",
                 backend_params={
-                    "max_rules": 7,
+                    "max_rules": 10,
                     "min_samples_leaf": 3,
-                    "candidate_pool_size": 36,
-                    "beam_width": 10,
-                    "max_iterations": 18,
+                    "candidate_pool_size": 48,
+                    "beam_width": 12,
+                    "max_iterations": 24,
                     "validation_fraction": 0.25,
-                    "complexity_penalty": 0.01,
+                    "complexity_penalty": 0.005,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_pittsburgh_strong": EstimatorSpec(
+            name="wrapper_pittsburgh_strong",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="pittsburgh",
+                backend_params={
+                    "max_rules": 15,
+                    "min_samples_leaf": 3,
+                    "candidate_pool_size": 64,
+                    "beam_width": 16,
+                    "max_iterations": 32,
+                    "validation_fraction": 0.25,
+                    "complexity_penalty": 0.003,
+                    "sequential_covering": True,
+                    "enable_compaction": True,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_pittsburgh_ovr": EstimatorSpec(
+            name="wrapper_pittsburgh_ovr",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="pittsburgh",
+                backend_params={
+                    "max_rules": 10,
+                    "min_samples_leaf": 3,
+                    "candidate_pool_size": 48,
+                    "beam_width": 12,
+                    "max_iterations": 24,
+                    "validation_fraction": 0.25,
+                    "complexity_penalty": 0.005,
+                    "multiclass_strategy": "ovr",
+                    "enable_compaction": True,
                 },
                 random_state=0,
             ),
@@ -146,36 +180,20 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_nln": EstimatorSpec(
-            name="wrapper_nln",
+        "wrapper_logicgp_strong": EstimatorSpec(
+            name="wrapper_logicgp_strong",
             factory=lambda: ScoredRuleSetClassifier(
-                backend="nln",
+                backend="logicgp",
                 backend_params={
-                    "n_rules": 12,
+                    "trainer": "rlcw",
+                    "f1_averaging": "macro",
+                    "max_generations": 500,
+                    "stagnation_generations": 80,
+                    "population_size": 120,
+                    "n_adaptations_per_gen": 20,
                     "n_bins": 5,
-                    "learning_rate": 0.3,
-                    "l1_conj": 0.002,
-                    "l1_score": 0.001,
-                    "epochs": 300,
-                    "early_stopping_rounds": 30,
-                    "atom_threshold": 0.1,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_nln_fast": EstimatorSpec(
-            name="wrapper_nln_fast",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="nln",
-                backend_params={
-                    "n_rules": 8,
-                    "n_bins": 4,
-                    "learning_rate": 0.4,
-                    "l1_conj": 0.005,
-                    "l1_score": 0.003,
-                    "epochs": 100,
-                    "early_stopping_rounds": 15,
-                    "atom_threshold": 0.1,
+                    "max_fit_seconds": 240,
+                    "random_state": 0,
                 },
                 random_state=0,
             ),
@@ -194,20 +212,6 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                     "early_stopping_rounds": 40,
                     "atom_threshold": 0.08,
                 },
-                random_state=0,
-            ),
-        ),
-        "nln_native": EstimatorSpec(
-            name="nln_native",
-            factory=lambda: NeuralLogicNetClassifier(
-                n_rules=12,
-                n_bins=5,
-                learning_rate=0.3,
-                l1_conj=0.002,
-                l1_score=0.001,
-                epochs=300,
-                early_stopping_rounds=30,
-                atom_threshold=0.1,
                 random_state=0,
             ),
         ),
@@ -268,6 +272,22 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                     "generations": 100,
                     "max_rules": 8,
                     "max_atoms_per_rule": 4,
+                    "enable_compaction": True,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_rulegp_strong": EstimatorSpec(
+            name="wrapper_rulegp_strong",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulegp",
+                backend_params={
+                    "population_size": 150,
+                    "generations": 250,
+                    "max_rules": 12,
+                    "max_atoms_per_rule": 5,
+                    "tournament_size": 4,
+                    "early_stopping_rounds": 30,
                     "enable_compaction": True,
                 },
                 random_state=0,
