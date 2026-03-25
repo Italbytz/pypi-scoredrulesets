@@ -1,8 +1,10 @@
 .PHONY: help benchmark benchmark-resume benchmark-recover benchmark-clean benchmark-status recover-latest \
+       benchmark-standard benchmark-standard-resume benchmark-standard-clean benchmark-standard-status \
        benchmark-slim benchmark-slim-resume benchmark-slim-clean benchmark-slim-status \
        benchmark-logicgp benchmark-logicgp-clean benchmark-logicgp-status
 
 CHECKPOINT ?= benchmarks/checkpoint.jsonl
+CHECKPOINT_STANDARD ?= benchmarks/checkpoint_standard.jsonl
 CHECKPOINT_SLIM ?= benchmarks/checkpoint_slim.jsonl
 CHECKPOINT_LOGICGP ?= benchmarks/checkpoint_logicgp.jsonl
 TIMEOUT    ?= 300
@@ -18,7 +20,14 @@ help:
 	@echo "  make benchmark-status        - Zeigt Checkpoint-Status (fertige Laeufe)"
 	@echo "  make recover-latest          - Recovery aus letztem Log"
 	@echo ""
-	@echo "Slim-Benchmark-Targets (13 Schaetzer, 10 Datasets):"
+	@echo "Standard-Benchmark-Targets (alle Schaetzer, 10 Datasets):"
+	@echo "  make benchmark-standard          - Einmaliger Standard-Report (mit Checkpoint/Resume)"
+	@echo "  make benchmark-standard-resume   - Startet/setzt Standard-Benchmark fort"
+	@echo "                                     (max $(MAX_ATTEMPTS) Versuche, Checkpoint: $(CHECKPOINT_STANDARD))"
+	@echo "  make benchmark-standard-clean    - Loescht Standard-Checkpoint und startet von vorne"
+	@echo "  make benchmark-standard-status   - Zeigt Standard-Checkpoint-Status (fertige Laeufe)"
+	@echo ""
+	@echo "Slim-Benchmark-Targets (9 Schaetzer, 10 Datasets):"
 	@echo "  make benchmark-slim          - Einmaliger Slim-Report (mit Checkpoint/Resume)"
 	@echo "  make benchmark-slim-resume   - Startet/setzt Slim-Benchmark fort"
 	@echo "                                 (max $(MAX_ATTEMPTS) Versuche, Checkpoint: $(CHECKPOINT_SLIM))"
@@ -31,7 +40,8 @@ help:
 	@echo "  make benchmark-logicgp-status- Zeigt LogicGP-Checkpoint-Status"
 	@echo ""
 	@echo "Optionen (als Variablen):"
-	@echo "  CHECKPOINT=path.jsonl  CHECKPOINT_SLIM=path.jsonl  TIMEOUT=300  REPEATS=3  MAX_ATTEMPTS=5"
+	@echo "  CHECKPOINT=path.jsonl  CHECKPOINT_STANDARD=path.jsonl  CHECKPOINT_SLIM=path.jsonl"
+	@echo "  TIMEOUT=300  REPEATS=3  MAX_ATTEMPTS=5"
 	@echo "  ARGS='--datasets cart_hard --estimators wrapper_cart,gp'"
 
 benchmark:
@@ -71,7 +81,42 @@ recover-latest:
 	./scripts/recover_latest_benchmark.sh $(ARGS)
 
 # ---------------------------------------------------------------------------
-# Slim-Benchmark (13 Schaetzer, 10 Datasets – maximale Typ-Diskriminierung)
+# Standard-Benchmark (alle Schaetzer, 10 ausgewaehlte Datasets)
+# ---------------------------------------------------------------------------
+
+benchmark-standard:
+	./scripts/run_standard_benchmark_with_recovery.sh \
+		--checkpoint $(CHECKPOINT_STANDARD) \
+		--timeout $(TIMEOUT) \
+		--repeats $(REPEATS) \
+		$(ARGS)
+
+benchmark-standard-resume:
+	./scripts/run_standard_benchmark_with_recovery.sh \
+		--max-attempts $(MAX_ATTEMPTS) \
+		--checkpoint $(CHECKPOINT_STANDARD) \
+		--timeout $(TIMEOUT) \
+		--repeats $(REPEATS) \
+		$(ARGS)
+
+benchmark-standard-clean:
+	@echo "Loesche Standard-Checkpoint: $(CHECKPOINT_STANDARD)"
+	rm -f $(CHECKPOINT_STANDARD)
+	@echo "Fertig. Naechster 'make benchmark-standard' startet von vorne."
+
+benchmark-standard-status:
+	@if [ -f "$(CHECKPOINT_STANDARD)" ]; then \
+		echo "Standard-Checkpoint: $(CHECKPOINT_STANDARD)"; \
+		echo "Zeilen (fertige Laeufe): $$(wc -l < $(CHECKPOINT_STANDARD))"; \
+		echo "Dateigroesse: $$(du -h $(CHECKPOINT_STANDARD) | cut -f1)"; \
+		echo "Letzte 3 Laeufe:"; \
+		tail -3 $(CHECKPOINT_STANDARD) | python -m json.tool --compact 2>/dev/null || tail -3 $(CHECKPOINT_STANDARD); \
+	else \
+		echo "Kein Standard-Checkpoint vorhanden: $(CHECKPOINT_STANDARD)"; \
+	fi
+
+# ---------------------------------------------------------------------------
+# Slim-Benchmark (9 Schaetzer, 10 Datasets – maximale Typ-Diskriminierung)
 # ---------------------------------------------------------------------------
 
 benchmark-slim:

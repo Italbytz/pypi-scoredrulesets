@@ -84,15 +84,6 @@ def test_logicgp_trainer_config_resolves_correctly():
     clf = LogicGPClassifier(trainer="flcw", f1_averaging="macro")
     assert clf._resolve_trainer_config() == (False, "macro")
 
-    # Legacy-Form (Abwaertskompatibilitaet)
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        clf = LogicGPClassifier(trainer="rlcw_macro")
-        assert clf._resolve_trainer_config() == (True, "macro")
-
-        clf = LogicGPClassifier(trainer="flcw_micro")
-        assert clf._resolve_trainer_config() == (False, "micro")
 
     # _run_gp muss average=f1_average verwenden (kein hardcodiertes "macro")
     import inspect, re

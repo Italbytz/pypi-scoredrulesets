@@ -25,7 +25,8 @@ def test_logicgp_flcw_fit_predict():
 
     X, y = _make_simple_data()
     clf = LogicGPClassifier(
-        trainer="flcw_macro",
+        trainer="flcw",
+        f1_averaging="macro",
         max_generations=20,
         stagnation_generations=5,
         n_bins=3,
@@ -90,14 +91,9 @@ def test_logicgp_rlcw_macro_fit_predict():
 
     X, y = _make_simple_data()
     clf = LogicGPClassifier(
-        trainer="rlcw_macro",
+        trainer="rlcw",
+        f1_averaging="macro",
         max_generations=30,
-        stagnation_generations=8,
-        n_bins=3,
-        population_size=20,
-        n_adaptations_per_gen=12,
-        min_max_weight=0.1,
-        random_state=0,
     )
     clf.fit(X, y)
 
@@ -114,7 +110,8 @@ def test_logicgp_rlcw_micro_fit_predict():
 
     X, y = _make_simple_data()
     clf = LogicGPClassifier(
-        trainer="rlcw_micro",
+        trainer="rlcw",
+        f1_averaging="micro",
         max_generations=25,
         stagnation_generations=8,
         n_bins=3,
@@ -136,7 +133,8 @@ def test_logicgp_rlcw_trainer_in_metadata():
 
     X, y = _make_simple_data()
     clf = LogicGPClassifier(
-        trainer="rlcw_macro",
+        trainer="rlcw",
+        f1_averaging="macro",
         max_generations=20,
         stagnation_generations=5,
         n_bins=3,
@@ -155,7 +153,8 @@ def test_logicgp_rlcw_max_model_size_constraint():
 
     X, y = _make_simple_data()
     clf = LogicGPClassifier(
-        trainer="rlcw_macro",
+        trainer="rlcw",
+        f1_averaging="macro",
         max_generations=30,
         stagnation_generations=8,
         n_bins=3,
@@ -176,7 +175,8 @@ def test_logicgp_rlcw_population_size_limits_growth():
 
     X, y = _make_simple_data()
     clf = LogicGPClassifier(
-        trainer="rlcw_macro",
+        trainer="rlcw",
+        f1_averaging="macro",
         max_generations=20,
         stagnation_generations=5,
         n_bins=3,
@@ -198,7 +198,8 @@ def test_logicgp_more_adaptations_per_gen():
 
     X, y = _make_simple_data()
     clf = LogicGPClassifier(
-        trainer="rlcw_macro",
+        trainer="rlcw",
+        f1_averaging="macro",
         max_generations=15,
         stagnation_generations=5,
         n_bins=3,
@@ -249,7 +250,8 @@ def test_sklearn_wrapper_logicgp_rlcw_backend():
     clf = ScoredRuleSetClassifier(
         backend="logicgp",
         backend_params={
-            "trainer": "rlcw_macro",
+            "trainer": "rlcw",
+            "f1_averaging": "macro",
             "max_generations": 25,
             "stagnation_generations": 8,
             "population_size": 20,

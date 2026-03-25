@@ -125,7 +125,8 @@ def diagnose_selection(name, X, y):
 
     try:
         clf = LogicGPClassifier(
-            trainer="flcw_macro",
+            trainer="flcw",
+            f1_averaging="macro",
             max_generations=200,
             stagnation_generations=80,
             population_size=30,

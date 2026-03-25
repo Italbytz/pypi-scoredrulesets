@@ -750,8 +750,6 @@ class LogicGPClassifier(BaseRuleSetEstimator):
     ----------
     trainer : str
         Trainer-Variante: ``"rlcw"`` (Standard) oder ``"flcw"``.
-        Legacy-Werte wie ``"rlcw_micro"`` werden weiterhin akzeptiert
-        und automatisch in ``trainer`` + ``f1_averaging`` aufgeteilt.
     f1_averaging : str
         F1-Averaging fuer die Modellauswahl: ``"micro"`` (Standard)
         oder ``"macro"``.
@@ -992,10 +990,6 @@ class LogicGPClassifier(BaseRuleSetEstimator):
     def _resolve_trainer_config(self) -> tuple[bool, str]:
         """Resolve trainer + f1_averaging into (use_rlcw, f1_average).
 
-        Supports legacy combined strings like ``"rlcw_micro"`` for
-        backward compatibility.  New-style usage passes ``trainer="rlcw"``
-        and ``f1_averaging="micro"`` separately.
-
         Returns
         -------
         use_rlcw : bool
@@ -1003,27 +997,8 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         f1_average : str
             ``"micro"`` or ``"macro"``.
         """
-        import warnings
-
         trainer = self.trainer.lower().strip()
         f1_avg = self.f1_averaging.lower().strip()
-
-        # Legacy: combined strings like "rlcw_micro", "flcw_macro"
-        _LEGACY = {
-            "rlcw_micro": ("rlcw", "micro"),
-            "rlcw_macro": ("rlcw", "macro"),
-            "flcw_micro": ("flcw", "micro"),
-            "flcw_macro": ("flcw", "macro"),
-        }
-        if trainer in _LEGACY:
-            warnings.warn(
-                f"trainer='{self.trainer}' is deprecated. "
-                f"Use trainer='{_LEGACY[trainer][0]}' and "
-                f"f1_averaging='{_LEGACY[trainer][1]}' instead.",
-                FutureWarning,
-                stacklevel=3,
-            )
-            trainer, f1_avg = _LEGACY[trainer]
 
         if trainer not in ("rlcw", "flcw"):
             raise ValueError(
@@ -1038,9 +1013,6 @@ class LogicGPClassifier(BaseRuleSetEstimator):
 
         use_rlcw = trainer == "rlcw"
         return use_rlcw, f1_avg
-        raise ValueError(
-            f"model_selection must be a string or callable, got {type(sel)}."
-        )
 
     def _resolve_fitness_evaluator(self) -> FitnessEvaluator | None:
         """Resolve the fitness_evaluator parameter to a callable, or None for auto."""

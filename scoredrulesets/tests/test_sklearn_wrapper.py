@@ -75,7 +75,7 @@ def test_exstracs_params_unknown_keys_are_filtered():
     # Kein ExSTraCS-Backend nötig: wir testen die Param-Säuberung direkt.
     raw_params = {
         "conservative_prune": True,
-        "prune_atoms": False,  # Legacy/invalid key -> must be ignored
+        "prune_atoms": False,  # invalid key -> must be ignored
         "unknown_key": 123,
     }
 

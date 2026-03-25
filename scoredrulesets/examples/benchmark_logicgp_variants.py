@@ -140,80 +140,80 @@ def _register_logicgp_estimators():
     specs = {
         # --- Basis: RLCW Macro (Referenz) ---
         "lgp_rlcw_macro": dict(
-            trainer="rlcw_macro", max_generations=200, stagnation_generations=40,
+            trainer="rlcw", f1_averaging="macro", max_generations=200, stagnation_generations=40,
             population_size=50, n_adaptations_per_gen=12, n_bins=5,
             min_max_weight=0.1, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         # --- Achse: F1-Averaging ---
         "lgp_rlcw_micro": dict(
-            trainer="rlcw_micro", max_generations=200, stagnation_generations=40,
+            trainer="rlcw", f1_averaging="micro", max_generations=200, stagnation_generations=40,
             population_size=50, n_adaptations_per_gen=12, n_bins=5,
             min_max_weight=0.1, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         # --- Achse: Trainer-Typ (FLCW vs RLCW) ---
         "lgp_flcw_macro": dict(
-            trainer="flcw_macro", max_generations=200, stagnation_generations=40,
+            trainer="flcw", f1_averaging="macro", max_generations=200, stagnation_generations=40,
             population_size=50, n_adaptations_per_gen=8, n_bins=5,
             min_max_weight=0.0, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         "lgp_flcw_micro": dict(
-            trainer="flcw_micro", max_generations=200, stagnation_generations=40,
+            trainer="flcw", f1_averaging="micro", max_generations=200, stagnation_generations=40,
             population_size=50, n_adaptations_per_gen=8, n_bins=5,
             min_max_weight=0.0, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         # --- Achse: Budget (Fast) ---
         "lgp_rlcw_macro_fast": dict(
-            trainer="rlcw_macro", max_generations=50, stagnation_generations=15,
+            trainer="rlcw", f1_averaging="macro", max_generations=50, stagnation_generations=15,
             population_size=30, n_adaptations_per_gen=12, n_bins=5,
             min_max_weight=0.1, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         "lgp_flcw_macro_fast": dict(
-            trainer="flcw_macro", max_generations=50, stagnation_generations=15,
+            trainer="flcw", f1_averaging="macro", max_generations=50, stagnation_generations=15,
             population_size=30, n_adaptations_per_gen=8, n_bins=5,
             min_max_weight=0.0, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         # --- Achse: Literal-Generator ---
         "lgp_rlcw_macro_singleton": dict(
-            trainer="rlcw_macro", max_generations=200, stagnation_generations=40,
+            trainer="rlcw", f1_averaging="macro", max_generations=200, stagnation_generations=40,
             population_size=50, n_adaptations_per_gen=12, n_bins=5,
             min_max_weight=0.1, max_fit_seconds=_TIME_BUDGET,
             literal_generator="singleton", random_state=0,
         ),
         # --- Achse: Bins ---
         "lgp_rlcw_macro_bins3": dict(
-            trainer="rlcw_macro", max_generations=200, stagnation_generations=40,
+            trainer="rlcw", f1_averaging="macro", max_generations=200, stagnation_generations=40,
             population_size=50, n_adaptations_per_gen=12, n_bins=3,
             min_max_weight=0.1, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         "lgp_rlcw_macro_bins7": dict(
-            trainer="rlcw_macro", max_generations=200, stagnation_generations=40,
+            trainer="rlcw", f1_averaging="macro", max_generations=200, stagnation_generations=40,
             population_size=50, n_adaptations_per_gen=12, n_bins=7,
             min_max_weight=0.1, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         # --- Achse: min_max_weight (Literal-Filterung) ---
         "lgp_rlcw_macro_nofilt": dict(
-            trainer="rlcw_macro", max_generations=200, stagnation_generations=40,
+            trainer="rlcw", f1_averaging="macro", max_generations=200, stagnation_generations=40,
             population_size=50, n_adaptations_per_gen=12, n_bins=5,
             min_max_weight=0.0, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         "lgp_rlcw_macro_strongfilt": dict(
-            trainer="rlcw_macro", max_generations=200, stagnation_generations=40,
+            trainer="rlcw", f1_averaging="macro", max_generations=200, stagnation_generations=40,
             population_size=50, n_adaptations_per_gen=12, n_bins=5,
             min_max_weight=0.25, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,
         ),
         # --- Achse: Populationsgroesse ---
         "lgp_rlcw_macro_bigpop": dict(
-            trainer="rlcw_macro", max_generations=200, stagnation_generations=40,
+            trainer="rlcw", f1_averaging="macro", max_generations=200, stagnation_generations=40,
             population_size=80, n_adaptations_per_gen=12, n_bins=5,
             min_max_weight=0.1, max_fit_seconds=_TIME_BUDGET,
             literal_generator="full", random_state=0,

@@ -18,7 +18,8 @@ def diagnose(name, X, y):
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
 
     clf = LogicGPClassifier(
-        trainer="flcw_macro",
+        trainer="flcw",
+        f1_averaging="macro",
         max_generations=50,
         stagnation_generations=20,
         population_size=30,
@@ -41,7 +42,8 @@ def diagnose(name, X, y):
     # Vergleich: was wäre F1 mit längerer Laufzeit?
     for gens, stag in [(200, 80), (500, 200), (1000, 500)]:
         clf2 = LogicGPClassifier(
-            trainer="flcw_macro",
+            trainer="flcw",
+            f1_averaging="macro",
             max_generations=gens,
             stagnation_generations=stag,
             population_size=30,

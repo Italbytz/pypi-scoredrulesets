@@ -251,7 +251,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     @staticmethod
     def _sanitize_exstracs_params(exstracs_params: dict[str, Any] | None) -> dict[str, Any]:
-        """Filtere unbekannte ExSTraCS-Keys weg, damit Alt-Konfigurationen robust bleiben."""
+        """Filtere unbekannte ExSTraCS-Keys weg und warne bei Tippfehlern."""
         from .exstracs_shrinking import ExSTraCSPruningParams
 
         if not exstracs_params:
