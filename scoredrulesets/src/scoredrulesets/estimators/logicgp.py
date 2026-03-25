@@ -253,12 +253,18 @@ def _compute_weights(
     n_classes: int,
 ) -> None:
     """
-    Berechnet Gewichte in-place fuer FLCW-Variante.
-    w_i = Klassenverteilung unter Instanzen, fuer die Monom i feuert.
-    w_0 = Klassenverteilung unter Instanzen, fuer die KEIN Monom feuert.
+    Berechnet Gewichte in-place fuer FLCW-Variante (klassenbalanciert).
+
+    w_i[c] = (count_c_in_firing / N_c)  normalisiert auf Summe 1.
+    Dies entspricht dem normalisierten per-class Recall des Monoms und
+    verhindert, dass Majority-Klassen die Gewichte dominieren.
+    w_0 = analog fuer Instanzen, fuer die KEIN Monom feuert.
     """
     n = X_disc.shape[0]
     any_fired = np.zeros(n, dtype=bool)
+    # Klassengroessen fuer Balancierung
+    class_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
+    class_counts = np.maximum(class_counts, 1.0)  # Division durch 0 vermeiden
 
     for mon in poly.monomials:
         mask = mon.fires_mask(X_disc)
@@ -266,7 +272,10 @@ def _compute_weights(
         counts = np.bincount(y_idx[mask], minlength=n_classes).astype(float)
         total = counts.sum()
         if total > 0:
-            mon.weights = counts / total
+            # Klassenbalanciert: Anteil der abgedeckten Klasseninstanzen
+            balanced = counts / class_counts
+            bal_total = balanced.sum()
+            mon.weights = balanced / bal_total if bal_total > 0 else np.ones(n_classes) / n_classes
         else:
             mon.weights = np.ones(n_classes, dtype=float) / n_classes
 
@@ -274,10 +283,10 @@ def _compute_weights(
     no_fire_mask = ~any_fired
     if no_fire_mask.any():
         counts0 = np.bincount(y_idx[no_fire_mask], minlength=n_classes).astype(float)
-        total0 = counts0.sum()
-        poly.default_weights = counts0 / total0 if total0 > 0 else np.ones(n_classes) / n_classes
+        balanced0 = counts0 / class_counts
+        bal_total0 = balanced0.sum()
+        poly.default_weights = balanced0 / bal_total0 if bal_total0 > 0 else np.ones(n_classes) / n_classes
     else:
-        # Fallback: gleichmaessige Verteilung
         poly.default_weights = np.ones(n_classes, dtype=float) / n_classes
 
 

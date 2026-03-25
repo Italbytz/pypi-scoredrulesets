@@ -166,7 +166,19 @@ def _nsga2_select(pop: list[_Individual], n_select: int) -> list[_Individual]:
 def _build_feature_specs(
     X: np.ndarray,
     max_thresholds: int | None = None,
+    low_cardinality_threshold: int = 10,
 ) -> list[dict]:
+    """Build per-feature specs describing the operators and values RuleGP may use.
+
+    Parameters
+    ----------
+    low_cardinality_threshold : int
+        Numeric features with at most this many unique values are additionally
+        treated as categorical (``kind="both"``).  This generates ``==`` atoms
+        alongside the usual ``<=``/``>``/``between`` atoms, which is essential
+        for datasets where categorical features are integer-encoded (e.g.
+        MONK, car_evaluation).
+    """
     specs: list[dict] = []
     for fi in range(X.shape[1]):
         col = X[:, fi]
@@ -191,7 +203,19 @@ def _build_feature_specs(
                 for i in range(len(qp) - 1):
                     if qp[i] < qp[i + 1]:
                         intervals.append((float(qp[i]), float(qp[i + 1])))
-            specs.append({"idx": fi, "kind": "num", "thresholds": thr, "intervals": intervals})
+
+            # Low-cardinality detection: additionally provide equality splits
+            if vals.size <= low_cardinality_threshold:
+                cats = vals.tolist()
+                specs.append({
+                    "idx": fi,
+                    "kind": "both",
+                    "thresholds": thr,
+                    "intervals": intervals,
+                    "categories": cats,
+                })
+            else:
+                specs.append({"idx": fi, "kind": "num", "thresholds": thr, "intervals": intervals})
         else:
             cats = np.unique(np.asarray(col, dtype=object)).tolist()
             specs.append({"idx": fi, "kind": "cat", "categories": cats})
@@ -428,20 +452,26 @@ class RuleGPClassifier(BaseRuleSetEstimator):
     ) -> _AtomGene:
         spec = specs[int(rng.integers(0, len(specs)))]
         fi = spec["idx"]
-        if spec["kind"] == "num":
+        if spec["kind"] in ("num", "both"):
             thr = spec.get("thresholds", [])
             ivs = spec.get("intervals", [])
+            cats = spec.get("categories", []) if spec["kind"] == "both" else []
             ops = []
             if thr:
                 ops += ["<=", ">"]
             if ivs:
                 ops.append("between")
+            if cats:
+                ops.append("==")
             if ops:
                 op = ops[int(rng.integers(0, len(ops)))]
                 if op in ("<=", ">"):
                     return _AtomGene(fi, op, float(thr[int(rng.integers(0, len(thr)))]))
-                iv = ivs[int(rng.integers(0, len(ivs)))]
-                return _AtomGene(fi, "between", [float(iv[0]), float(iv[1])])
+                if op == "between":
+                    iv = ivs[int(rng.integers(0, len(ivs)))]
+                    return _AtomGene(fi, "between", [float(iv[0]), float(iv[1])])
+                if op == "==":
+                    return _AtomGene(fi, "==", cats[int(rng.integers(0, len(cats)))])
         cats = spec.get("categories", [])
         if cats:
             return _AtomGene(fi, "==", cats[int(rng.integers(0, len(cats)))])
@@ -593,16 +623,19 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         y: np.ndarray,
         n_classes: int,
     ) -> None:
-        """Recompute FLCW-style scores for each rule and the default."""
+        """Recompute class-balanced FLCW-style scores for each rule and the default."""
         any_fired = np.zeros(X.shape[0], dtype=bool)
+        class_counts = np.bincount(y, minlength=n_classes).astype(float)
+        class_counts = np.maximum(class_counts, 1.0)
 
         for rule in ind.rules:
             mask = self._rule_mask(rule, X)
             any_fired |= mask
             if mask.sum() > 0:
                 counts = np.bincount(y[mask], minlength=n_classes).astype(float)
-                total = max(counts.sum(), 1.0)
-                rule._scores = counts / total
+                balanced = counts / class_counts
+                bal_total = balanced.sum()
+                rule._scores = balanced / bal_total if bal_total > 0 else np.ones(n_classes) / n_classes
             else:
                 rule._scores = np.ones(n_classes, dtype=float) / n_classes
 
@@ -610,8 +643,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         no_fire = ~any_fired
         if no_fire.any():
             counts = np.bincount(y[no_fire], minlength=n_classes).astype(float)
-            total = max(counts.sum(), 1.0)
-            ind._default_scores = counts / total
+            balanced = counts / class_counts
+            bal_total = balanced.sum()
+            ind._default_scores = balanced / bal_total if bal_total > 0 else np.ones(n_classes) / n_classes
         else:
             ind._default_scores = np.ones(n_classes, dtype=float) / n_classes
 
@@ -792,7 +826,12 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             c = np.asarray(col, dtype=float)
             return (c >= float(lo)) & (c <= float(hi))
         elif atom.op == "==":
-            return np.asarray(col, dtype=object) == atom.value
+            # For numeric low-cardinality features, compare as float;
+            # for truly categorical features, compare as object.
+            try:
+                return np.asarray(col, dtype=float) == float(atom.value)
+            except (ValueError, TypeError):
+                return np.asarray(col, dtype=object) == atom.value
         elif atom.op == "in":
             return np.isin(np.asarray(col, dtype=object), list(atom.value))
         return np.ones(X.shape[0], dtype=bool)

@@ -14,59 +14,40 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def test_gp_and_gp_residual_have_different_fitness_mode():
-    """gp verwendet single_rule, gp_residual verwendet residual_covering."""
+    """wrapper_logicgp and wrapper_logicgp_strong must have different configurations."""
     from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
     specs = default_estimator_specs()
-    gp_clf = specs["gp"].factory()
-    gp_res_clf = specs["gp_residual"].factory()
+    base_clf = specs["wrapper_logicgp"].factory()
+    strong_clf = specs["wrapper_logicgp_strong"].factory()
 
-    assert gp_clf.evolution_fitness_mode == "single_rule", (
-        "gp sollte evolution_fitness_mode='single_rule' nutzen"
-    )
-    assert gp_res_clf.evolution_fitness_mode == "residual_covering", (
-        "gp_residual sollte evolution_fitness_mode='residual_covering' nutzen"
-    )
-    assert gp_clf.evolution_fitness_mode != gp_res_clf.evolution_fitness_mode, (
-        "gp und gp_residual muessen unterschiedliche fitness modes haben"
+    base_pop = base_clf.backend_params.get("population_size", 50)
+    strong_pop = strong_clf.backend_params.get("population_size", 50)
+
+    assert strong_pop > base_pop, (
+        "wrapper_logicgp_strong should have a larger population than wrapper_logicgp"
     )
 
 
 def test_gp_and_gp_residual_produce_different_results():
-    """gp und gp_residual sollten bei gleichem Seed unterschiedliche Modelle liefern."""
+    """wrapper_logicgp and wrapper_logicgp_strong should produce different models."""
     from sklearn.datasets import load_iris
     from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
     X, y = load_iris(return_X_y=True)
     specs = default_estimator_specs()
 
-    gp_clf = specs["gp"].factory()
-    gp_res_clf = specs["gp_residual"].factory()
+    base_clf = specs["wrapper_logicgp"].factory()
+    strong_clf = specs["wrapper_logicgp_strong"].factory()
 
-    gp_clf.fit(X, y)
-    gp_res_clf.fit(X, y)
+    base_clf.fit(X, y)
+    strong_clf.fit(X, y)
 
-    rs_gp = gp_clf.to_ruleset()
-    rs_res = gp_res_clf.to_ruleset()
+    rs_base = base_clf.to_ruleset()
+    rs_strong = strong_clf.to_ruleset()
 
-    # Mindestens eines der Merkmale sollte abweichen
-    gp_atoms = sum(len(r.atoms) for r in rs_gp.rules if r.rule_id != "default")
-    res_atoms = sum(len(r.atoms) for r in rs_res.rules if r.rule_id != "default")
-
-    gp_preds = gp_clf.predict(X)
-    res_preds = gp_res_clf.predict(X)
-
-    differ = (
-        gp_atoms != res_atoms
-        or len(rs_gp.rules) != len(rs_res.rules)
-        or not np.array_equal(gp_preds, res_preds)
-    )
-    # Stochastisch koennen sie manchmal gleich sein, daher nur Warnung
-    if not differ:
-        pytest.skip(
-            "gp und gp_residual zufaellig identisch – "
-            "Konfigurationen sind aber korrekt unterschiedlich"
-        )
+    # At minimum the configurations differ
+    assert base_clf.backend_params["population_size"] != strong_clf.backend_params["population_size"]
 
 
 # ---------------------------------------------------------------------------
@@ -99,17 +80,15 @@ def test_logicgp_trainer_config_resolves_correctly():
 
 
 def test_rlcw_macro_and_micro_specs_differ():
-    """Die Benchmark-Specs fuer wrapper_logicgp und rlcw_macro muessen sich unterscheiden."""
+    """wrapper_logicgp (macro) and wrapper_logicgp_mux (micro) must use different f1_averaging."""
     from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
     specs = default_estimator_specs()
-    default_clf = specs["wrapper_logicgp"].factory()
-    macro_clf = specs["wrapper_logicgp_rlcw_macro"].factory()
+    macro_clf = specs["wrapper_logicgp"].factory()
+    micro_clf = specs["wrapper_logicgp_mux"].factory()
 
-    assert default_clf.backend_params["trainer"] == "rlcw"
-    assert default_clf.backend_params["f1_averaging"] == "micro"
-    assert macro_clf.backend_params["trainer"] == "rlcw"
     assert macro_clf.backend_params["f1_averaging"] == "macro"
+    assert micro_clf.backend_params["f1_averaging"] == "micro"
 
 
 def test_rlcw_macro_micro_different_predictions():

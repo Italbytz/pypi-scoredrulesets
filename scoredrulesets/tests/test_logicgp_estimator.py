@@ -279,11 +279,8 @@ def test_benchmarking_estimator_specs_include_logicgp():
 
     specs = default_estimator_specs()
     assert "wrapper_logicgp" in specs
-    assert "wrapper_logicgp_rlcw_macro" in specs
-    assert "wrapper_logicgp_flcw" in specs
-    # Removed variants (paretodominiert / redundant):
-    assert "wrapper_logicgp_fast" not in specs
-    assert "wrapper_logicgp_rlcw_micro" not in specs
-    assert "wrapper_logicgp_rlcw_fast" not in specs
+    assert "wrapper_logicgp_strong" in specs
+    assert "wrapper_logicgp_mux" in specs
+    assert "wrapper_logicgp_mux_rlcw_macro" in specs
 
 

@@ -21,14 +21,14 @@ ESTIMATOR_SPECS: dict[str, EstimatorSpec] = {}
 def default_estimator_specs() -> dict[str, EstimatorSpec]:
     # ...existing code...
     specs = {
-        "wrapper_cart": EstimatorSpec(
-            name="wrapper_cart",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="cart",
-                backend_params={"max_depth": 4},
-                random_state=0,
-            ),
-        ),
+        # "wrapper_cart": EstimatorSpec(
+        #     name="wrapper_cart",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="cart",
+        #         backend_params={"max_depth": 4},
+        #         random_state=0,
+        #     ),
+        # ),
         # "wrapper_cart_pruned": EstimatorSpec(
         #     name="wrapper_cart_pruned",
         #     factory=lambda: ScoredRuleSetClassifier(
@@ -40,10 +40,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
         #         random_state=0,
         #     ),
         # ),
-        "wrapper_hs": EstimatorSpec(
-            name="wrapper_hs",
-            factory=lambda: ScoredRuleSetClassifier(backend="hs", random_state=0),
-        ),
+        # "wrapper_hs": EstimatorSpec(
+        #     name="wrapper_hs",
+        #     factory=lambda: ScoredRuleSetClassifier(backend="hs", random_state=0),
+        # ),
         # "wrapper_hs_pruned": EstimatorSpec(
         #     name="wrapper_hs_pruned",
         #     factory=lambda: ScoredRuleSetClassifier(
@@ -54,80 +54,80 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
         #         random_state=0,
         #     ),
         # ),
-        "wrapper_pittsburgh": EstimatorSpec(
-            name="wrapper_pittsburgh",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="pittsburgh",
-                backend_params={
-                    "max_rules": 10,
-                    "min_samples_leaf": 3,
-                    "candidate_pool_size": 48,
-                    "beam_width": 12,
-                    "max_iterations": 24,
-                    "validation_fraction": 0.25,
-                    "complexity_penalty": 0.005,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_pittsburgh_strong": EstimatorSpec(
-            name="wrapper_pittsburgh_strong",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="pittsburgh",
-                backend_params={
-                    "max_rules": 15,
-                    "min_samples_leaf": 3,
-                    "candidate_pool_size": 64,
-                    "beam_width": 16,
-                    "max_iterations": 32,
-                    "validation_fraction": 0.25,
-                    "complexity_penalty": 0.003,
-                    "sequential_covering": True,
-                    "enable_compaction": True,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_pittsburgh_ovr": EstimatorSpec(
-            name="wrapper_pittsburgh_ovr",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="pittsburgh",
-                backend_params={
-                    "max_rules": 10,
-                    "min_samples_leaf": 3,
-                    "candidate_pool_size": 48,
-                    "beam_width": 12,
-                    "max_iterations": 24,
-                    "validation_fraction": 0.25,
-                    "complexity_penalty": 0.005,
-                    "multiclass_strategy": "ovr",
-                    "enable_compaction": True,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_rulekit": EstimatorSpec(
-            name="wrapper_rulekit",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="rulekit",
-                backend_params={},
-                random_state=0,
-            ),
-        ),
-        "wrapper_rulekit_native": EstimatorSpec(
-            name="wrapper_rulekit_native",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="rulekit_native",
-                backend_params={
-                    "max_rules": 30,
-                    "max_conditions": 7,
-                    "min_samples_leaf": 3,
-                    "enable_pruning": True,
-                    "pruning_fraction": 0.25,
-                },
-                random_state=0,
-            ),
-        ),
+        # "wrapper_pittsburgh": EstimatorSpec(
+        #     name="wrapper_pittsburgh",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="pittsburgh",
+        #         backend_params={
+        #             "max_rules": 10,
+        #             "min_samples_leaf": 3,
+        #             "candidate_pool_size": 48,
+        #             "beam_width": 12,
+        #             "max_iterations": 24,
+        #             "validation_fraction": 0.25,
+        #             "complexity_penalty": 0.005,
+        #         },
+        #         random_state=0,
+        #     ),
+        # ),
+        # "wrapper_pittsburgh_strong": EstimatorSpec(
+        #     name="wrapper_pittsburgh_strong",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="pittsburgh",
+        #         backend_params={
+        #             "max_rules": 15,
+        #             "min_samples_leaf": 3,
+        #             "candidate_pool_size": 64,
+        #             "beam_width": 16,
+        #             "max_iterations": 32,
+        #             "validation_fraction": 0.25,
+        #             "complexity_penalty": 0.003,
+        #             "sequential_covering": True,
+        #             "enable_compaction": True,
+        #         },
+        #         random_state=0,
+        #     ),
+        # ),
+        # "wrapper_pittsburgh_ovr": EstimatorSpec(
+        #     name="wrapper_pittsburgh_ovr",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="pittsburgh",
+        #         backend_params={
+        #             "max_rules": 10,
+        #             "min_samples_leaf": 3,
+        #             "candidate_pool_size": 48,
+        #             "beam_width": 12,
+        #             "max_iterations": 24,
+        #             "validation_fraction": 0.25,
+        #             "complexity_penalty": 0.005,
+        #             "multiclass_strategy": "ovr",
+        #             "enable_compaction": True,
+        #         },
+        #         random_state=0,
+        #     ),
+        # ),
+        # "wrapper_rulekit": EstimatorSpec(
+        #     name="wrapper_rulekit",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="rulekit",
+        #         backend_params={},
+        #         random_state=0,
+        #     ),
+        # ),
+        # "wrapper_rulekit_native": EstimatorSpec(
+        #     name="wrapper_rulekit_native",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="rulekit_native",
+        #         backend_params={
+        #             "max_rules": 30,
+        #             "max_conditions": 7,
+        #             "min_samples_leaf": 3,
+        #             "enable_pruning": True,
+        #             "pruning_fraction": 0.25,
+        #         },
+        #         random_state=0,
+        #     ),
+        # ),
         # "wrapper_exstracs": EstimatorSpec(
         #     name="wrapper_exstracs",
         #     factory=lambda: ScoredRuleSetClassifier(
@@ -198,23 +198,23 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_nln_strong": EstimatorSpec(
-            name="wrapper_nln_strong",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="nln",
-                backend_params={
-                    "n_rules": 20,
-                    "n_bins": 6,
-                    "learning_rate": 0.2,
-                    "l1_conj": 0.001,
-                    "l1_score": 0.0005,
-                    "epochs": 500,
-                    "early_stopping_rounds": 40,
-                    "atom_threshold": 0.08,
-                },
-                random_state=0,
-            ),
-        ),
+        # "wrapper_nln_strong": EstimatorSpec(
+        #     name="wrapper_nln_strong",
+        #     factory=lambda: ScoredRuleSetClassifier(
+        #         backend="nln",
+        #         backend_params={
+        #             "n_rules": 20,
+        #             "n_bins": 6,
+        #             "learning_rate": 0.2,
+        #             "l1_conj": 0.001,
+        #             "l1_score": 0.0005,
+        #             "epochs": 500,
+        #             "early_stopping_rounds": 40,
+        #             "atom_threshold": 0.08,
+        #         },
+        #         random_state=0,
+        #     ),
+        # ),
         # ------------------------------------------------------------------
         # Multiplexer-optimierte Varianten (Ziel: F1=1.0 auf vollem Datensatz)
         # ------------------------------------------------------------------
