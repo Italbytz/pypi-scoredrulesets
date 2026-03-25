@@ -208,6 +208,57 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
+        # -- RuleKit pure-Python re-implementation (no JVM required) --
+        "wrapper_rulekit_native": EstimatorSpec(
+            name="wrapper_rulekit_native",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulekit_native",
+                backend_params={
+                    "max_rules": 20,
+                    "max_conditions": 5,
+                    "min_samples_leaf": 5,
+                    "enable_pruning": True,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_rulekit_native_fast": EstimatorSpec(
+            name="wrapper_rulekit_native_fast",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulekit_native",
+                backend_params={
+                    "max_rules": 10,
+                    "max_conditions": 3,
+                    "min_samples_leaf": 5,
+                    "enable_pruning": True,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_rulekit_native_strong": EstimatorSpec(
+            name="wrapper_rulekit_native_strong",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulekit_native",
+                backend_params={
+                    "max_rules": 30,
+                    "max_conditions": 7,
+                    "min_samples_leaf": 3,
+                    "enable_pruning": True,
+                    "pruning_fraction": 0.25,
+                },
+                random_state=0,
+            ),
+        ),
+        "rulekit_native": EstimatorSpec(
+            name="rulekit_native",
+            factory=lambda: RuleKitNativeClassifier(
+                max_rules=20,
+                max_conditions=5,
+                min_samples_leaf=5,
+                enable_pruning=True,
+                random_state=0,
+            ),
+        ),
         "wrapper_exstracs": EstimatorSpec(
             name="wrapper_exstracs",
             factory=lambda: ScoredRuleSetClassifier(

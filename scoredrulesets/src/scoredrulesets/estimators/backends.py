@@ -213,6 +213,12 @@ def build_backend_estimator(
         return pittsburgh_cls(**params)
 
 
+    if backend_key == "rulekit_native":
+        rulekit_native_cls = _resolve_rulekit_native_class()
+        if random_state is not None and _supports_kwarg(rulekit_native_cls, "random_state"):
+            params.setdefault("random_state", random_state)
+        return rulekit_native_cls(**params)
+
     if backend_key == "rulefit":
         from .rulefit import RuleFitClassifier
         if random_state is not None:
@@ -227,7 +233,7 @@ def build_backend_estimator(
 
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: "
-        f"'cart', 'hs', 'rulekit', 'exstracs', 'logicgp', 'pittsburgh', 'rulefit', 'nln'."
+        f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', 'pittsburgh', 'rulefit', 'nln'."
     )
 
 
@@ -396,6 +402,18 @@ def _resolve_nln_class():
     except ImportError as e:
         raise ImportError(
             "backend='nln' could not load NeuralLogicNetClassifier. "
+            f"Import error: {e}"
+        ) from e
+
+
+def _resolve_rulekit_native_class():
+    """Load the pure-Python RuleKitNativeClassifier from this package."""
+    try:
+        from .rulekit_native import RuleKitNativeClassifier
+        return RuleKitNativeClassifier
+    except ImportError as e:
+        raise ImportError(
+            "backend='rulekit_native' could not load RuleKitNativeClassifier. "
             f"Import error: {e}"
         ) from e
 

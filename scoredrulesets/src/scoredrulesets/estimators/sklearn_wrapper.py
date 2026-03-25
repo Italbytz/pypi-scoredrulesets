@@ -189,6 +189,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "NeuralLogicNetClassifier has no 'ruleset_' after fit(). "
                     "Please check nln.py for errors."
                 )
+        elif backend_lower == "rulekit_native":
+            if hasattr(self.estimator_, "ruleset_"):
+                self.ruleset_ = self.estimator_.ruleset_
+            else:
+                raise RuntimeError(
+                    "RuleKitNativeClassifier has no 'ruleset_' after fit(). "
+                    "Please check rulekit_native.py for errors."
+                )
         else:
             # Tree-basierte Transformation (CART, HS)
             transform_cfg = TreeTransformParams(**(self.transform_params or {}))
