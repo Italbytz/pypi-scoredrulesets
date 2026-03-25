@@ -735,12 +735,12 @@ class LogicGPClassifier(BaseRuleSetEstimator):
     Unterstuetzt zwei Trainer-Familien:
 
     **FLCW** (Full Literals Computed Weights, Original-Variante):
-      - ``trainer="flcw_macro"`` oder ``"flcw_micro"``
+      - ``trainer="flcw"``
       - Alle nicht-trivialen Teilmengenliterale als Suchraum
       - n_classes Pareto-Ziele (per-class Recall + Groesse)
 
     **RLCW** (Restricted Literals Computed Weights, effizientere Variante):
-      - ``trainer="rlcw_macro"`` oder ``"rlcw_micro"``
+      - ``trainer="rlcw"`` (Standard)
       - Eingeschraenkter Suchraum via ``min_max_weight``
       - 3 Pareto-Ziele (max-Recall, mean-other-Recall, Groesse)
       - Class-bound Pareto-Dominanz (foerdert Klassenvielfalt)
@@ -749,8 +749,12 @@ class LogicGPClassifier(BaseRuleSetEstimator):
     Parameters
     ----------
     trainer : str
-        Trainer-Variante: ``"flcw_macro"`` (Standard), ``"flcw_micro"``,
-        ``"rlcw_macro"``, ``"rlcw_micro"``.
+        Trainer-Variante: ``"rlcw"`` (Standard) oder ``"flcw"``.
+        Legacy-Werte wie ``"rlcw_micro"`` werden weiterhin akzeptiert
+        und automatisch in ``trainer`` + ``f1_averaging`` aufgeteilt.
+    f1_averaging : str
+        F1-Averaging fuer die Modellauswahl: ``"micro"`` (Standard)
+        oder ``"macro"``.
     max_generations : int
         Maximale Anzahl von GP-Generationen.
     stagnation_generations : int
@@ -780,9 +784,9 @@ class LogicGPClassifier(BaseRuleSetEstimator):
     validation_fraction : float
         Anteil der Trainingsdaten, der als Validierungsmenge fuer die
         finale Modellauswahl reserviert wird.  Die Auswahl nutzt dann die
-        tatsaechliche Macro-F1 auf dem Val-Set statt auf den Trainingsdaten.
+        tatsaechliche F1 auf dem Val-Set (gemaess ``f1_averaging``).
         ``0`` (Standard) deaktiviert den Split – die Modellauswahl erfolgt
-        dann anhand der Training-Macro-F1, die deutlich zuverlaessiger ist
+        dann anhand der Training-F1, die deutlich zuverlaessiger ist
         als ``consolidated`` (mean recall) und keinen Datenverlust verursacht.
         Werte > 0 sind nur fuer grosse Datensaetze empfohlen (n >= 200).
     max_fit_seconds : float or None
@@ -796,7 +800,8 @@ class LogicGPClassifier(BaseRuleSetEstimator):
 
     def __init__(
         self,
-        trainer: str = "flcw_macro",
+        trainer: str = "rlcw",
+        f1_averaging: str = "micro",
         max_generations: int = 10_000,
         stagnation_generations: int = 500,
         n_bins: int = 5,
@@ -814,6 +819,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         random_state: int | None = None,
     ):
         self.trainer = trainer
+        self.f1_averaging = f1_averaging
         self.max_generations = max_generations
         self.stagnation_generations = stagnation_generations
         self.n_bins = n_bins
@@ -982,6 +988,56 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 f"Unknown model_selection '{sel}'. "
                 f"Choose from {list(_SELECTORS.keys())} or pass a callable."
             )
+
+    def _resolve_trainer_config(self) -> tuple[bool, str]:
+        """Resolve trainer + f1_averaging into (use_rlcw, f1_average).
+
+        Supports legacy combined strings like ``"rlcw_micro"`` for
+        backward compatibility.  New-style usage passes ``trainer="rlcw"``
+        and ``f1_averaging="micro"`` separately.
+
+        Returns
+        -------
+        use_rlcw : bool
+            True for RLCW trainer, False for FLCW.
+        f1_average : str
+            ``"micro"`` or ``"macro"``.
+        """
+        import warnings
+
+        trainer = self.trainer.lower().strip()
+        f1_avg = self.f1_averaging.lower().strip()
+
+        # Legacy: combined strings like "rlcw_micro", "flcw_macro"
+        _LEGACY = {
+            "rlcw_micro": ("rlcw", "micro"),
+            "rlcw_macro": ("rlcw", "macro"),
+            "flcw_micro": ("flcw", "micro"),
+            "flcw_macro": ("flcw", "macro"),
+        }
+        if trainer in _LEGACY:
+            warnings.warn(
+                f"trainer='{self.trainer}' is deprecated. "
+                f"Use trainer='{_LEGACY[trainer][0]}' and "
+                f"f1_averaging='{_LEGACY[trainer][1]}' instead.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            trainer, f1_avg = _LEGACY[trainer]
+
+        if trainer not in ("rlcw", "flcw"):
+            raise ValueError(
+                f"Unknown trainer '{self.trainer}'. "
+                f"Choose 'rlcw' or 'flcw'."
+            )
+        if f1_avg not in ("micro", "macro"):
+            raise ValueError(
+                f"Unknown f1_averaging '{self.f1_averaging}'. "
+                f"Choose 'micro' or 'macro'."
+            )
+
+        use_rlcw = trainer == "rlcw"
+        return use_rlcw, f1_avg
         raise ValueError(
             f"model_selection must be a string or callable, got {type(sel)}."
         )
@@ -1196,15 +1252,12 @@ class LogicGPClassifier(BaseRuleSetEstimator):
 
         Die finale Modellauswahl bewertet Kandidaten anhand der
         tatsaechlichen F1 (statt ``fit.consolidated`` = mean recall).
-        Macro- oder Micro-Averaging wird aus dem ``trainer``-Suffix
-        abgeleitet (``*_macro`` → ``average="macro"``,
-        ``*_micro`` → ``average="micro"``).
+        ``f1_averaging`` bestimmt Micro- oder Macro-Averaging.
         Wenn ``X_val``/``y_val`` gegeben: F1 auf Validation-Set.
         Sonst: F1 auf Trainingsdaten (kein Datenverlust, zuverlaessiger
         fuer kleine Datensaetze).
         """
-        use_rlcw = self.trainer.lower().startswith("rlcw")
-        f1_average = "micro" if self.trainer.lower().endswith("_micro") else "macro"
+        use_rlcw, f1_average = self._resolve_trainer_config()
         has_val = X_val is not None and y_val is not None
 
         # Konfigurierbare Strategien aufloesen
@@ -1435,6 +1488,8 @@ class LogicGPClassifier(BaseRuleSetEstimator):
 
         feature_names = self.feature_names_in_.tolist()
 
+        _use_rlcw, _f1_avg = self._resolve_trainer_config()
+
         return ScoredRuleSet(
             class_labels=self.classes_.tolist(),
             feature_names=feature_names,
@@ -1442,7 +1497,8 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             rules=rules,
             metadata={
                 "source": "logicgp",
-                "trainer": self.trainer,
+                "trainer": "rlcw" if _use_rlcw else "flcw",
+                "f1_averaging": _f1_avg,
                 "n_monomials": len(poly.monomials),
                 "model_size": poly.size,
                 "max_generations": self.max_generations,

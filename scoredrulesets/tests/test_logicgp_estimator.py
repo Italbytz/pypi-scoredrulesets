@@ -55,7 +55,8 @@ def test_logicgp_flcw_ruleset_structure():
 
     ruleset = clf.to_ruleset()
     assert ruleset.metadata["source"] == "logicgp"
-    assert ruleset.metadata["trainer"] == "flcw_macro"
+    assert ruleset.metadata["trainer"] == "rlcw"
+    assert ruleset.metadata["f1_averaging"] == "micro"
     assert any(r.rule_id == "logicgp_default" for r in ruleset.rules)
     assert len(ruleset.class_labels) == 3
 
@@ -125,7 +126,8 @@ def test_logicgp_rlcw_micro_fit_predict():
     clf.fit(X, y)
 
     meta = clf.to_ruleset().metadata
-    assert meta["trainer"] == "rlcw_micro"
+    assert meta["trainer"] == "rlcw"
+    assert meta["f1_averaging"] == "micro"
     assert meta["population_size"] == 15
 
 
@@ -143,7 +145,8 @@ def test_logicgp_rlcw_trainer_in_metadata():
     clf.fit(X, y)
 
     meta = clf.to_ruleset().metadata
-    assert meta["trainer"] == "rlcw_macro"
+    assert meta["trainer"] == "rlcw"
+    assert meta["f1_averaging"] == "macro"
     assert meta["source"] == "logicgp"
 
 
@@ -219,7 +222,8 @@ def test_sklearn_wrapper_logicgp_backend_basic():
     clf = ScoredRuleSetClassifier(
         backend="logicgp",
         backend_params={
-            "trainer": "flcw_macro",
+            "trainer": "flcw",
+            "f1_averaging": "macro",
             "max_generations": 20,
             "stagnation_generations": 5,
             "population_size": 20,
@@ -260,7 +264,8 @@ def test_sklearn_wrapper_logicgp_rlcw_backend():
 
     pred = clf.predict(X[:10])
     assert pred.shape == (10,)
-    assert clf.to_ruleset().metadata["trainer"] == "rlcw_macro"
+    assert clf.to_ruleset().metadata["trainer"] == "rlcw"
+    assert clf.to_ruleset().metadata["f1_averaging"] == "macro"
 
 
 # ---------------------------------------------------------------------------
@@ -272,9 +277,11 @@ def test_benchmarking_estimator_specs_include_logicgp():
 
     specs = default_estimator_specs()
     assert "wrapper_logicgp" in specs
-    assert "wrapper_logicgp_fast" in specs
     assert "wrapper_logicgp_rlcw_macro" in specs
-    assert "wrapper_logicgp_rlcw_micro" in specs
-    assert "wrapper_logicgp_rlcw_fast" in specs
+    assert "wrapper_logicgp_flcw" in specs
+    # Removed variants (paretodominiert / redundant):
+    assert "wrapper_logicgp_fast" not in specs
+    assert "wrapper_logicgp_rlcw_micro" not in specs
+    assert "wrapper_logicgp_rlcw_fast" not in specs
 
 

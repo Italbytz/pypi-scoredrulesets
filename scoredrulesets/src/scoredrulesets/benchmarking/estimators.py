@@ -276,27 +276,12 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
             factory=lambda: ScoredRuleSetClassifier(
                 backend="logicgp",
                 backend_params={
-                    "trainer": "flcw_macro",
-                    "max_generations": 500,
-                    "stagnation_generations": 150,
+                    "trainer": "rlcw",
+                    "f1_averaging": "micro",
+                    "max_generations": 200,
+                    "stagnation_generations": 40,
                     "population_size": 50,
-                    "n_adaptations_per_gen": 8,
-                    "n_bins": 5,
-                    "random_state": 0,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_logicgp_fast": EstimatorSpec(
-            name="wrapper_logicgp_fast",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="logicgp",
-                backend_params={
-                    "trainer": "flcw_macro",
-                    "max_generations": 50,
-                    "stagnation_generations": 20,
-                    "population_size": 30,
-                    "n_adaptations_per_gen": 8,
+                    "n_adaptations_per_gen": 12,
                     "n_bins": 5,
                     "random_state": 0,
                 },
@@ -308,48 +293,31 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
             factory=lambda: ScoredRuleSetClassifier(
                 backend="logicgp",
                 backend_params={
-                    "trainer": "rlcw_macro",
+                    "trainer": "rlcw",
+                    "f1_averaging": "macro",
                     "max_generations": 200,
                     "stagnation_generations": 40,
                     "population_size": 50,
                     "n_adaptations_per_gen": 12,
                     "n_bins": 5,
-                    "min_max_weight": 0.1,
                     "max_fit_seconds": 240,
                     "random_state": 0,
                 },
                 random_state=0,
             ),
         ),
-        "wrapper_logicgp_rlcw_micro": EstimatorSpec(
-            name="wrapper_logicgp_rlcw_micro",
+        "wrapper_logicgp_flcw": EstimatorSpec(
+            name="wrapper_logicgp_flcw",
             factory=lambda: ScoredRuleSetClassifier(
                 backend="logicgp",
                 backend_params={
-                    "trainer": "rlcw_micro",
-                    "max_generations": 500,
-                    "stagnation_generations": 100,
-                    "population_size": 50,
-                    "n_adaptations_per_gen": 12,
-                    "n_bins": 5,
-                    "min_max_weight": 0.1,
-                    "random_state": 0,
-                },
-                random_state=0,
-            ),
-        ),
-        "wrapper_logicgp_rlcw_fast": EstimatorSpec(
-            name="wrapper_logicgp_rlcw_fast",
-            factory=lambda: ScoredRuleSetClassifier(
-                backend="logicgp",
-                backend_params={
-                    "trainer": "rlcw_macro",
+                    "trainer": "flcw",
+                    "f1_averaging": "micro",
                     "max_generations": 200,
-                    "stagnation_generations": 60,
-                    "population_size": 40,
-                    "n_adaptations_per_gen": 12,
+                    "stagnation_generations": 40,
+                    "population_size": 50,
+                    "n_adaptations_per_gen": 8,
                     "n_bins": 5,
-                    "min_max_weight": 0.15,
                     "random_state": 0,
                 },
                 random_state=0,
@@ -453,11 +421,12 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
             factory=lambda: ScoredRuleSetClassifier(
                 backend="logicgp",
                 backend_params={
-                    "trainer": "flcw_macro",
+                    "trainer": "rlcw",
+                    "f1_averaging": "micro",
                     "max_generations": 10_000,
                     "stagnation_generations": 500,
-                    "population_size": None,  # volle Pareto-Front behalten
-                    "n_adaptations_per_gen": 6,
+                    "population_size": 50,
+                    "n_adaptations_per_gen": 12,
                     "n_bins": 2,  # binaere Features → 2 Bins
                     "validation_fraction": 0.0,
                     "random_state": 0,
@@ -465,12 +434,13 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_logicgp_mux_rlcw": EstimatorSpec(
-            name="wrapper_logicgp_mux_rlcw",
+        "wrapper_logicgp_mux_rlcw_macro": EstimatorSpec(
+            name="wrapper_logicgp_mux_rlcw_macro",
             factory=lambda: ScoredRuleSetClassifier(
                 backend="logicgp",
                 backend_params={
-                    "trainer": "rlcw_macro",
+                    "trainer": "rlcw",
+                    "f1_averaging": "macro",
                     "max_generations": 10_000,
                     "stagnation_generations": 500,
                     "population_size": 80,

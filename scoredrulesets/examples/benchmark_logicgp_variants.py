@@ -14,7 +14,7 @@ Vergleichsachsen
 Datensaetze:  8 synthetische + 1 realer (car_evaluation) aus dem Slim-Benchmark.
               Gewaehlt fuer hohe Typ-Diskriminierung bei LogicGP.
 
-Insgesamt:  12 Varianten × 9 Datasets × 3 Repeats = **324 Laeufe**
+Insgesamt:  12 Varianten x 9 Datasets x 3 Repeats = **324 Laeufe**
 
 Aufruf:
     python examples/benchmark_logicgp_variants.py
@@ -57,7 +57,7 @@ from scoredrulesets.benchmarking.runner import results_as_dicts
 # - synth_dnf_3x2:           LogicGP excellent (F1=1.0), Achsenunterschiede sichtbar
 # - synth_xor_3bit:          Interaktionsdatensatz, micro >> macro teils
 # - mux_11:                  Skalierungsstress (macro timeout-anfaellig)
-# - synth_monk3:             Klein, macro≈micro
+# - synth_monk3:             Klein, macro~=micro
 # - synth_overlap_4rules:    Overlap, macro vs micro Unterschied
 # - synth_checkerboard_4x4:  Schwer fuer LogicGP, Skalierungsstress
 # - synth_imbalanced_10pct:  Klassenungleichgewicht
@@ -98,17 +98,17 @@ LOGICGP_DATASETS: list[str] = [
 # | lgp_rlcw_macro_strongfilt  | rlcw_macro | macro | 200  | 40   | 50  | 12    | 5    | full     | 0.25   | 240s   |
 #
 # Paarvergleiche:
-#   rlcw_macro vs rlcw_micro            → Achse: F1-Averaging
-#   rlcw_macro vs flcw_macro            → Achse: Trainer-Typ (RLCW vs FLCW)
-#   flcw_macro vs flcw_micro            → Achse: F1-Averaging bei FLCW
-#   rlcw_macro vs rlcw_macro_fast       → Achse: Budget (viele vs wenige Generationen)
-#   flcw_macro vs flcw_macro_fast       → Achse: Budget bei FLCW
-#   rlcw_macro vs rlcw_macro_singleton  → Achse: Literal-Generator
-#   rlcw_macro vs rlcw_macro_bins3      → Achse: Bins  (5 vs 3)
-#   rlcw_macro vs rlcw_macro_bins7      → Achse: Bins  (5 vs 7)
-#   rlcw_macro vs rlcw_macro_nofilt     → Achse: min_max_weight  (0.1 vs 0.0)
-#   rlcw_macro vs rlcw_macro_bigpop     → Achse: Populationsgroesse (50 vs 80)
-#   rlcw_macro vs rlcw_macro_strongfilt → Achse: min_max_weight  (0.1 vs 0.25)
+#   rlcw_macro vs rlcw_micro            -> Achse: F1-Averaging
+#   rlcw_macro vs flcw_macro            -> Achse: Trainer-Typ (RLCW vs FLCW)
+#   flcw_macro vs flcw_micro            -> Achse: F1-Averaging bei FLCW
+#   rlcw_macro vs rlcw_macro_fast       -> Achse: Budget (viele vs wenige Generationen)
+#   flcw_macro vs flcw_macro_fast       -> Achse: Budget bei FLCW
+#   rlcw_macro vs rlcw_macro_singleton  -> Achse: Literal-Generator
+#   rlcw_macro vs rlcw_macro_bins3      -> Achse: Bins  (5 vs 3)
+#   rlcw_macro vs rlcw_macro_bins7      -> Achse: Bins  (5 vs 7)
+#   rlcw_macro vs rlcw_macro_nofilt     -> Achse: min_max_weight  (0.1 vs 0.0)
+#   rlcw_macro vs rlcw_macro_bigpop     -> Achse: Populationsgroesse (50 vs 80)
+#   rlcw_macro vs rlcw_macro_strongfilt -> Achse: min_max_weight  (0.1 vs 0.25)
 
 LOGICGP_ESTIMATORS: list[str] = [
     "lgp_rlcw_macro",
@@ -320,17 +320,17 @@ def _run_pairwise_analysis(payload: list[dict], out_dir: Path):
             groups[(r["dataset"], r["estimator"])].append(r)
 
     lines = []
-    lines.append("# LogicGP Varianten – Paarvergleich-Analyse\n")
+    lines.append("# LogicGP Varianten -- Paarvergleich-Analyse\n")
     lines.append(f"Generiert: {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
     lines.append("Fuer jedes Vergleichspaar wird pro Datensatz der Mittelwert (ueber Repeats) verglichen.\n")
-    lines.append("**Legende:** A > B = A hat hoehere mittlere F1; Δ = A-F1 minus B-F1; t = Ø Fit-Sekunden\n")
+    lines.append("**Legende:** A > B = A hat hoehere mittlere F1; Delta = A-F1 minus B-F1; t = Avg Fit-Sekunden\n")
 
     summary_rows = []
 
     for name_a, name_b, achse, beschreibung in PAIRS:
         lines.append(f"\n## {achse}: `{name_a}` vs `{name_b}`")
         lines.append(f"_{beschreibung}_\n")
-        lines.append(f"| Dataset | {name_a} F1 | {name_b} F1 | Δ F1 | {name_a} Atoms | {name_b} Atoms | {name_a} Fit(s) | {name_b} Fit(s) | Besser |")
+        lines.append(f"| Dataset | {name_a} F1 | {name_b} F1 | Delta F1 | {name_a} Atoms | {name_b} Atoms | {name_a} Fit(s) | {name_b} Fit(s) | Besser |")
         lines.append("|---------|------------|------------|------|---------------|---------------|----------------|----------------|--------|")
 
         wins_a, wins_b, ties = 0, 0, 0
@@ -342,7 +342,7 @@ def _run_pairwise_analysis(payload: list[dict], out_dir: Path):
             recs_b = groups.get((ds, name_b), [])
 
             if not recs_a and not recs_b:
-                lines.append(f"| {ds} | – | – | – | – | – | – | – | – |")
+                lines.append(f"| {ds} | -- | -- | -- | -- | -- | -- | -- | -- |")
                 continue
 
             f1_a = mean([r["f1_macro"] for r in recs_a]) if recs_a else float("nan")
@@ -363,7 +363,7 @@ def _run_pairwise_analysis(payload: list[dict], out_dir: Path):
                 all_delta_f1.append(delta)
                 all_delta_time.append(t_a - t_b)
                 if abs(delta) < 0.01:
-                    label = "≈"
+                    label = "~="
                     ties += 1
                 elif delta > 0:
                     label = f"**{name_a}**"
@@ -374,10 +374,10 @@ def _run_pairwise_analysis(payload: list[dict], out_dir: Path):
 
             def _fmt(v):
                 if v != v:  # NaN check
-                    return "–"
+                    return "--"
                 return f"{v:.3f}" if abs(v) < 100 else f"{v:.1f}"
 
-            delta_str = _fmt(f1_a - f1_b) if recs_a and recs_b else "–"
+            delta_str = _fmt(f1_a - f1_b) if recs_a and recs_b else "--"
             lines.append(
                 f"| {ds} | {_fmt(f1_a)} | {_fmt(f1_b)} | {delta_str} | "
                 f"{_fmt(at_a)} | {_fmt(at_b)} | {_fmt(t_a)} | {_fmt(t_b)} | {label} |"
@@ -387,20 +387,20 @@ def _run_pairwise_analysis(payload: list[dict], out_dir: Path):
         mean_delta_f1 = mean(all_delta_f1) if all_delta_f1 else 0
         mean_delta_time = mean(all_delta_time) if all_delta_time else 0
         total = wins_a + wins_b + ties
-        lines.append(f"\n**Ergebnis:** {name_a} gewinnt {wins_a}×, {name_b} gewinnt {wins_b}×, ≈ {ties}× (Δ<0.01)")
-        lines.append(f"**Ø Δ F1:** {mean_delta_f1:+.4f}   **Ø Δ Fit-Zeit:** {mean_delta_time:+.1f}s")
+        lines.append(f"\n**Ergebnis:** {name_a} gewinnt {wins_a}x, {name_b} gewinnt {wins_b}x, ~= {ties}x (Delta<0.01)")
+        lines.append(f"**Avg Delta F1:** {mean_delta_f1:+.4f}   **Avg Delta Fit-Zeit:** {mean_delta_time:+.1f}s")
 
         if total > 0:
             if wins_a >= 2 * wins_b and mean_delta_f1 > 0.01:
-                emp = f"→ **{name_a}** klar besser. `{name_b}` ist Kandidat fuer Entfernung."
+                emp = f"-> **{name_a}** klar besser. `{name_b}` ist Kandidat fuer Entfernung."
             elif wins_b >= 2 * wins_a and mean_delta_f1 < -0.01:
-                emp = f"→ **{name_b}** klar besser. `{name_a}` ist Kandidat fuer Entfernung."
+                emp = f"-> **{name_b}** klar besser. `{name_a}` ist Kandidat fuer Entfernung."
             elif abs(mean_delta_f1) < 0.02 and abs(mean_delta_time) < 10:
-                emp = f"→ Kein klarer Unterschied. Varianten koennen zusammengefasst werden."
+                emp = f"-> Kein klarer Unterschied. Varianten koennen zusammengefasst werden."
             else:
-                emp = f"→ Situationsabhaengig. Beide behalten oder nach Anwendungsfall waehlen."
+                emp = f"-> Situationsabhaengig. Beide behalten oder nach Anwendungsfall waehlen."
         else:
-            emp = "→ Keine Daten fuer Vergleich."
+            emp = "-> Keine Daten fuer Vergleich."
         lines.append(f"\n**Empfehlung:** {emp}\n")
 
         summary_rows.append({
@@ -412,13 +412,13 @@ def _run_pairwise_analysis(payload: list[dict], out_dir: Path):
             "ties": ties,
             "mean_delta_f1": round(mean_delta_f1, 4),
             "mean_delta_time_s": round(mean_delta_time, 1),
-            "empfehlung": emp.replace("→ ", "").strip("*"),
+            "empfehlung": emp.replace("-> ", "").strip("*"),
         })
 
-    # Gesamtübersicht
+    # Gesamtuebersicht
     lines.append("\n---\n")
     lines.append("# Gesamtuebersicht\n")
-    lines.append("| Achse | A | B | A-Wins | B-Wins | Ties | Ø Δ F1 | Ø Δ t(s) | Empfehlung |")
+    lines.append("| Achse | A | B | A-Wins | B-Wins | Ties | Avg Delta F1 | Avg Delta t(s) | Empfehlung |")
     lines.append("|-------|---|---|--------|--------|------|--------|----------|------------|")
     for r in summary_rows:
         lines.append(
@@ -543,7 +543,7 @@ def main(
     # Markdown-Report
     md_report = format_benchmark_report_markdown(
         leaderboard,
-        title="LogicGP Varianten-Benchmark – Konsolidierungsanalyse",
+        title="LogicGP Varianten-Benchmark -- Konsolidierungsanalyse",
         config={
             "datasets": dn_display,
             "estimators": en_display,
@@ -582,7 +582,7 @@ def main(
 
     html_report = format_benchmark_report_html(
         leaderboard,
-        title="LogicGP Varianten-Benchmark – Konsolidierungsanalyse",
+        title="LogicGP Varianten-Benchmark -- Konsolidierungsanalyse",
         config={
             "datasets": dn_display,
             "estimators": en_display,
