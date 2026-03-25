@@ -5,6 +5,7 @@ from typing import Callable
 
 from ..estimators.gp_native import GeneticScoredRuleSetClassifier
 from ..estimators.nln import NeuralLogicNetClassifier
+from ..estimators.rulekit_native import RuleKitNativeClassifier
 from ..estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
 

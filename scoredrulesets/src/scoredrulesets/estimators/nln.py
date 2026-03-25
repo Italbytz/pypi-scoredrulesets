@@ -184,18 +184,21 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
         Y_train = np.eye(n_classes, dtype=float)[y_train]
 
         # --- initialise weights ----------------------------------------------
-        # W_conj: (n_rules, n_props) – conjunction weights
-        # Each rule starts with a random sparse pattern: pick a few features
-        # and set their weights higher to bootstrap learning.
-        W_conj = rng.normal(0.0, 0.01, size=(self.n_rules, n_props))
+        # W_conj: (n_rules, n_props) – gate logits for each proposition.
+        # gate = sigmoid(scale * W_conj).
+        # Initialise most gates near 0 (don't care) by using negative W_conj.
+        # With scale=5, W=-0.5 → gate=sigmoid(-2.5)≈0.08 (nearly off).
+        W_conj = np.full((self.n_rules, n_props), -0.5, dtype=float)
+        W_conj += rng.normal(0.0, 0.02, size=W_conj.shape)
 
-        # Build a mapping: feature_index → list of proposition indices
+        # Build a mapping: feature_index → list of proposition indices.
+        # Layout per feature: [<=t1, <=t2, ..., >t1, >t2, ...]
         feat_to_props: dict[int, list[int]] = {}
         pidx = 0
         for j, thr in enumerate(self._thresholds_):
             n_thr = len(thr)
-            feat_to_props[j] = list(range(pidx, pidx + n_thr))
-            pidx += n_thr
+            feat_to_props[j] = list(range(pidx, pidx + 2 * n_thr))
+            pidx += 2 * n_thr
 
         n_features = self.n_features_in_
         for r in range(self.n_rules):
@@ -205,14 +208,15 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
             for fj in chosen_feats:
                 props_for_f = feat_to_props.get(int(fj), [])
                 if props_for_f:
-                    # Pick 1-2 random propositions for this feature
-                    n_pick = min(2, len(props_for_f))
-                    selected = rng.choice(props_for_f, size=n_pick, replace=False)
-                    for si in selected:
-                        W_conj[r, si] = rng.uniform(0.3, 0.8)
+                    # Pick exactly 1 proposition for this feature
+                    # (one direction: either <= or >)
+                    si = rng.choice(props_for_f)
+                    # Positive W → gate ≈ 1 (proposition required)
+                    W_conj[r, si] = rng.uniform(0.4, 0.8)
 
-        # b_conj: (n_rules,) – conjunction bias
-        b_conj = rng.uniform(-0.5, 0.0, size=self.n_rules)
+        # b_conj: (n_rules,) – conjunction bias (unused in product mode,
+        # kept for compatibility; acts as log-scale offset)
+        b_conj = np.zeros(self.n_rules, dtype=float)
         # W_score: (n_rules, n_classes) – rule weights per class
         W_score = rng.normal(loc=0.0, scale=0.3, size=(self.n_rules, n_classes))
         # b_score: (n_classes,) – class bias
@@ -235,8 +239,16 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
         N_train = len(y_train)
         bs = self.batch_size if self.batch_size > 0 else N_train
 
+        # L1 warmup: ramp up L1 penalty over the first 20% of epochs so that
+        # complex conjunctions (needed for MUX-like problems) can establish
+        # before sparsification kicks in.
+        warmup_epochs = max(1, int(self.epochs * 0.2))
+
         for epoch in range(self.epochs):
             perm = rng.permutation(N_train)
+
+            # L1 warmup factor: 0→1 over warmup_epochs, then 1.0
+            l1_factor = min(1.0, epoch / warmup_epochs)
 
             for start in range(0, N_train, bs):
                 idx = perm[start : start + bs]
@@ -253,8 +265,8 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
                 )
 
                 # L1 gradients (proximal: only on conjunction and score weights)
-                dW_conj += self.l1_conj * np.sign(W_conj)
-                dW_score += self.l1_score * np.sign(W_score)
+                dW_conj += (self.l1_conj * l1_factor) * np.sign(W_conj)
+                dW_score += (self.l1_score * l1_factor) * np.sign(W_score)
 
                 # Adam update
                 grads = [dW_conj, db_conj, dW_score, db_score]
@@ -291,8 +303,11 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
         return self
 
     # ------------------------------------------------------------------
-    # forward / backward (pure numpy, log-linear conjunction)
+    # forward / backward (product-of-sigmoids conjunction = true AND)
     # ------------------------------------------------------------------
+
+    # Gate scale: controls how sharply weights are mapped to 0/1 gates.
+    _GATE_SCALE = 5.0
 
     @staticmethod
     def _forward(
@@ -303,24 +318,49 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
         b_score: np.ndarray,
     ) -> tuple[np.ndarray, dict]:
         """
-        Forward pass with log-linear conjunction model.
+        Forward pass with product-of-sigmoids conjunction (differentiable AND).
+
+        For each rule *r* and proposition *d*:
+          gate[r,d]  = sigmoid(scale * W_conj[r,d])   — inclusion gate (0=don't care, 1=required)
+          match[b,r,d] = gate[r,d] * P[b,d] + (1 - gate[r,d])
+          conj[b,r]  = product_d match[b,r,d]          — fires only when ALL gated props are true
 
         P        : (B, D)   – binary proposition matrix
-        W_conj   : (R, D)   – conjunction weights
-        b_conj   : (R,)     – conjunction biases
+        W_conj   : (R, D)   – conjunction weights (gate logits)
+        b_conj   : (R,)     – unused (kept for API compat)
         W_score  : (R, C)   – per-class rule scores
         b_score  : (C,)     – class bias
 
         Returns logits (B, C) and a cache dict for backward.
         """
-        # Rule evidence: how well each sample matches each rule
-        evidence = P @ W_conj.T + b_conj[np.newaxis, :]  # (B, R)
-        conj = _sigmoid(evidence)  # (B, R) – soft conjunction activation
+        scale = NeuralLogicNetClassifier._GATE_SCALE
+        R, D = W_conj.shape
+        B = P.shape[0]
+
+        # Gate: how much each proposition is "required" by each rule
+        gate = _sigmoid(scale * W_conj)  # (R, D)
+
+        # match[b,r,d] = gate[r,d] * P[b,d] + (1 - gate[r,d])
+        # When gate≈1: match = P  (proposition must be true)
+        # When gate≈0: match = 1  (don't care)
+        # shape: (B, R, D) but compute via broadcasting
+        # P: (B, 1, D),  gate: (1, R, D)
+        P_exp = P[:, np.newaxis, :]      # (B, 1, D)
+        gate_exp = gate[np.newaxis, :, :]  # (1, R, D)
+        match = gate_exp * P_exp + (1.0 - gate_exp)  # (B, R, D)
+
+        # Product over propositions (in log-space for stability)
+        log_match = np.log(np.clip(match, _EPS, None))  # (B, R, D)
+        log_conj = log_match.sum(axis=2)  # (B, R)
+        conj = np.exp(np.clip(log_conj, -30, 0))  # (B, R)
 
         # Class logits: weighted sum of rule activations
         logits = conj @ W_score + b_score  # (B, C)
 
-        cache = {"P": P, "evidence": evidence, "conj": conj}
+        cache = {
+            "P": P, "gate": gate, "match": match,
+            "log_match": log_match, "conj": conj,
+        }
         return logits, cache
 
     @staticmethod
@@ -334,12 +374,15 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
         cache: dict,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Backward pass (manual gradients).
+        Backward pass for product-of-sigmoids conjunction model.
 
         Returns (dW_conj, db_conj, dW_score, db_score).
         """
+        scale = NeuralLogicNetClassifier._GATE_SCALE
         B = P.shape[0]
-        conj = cache["conj"]  # (B, R)
+        gate = cache["gate"]       # (R, D)
+        match = cache["match"]     # (B, R, D)
+        conj = cache["conj"]       # (B, R)
 
         # d_loss / d_logits  (softmax + cross-entropy)
         d_logits = (proba - Y) / B  # (B, C)
@@ -351,12 +394,24 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
         # d_logits / d_conj
         d_conj = d_logits @ W_score.T  # (B, R)
 
-        # d_conj / d_evidence = conj * (1 - conj)  (sigmoid derivative)
-        d_evidence = d_conj * conj * (1.0 - conj)  # (B, R)
+        # d_conj / d_match[b,r,d]:
+        # conj[b,r] = prod_d match[b,r,d]
+        # d_conj/d_match[b,r,d] = conj[b,r] / match[b,r,d]
+        match_safe = np.clip(match, _EPS, None)
+        d_match = d_conj[:, :, np.newaxis] * conj[:, :, np.newaxis] / match_safe  # (B, R, D)
 
-        # d_evidence / d_W_conj: evidence = P @ W_conj.T + b_conj
-        dW_conj = d_evidence.T @ P  # (R, D)
-        db_conj = d_evidence.sum(axis=0)  # (R,)
+        # d_match / d_gate:
+        # match = gate * P + (1 - gate) = gate * (P - 1) + 1
+        # d_match/d_gate = P - 1
+        P_exp = P[:, np.newaxis, :]  # (B, 1, D)
+        d_gate = (d_match * (P_exp - 1.0)).sum(axis=0)  # (R, D) – sum over batch
+
+        # d_gate / d_W_conj:
+        # gate = sigmoid(scale * W_conj)
+        # d_gate/d_W_conj = scale * gate * (1 - gate)
+        dW_conj = d_gate * scale * gate * (1.0 - gate)  # (R, D)
+
+        db_conj = np.zeros_like(b_conj)  # b_conj unused in product model
 
         return dW_conj, db_conj, dW_score, db_score
 
@@ -365,44 +420,87 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
     # ------------------------------------------------------------------
 
     def _compute_thresholds(self, X: np.ndarray) -> list[np.ndarray]:
-        """Compute quantile-based thresholds per feature."""
+        """Compute quantile-based thresholds per feature.
+
+        For binary / low-cardinality features (≤ ``n_bins`` unique values)
+        mid-point thresholds between adjacent unique values are used instead
+        of quantiles.  This avoids the "always-true" and duplicate
+        propositions that quantiles produce on discrete data.
+
+        Thresholds that would produce constant (always-true / always-false)
+        propositions are removed.
+        """
         max_thr = self.max_thresholds_per_feature
         thresholds: list[np.ndarray] = []
         quantiles = np.linspace(0, 1, self.n_bins + 2)[1:-1]  # interior quantiles
+
         for j in range(X.shape[1]):
             col = X[:, j]
-            thr = np.unique(np.quantile(col, quantiles))
+            uniq = np.unique(col)
+
+            if len(uniq) <= max(self.n_bins, 2):
+                # Low-cardinality: use midpoints between consecutive values.
+                # E.g. binary {0,1} → single threshold 0.5
+                if len(uniq) <= 1:
+                    thr = np.array([float(uniq[0])]) if len(uniq) == 1 else np.array([0.0])
+                else:
+                    thr = (uniq[:-1] + uniq[1:]) / 2.0
+            else:
+                # Continuous: original quantile approach
+                thr = np.unique(np.quantile(col, quantiles))
+                if len(thr) == 0:
+                    thr = np.array([float(col[0])]) if len(col) > 0 else np.array([0.0])
+
+            # Remove thresholds that produce constant propositions
+            col_min, col_max = float(col.min()), float(col.max())
+            thr = np.array([t for t in thr
+                            if col_min <= t < col_max],  # <= t not always-false AND > t not always-false
+                           dtype=float)
             if len(thr) == 0:
-                thr = np.array([float(col[0])]) if len(col) > 0 else np.array([0.0])
+                # Fallback: at least one threshold (midpoint)
+                thr = np.array([(col_min + col_max) / 2.0])
+
             # Apply threshold cap
             if max_thr is not None and len(thr) > max_thr:
                 idx = np.round(np.linspace(0, len(thr) - 1, max_thr)).astype(int)
                 thr = thr[idx]
+
             thresholds.append(thr)
         return thresholds
 
     def _binarise(self, X: np.ndarray) -> np.ndarray:
         """Convert X → binary proposition matrix P.
 
-        For each feature j and each threshold t we create one proposition:
-          - x_j <= t   →  1.0 if true, 0.0 otherwise
+        For each feature j and each threshold t we create **two** propositions:
+          - x_j <= t  →  1.0 if true, 0.0 otherwise
+          - x_j >  t  →  1.0 if true, 0.0 otherwise
 
-        The complement (x_j > t) is represented implicitly via negative
-        conjunction weights (the model learns to negate via w < 0 since
-        NOT(P) ≈ 1 − P  and  w·(1−P) = w − w·P).
+        Providing both directions explicitly makes it much easier for the
+        model to learn conjunctions that require a specific feature value,
+        since both can be selected via positive weights (avoiding the need
+        for negative-weight negation that L1 regularisation penalises).
         """
         parts: list[np.ndarray] = []
         for j, thr in enumerate(self._thresholds_):
             col = X[:, j : j + 1]  # (N, 1)
-            parts.append((col <= thr[np.newaxis, :]).astype(float))
+            leq = (col <= thr[np.newaxis, :]).astype(float)
+            gt = (col > thr[np.newaxis, :]).astype(float)
+            parts.append(leq)
+            parts.append(gt)
         return np.hstack(parts)
 
     def _proposition_meta(self) -> list[tuple[int, str, float]]:
-        """Return (feature_index, op, threshold) for each proposition column."""
+        """Return (feature_index, op, threshold) for each proposition column.
+
+        Layout: for each feature, first all ``<=`` thresholds, then all ``>``
+        thresholds (matching the column order produced by ``_binarise``).
+        """
         meta: list[tuple[int, str, float]] = []
         for j, thr in enumerate(self._thresholds_):
             for t in thr:
                 meta.append((j, "<=", float(t)))
+            for t in thr:
+                meta.append((j, ">", float(t)))
         return meta
 
     # ------------------------------------------------------------------
@@ -435,65 +533,73 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
             if max(abs(s) for s in scores_r) < 1e-4:
                 continue
 
-            # Find propositions with significant weight.
-            # Use an adaptive threshold: absolute threshold OR top-k per rule.
+            # Find propositions with significant *positive* weight.
+            # With explicit <=/>  propositions, the model uses positive weights
+            # to select the desired direction.  Negative weights should be
+            # ignored (they fight against the proposition and are an artefact).
             abs_w = np.abs(w_r)
-            active_mask = abs_w > self.atom_threshold
+            # Consider only positive weights above threshold for atom extraction
+            positive_mask = w_r > self.atom_threshold
+            # Fallback: if no positive weights pass, try absolute weights
+            if not positive_mask.any():
+                positive_mask = abs_w > self.atom_threshold
 
             # Also limit to at most top-k most important propositions
             # to avoid overly complex rules.
             max_atoms_per_rule = min(8, n_classes * 3)
-            if active_mask.sum() > max_atoms_per_rule:
+            if positive_mask.sum() > max_atoms_per_rule:
                 # Keep only top-k by weight magnitude
-                top_k_idx = np.argsort(abs_w)[-max_atoms_per_rule:]
-                mask = np.zeros_like(active_mask)
+                w_for_sort = np.where(positive_mask, abs_w, 0.0)
+                top_k_idx = np.argsort(w_for_sort)[-max_atoms_per_rule:]
+                mask = np.zeros_like(positive_mask)
                 mask[top_k_idx] = True
-                active_mask = active_mask & mask
+                positive_mask = positive_mask & mask
 
-            active_props = np.where(active_mask)[0]
+            active_props = np.where(positive_mask)[0]
 
             if len(active_props) == 0:
                 continue  # rule pruned away
 
             # Build atoms from active propositions.
-            # Group by feature: for each feature, determine the single best
-            # condition (upper bound or lower bound) to avoid contradictions.
-            feat_best: dict[int, tuple[str, float, float]] = {}
+            # Group by feature: for each feature, keep the strongest
+            # proposition per direction, then resolve into atoms.
+            # feat_candidates[feat_j] = list of (op, thr_val, weight)
+            feat_candidates: dict[int, list[tuple[str, float, float]]] = {}
             for p_idx in active_props:
-                feat_j, _op, thr_val = prop_meta[p_idx]
+                feat_j, prop_op, thr_val = prop_meta[p_idx]
                 weight = float(w_r[p_idx])
                 abs_weight = abs(weight)
-                # Positive weight on "<=t" → want feature <= t
-                # Negative weight on "<=t" → want feature > t
-                op = "<=" if weight > 0 else ">"
+                # Use the proposition's own operator directly
+                op = prop_op if weight > 0 else ("<=" if prop_op == ">" else ">")
+                feat_candidates.setdefault(feat_j, []).append((op, thr_val, abs_weight))
 
-                key = (feat_j, op)
-                prev = feat_best.get(feat_j)
-                if prev is None:
-                    feat_best[feat_j] = (op, thr_val, abs_weight)
-                else:
-                    prev_op, prev_val, prev_w = prev
-                    if prev_op == op:
-                        # Same direction: keep the one with strongest weight
-                        if abs_weight > prev_w:
-                            feat_best[feat_j] = (op, thr_val, abs_weight)
+            # Resolve per-feature: pick strongest per direction, form interval if both
+            feat_best: dict[int, tuple] = {}
+            for feat_j, cands in feat_candidates.items():
+                best_leq: tuple[float, float] | None = None  # (thr, weight)
+                best_gt: tuple[float, float] | None = None
+                for op, thr_val, w in cands:
+                    if op == "<=":
+                        if best_leq is None or w > best_leq[1]:
+                            best_leq = (thr_val, w)
                     else:
-                        # Different directions on same feature → try to form interval
-                        # Only valid if lower < upper
-                        if op == ">" and prev_op == "<=":
-                            lower, upper = thr_val, prev_val
-                        elif op == "<=" and prev_op == ">":
-                            lower, upper = prev_val, thr_val
-                        else:
-                            lower, upper = 0, 0
+                        if best_gt is None or w > best_gt[1]:
+                            best_gt = (thr_val, w)
 
-                        if lower < upper:
-                            # Valid interval – store as special marker
-                            feat_best[feat_j] = ("interval", lower, upper)
+                if best_leq is not None and best_gt is not None:
+                    lower, upper = best_gt[0], best_leq[0]
+                    if lower < upper:
+                        feat_best[feat_j] = ("interval", lower, upper)
+                    else:
+                        # Keep the stronger one
+                        if best_leq[1] >= best_gt[1]:
+                            feat_best[feat_j] = ("<=", best_leq[0], best_leq[1])
                         else:
-                            # Contradictory – keep the one with stronger weight
-                            if abs_weight > prev_w:
-                                feat_best[feat_j] = (op, thr_val, abs_weight)
+                            feat_best[feat_j] = (">", best_gt[0], best_gt[1])
+                elif best_leq is not None:
+                    feat_best[feat_j] = ("<=", best_leq[0], best_leq[1])
+                elif best_gt is not None:
+                    feat_best[feat_j] = (">", best_gt[0], best_gt[1])
 
             atoms: list[Atom] = []
             for feat_j in sorted(feat_best.keys()):
