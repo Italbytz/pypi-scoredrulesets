@@ -26,6 +26,8 @@ from .plotting import (
 	plot_efficiency_summary,
 	plot_2d_rank_plot,
 	plot_pareto_front,
+	plot_win_tie_loss_pareto_matrix,
+	plot_win_tie_loss_size_matrix,
 	plot_win_tie_loss_matrix,
 )
 from .runner import (
@@ -74,6 +76,8 @@ __all__ = [
 	"plot_efficiency_summary",
 	"plot_2d_rank_plot",
 	"plot_pareto_front",
+	"plot_win_tie_loss_pareto_matrix",
+	"plot_win_tie_loss_size_matrix",
 	"plot_win_tie_loss_matrix",
 	"run_benchmarks",
 ]

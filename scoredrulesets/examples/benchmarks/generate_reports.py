@@ -38,6 +38,8 @@ from scoredrulesets.benchmarking import (
     plot_efficiency_summary,
     plot_2d_rank_plot,
     plot_pareto_front,
+    plot_win_tie_loss_pareto_matrix,
+    plot_win_tie_loss_size_matrix,
     plot_win_tie_loss_matrix,
 )
 from scoredrulesets.benchmarking.runner import BenchmarkResult
@@ -142,6 +144,12 @@ def generate_reports(
     wtl_png, wtl_pdf = plot_win_tie_loss_matrix(
         raw_data, output_base=output_dir / "benchmark_results_wtl"
     )
+    wtl_size_png, wtl_size_pdf = plot_win_tie_loss_size_matrix(
+        raw_data, output_base=output_dir / "benchmark_results_wtl_size"
+    )
+    wtl_pareto_png, wtl_pareto_pdf = plot_win_tie_loss_pareto_matrix(
+        raw_data, output_base=output_dir / "benchmark_results_wtl_pareto"
+    )
     eff_png, eff_pdf = plot_efficiency_summary(
         raw_data, output_base=output_dir / "benchmark_results_efficiency"
     )
@@ -179,6 +187,10 @@ def generate_reports(
             "cd_pdf": str(cd_pdf.name),
             "wtl_png": str(wtl_png.name),
             "wtl_pdf": str(wtl_pdf.name),
+            "wtl_size_png": str(wtl_size_png.name),
+            "wtl_size_pdf": str(wtl_size_pdf.name),
+            "wtl_pareto_png": str(wtl_pareto_png.name),
+            "wtl_pareto_pdf": str(wtl_pareto_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
             "dual_cd_png": str(dual_cd_png.name),
@@ -220,6 +232,10 @@ def generate_reports(
             "cd_pdf": str(cd_pdf.name),
             "wtl_png": str(wtl_png.name),
             "wtl_pdf": str(wtl_pdf.name),
+            "wtl_size_png": str(wtl_size_png.name),
+            "wtl_size_pdf": str(wtl_size_pdf.name),
+            "wtl_pareto_png": str(wtl_pareto_png.name),
+            "wtl_pareto_pdf": str(wtl_pareto_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
             "dual_cd_png": str(dual_cd_png.name),
@@ -245,6 +261,8 @@ def generate_reports(
     print(f"  benchmark_results_pareto.png / .pdf (Pareto-Front)")
     print(f"  benchmark_results_cd.png / .pdf (Critical Difference Diagram)")
     print(f"  benchmark_results_wtl.png / .pdf (Win/Tie/Loss Matrix)")
+    print(f"  benchmark_results_wtl_size.png / .pdf (Win/Tie/Loss Matrix: model size)")
+    print(f"  benchmark_results_wtl_pareto.png / .pdf (Pareto Win/Tie/Loss Matrix)")
     print(f"  benchmark_results_efficiency.png / .pdf (Executive Efficiency Summary)")
     print(f"  benchmark_results_dual_cd.png / .pdf (Dual CD Diagram: F1 + Complexity)")
     print(f"  benchmark_results_rank2d.png / .pdf (2D Rank Plot: Quality vs. Complexity)")

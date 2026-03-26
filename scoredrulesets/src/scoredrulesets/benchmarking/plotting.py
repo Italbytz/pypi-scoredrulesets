@@ -672,12 +672,32 @@ def plot_win_tie_loss_matrix(
             score_matrix[i, j] = 0.0 if total == 0 else (wins - losses) / total
             text_matrix[i, j] = f"{wins}/{ties}/{losses}"
 
+    return _render_wtl_matrix(
+        estimator_names=estimator_names,
+        score_matrix=score_matrix,
+        text_matrix=text_matrix,
+        title="Win/Tie/Loss Matrix (pairwise over datasets, metric: F1)",
+        colorbar_label="Normalized win margin: (wins-losses)/total",
+        output_base=output_base,
+    )
+
+
+def _render_wtl_matrix(
+    *,
+    estimator_names: list[str],
+    score_matrix: np.ndarray,
+    text_matrix: np.ndarray,
+    title: str,
+    colorbar_label: str,
+    output_base: str | Path,
+) -> tuple[Path, Path]:
+    n_est = len(estimator_names)
     fig_w = max(6.8, 0.62 * n_est + 3.2)
     fig_h = max(6.2, 0.62 * n_est + 2.4)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
     im = ax.imshow(score_matrix, cmap="RdBu_r", vmin=-1.0, vmax=1.0, aspect="auto")
-    ax.set_title("Win/Tie/Loss Matrix (pairwise over datasets, metric: F1)")
+    ax.set_title(title)
     ax.set_xticks(range(n_est), estimator_names, rotation=45, ha="right", fontsize=8)
     ax.set_yticks(range(n_est), estimator_names, fontsize=8)
     ax.set_xlabel("Compared against")
@@ -689,7 +709,7 @@ def plot_win_tie_loss_matrix(
             ax.text(j, i, text_matrix[i, j], ha="center", va="center", fontsize=7, color=color)
 
     cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label("Normalized win margin: (wins-losses)/total")
+    cbar.set_label(colorbar_label)
     fig.subplots_adjust(left=0.26, right=0.94, bottom=0.28, top=0.90)
 
     base = Path(output_base)
@@ -699,6 +719,135 @@ def plot_win_tie_loss_matrix(
     fig.savefig(pdf_path, bbox_inches="tight")
     plt.close(fig)
     return png_path, pdf_path
+
+
+def plot_win_tie_loss_size_matrix(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+    tie_tolerance: float = 1e-6,
+) -> tuple[Path, Path]:
+    """Plot pairwise W/T/L matrix over datasets using model size (n_atoms, lower is better)."""
+    raw_results = list(results)
+    ok_results = [result for result in raw_results if result.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for size W/T/L matrix")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for size W/T/L matrix")
+
+    _, estimator_names, atoms_matrix = _build_dataset_estimator_atoms_matrix(aggregated)
+    n_est = len(estimator_names)
+    if n_est == 0:
+        raise ValueError("No estimators found for size W/T/L matrix")
+
+    score_matrix = np.zeros((n_est, n_est), dtype=float)
+    text_matrix = np.empty((n_est, n_est), dtype=object)
+
+    for i in range(n_est):
+        for j in range(n_est):
+            if i == j:
+                text_matrix[i, j] = "-"
+                score_matrix[i, j] = 0.0
+                continue
+            wins = ties = losses = 0
+            for row_idx in range(atoms_matrix.shape[0]):
+                vi = atoms_matrix[row_idx, i]
+                vj = atoms_matrix[row_idx, j]
+                if not (np.isfinite(vi) and np.isfinite(vj)):
+                    continue
+                if vi + tie_tolerance < vj:
+                    wins += 1
+                elif vj + tie_tolerance < vi:
+                    losses += 1
+                else:
+                    ties += 1
+            total = wins + ties + losses
+            score_matrix[i, j] = 0.0 if total == 0 else (wins - losses) / total
+            text_matrix[i, j] = f"{wins}/{ties}/{losses}"
+
+    return _render_wtl_matrix(
+        estimator_names=estimator_names,
+        score_matrix=score_matrix,
+        text_matrix=text_matrix,
+        title="Win/Tie/Loss Matrix (pairwise over datasets, metric: n_atoms lower is better)",
+        colorbar_label="Normalized size win margin: (wins-losses)/total",
+        output_base=output_base,
+    )
+
+
+def plot_win_tie_loss_pareto_matrix(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+    f1_tolerance: float = 1e-6,
+    atoms_tolerance: float = 1e-6,
+) -> tuple[Path, Path]:
+    """Plot pairwise W/T/L where wins are counted by Pareto dominance (F1 up, n_atoms down)."""
+    raw_results = list(results)
+    ok_results = [result for result in raw_results if result.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for Pareto W/T/L matrix")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for Pareto W/T/L matrix")
+
+    _, estimator_names, f1_matrix = _build_dataset_estimator_f1_matrix(aggregated)
+    _, _, atoms_matrix = _build_dataset_estimator_atoms_matrix(aggregated)
+    n_est = len(estimator_names)
+    if n_est == 0:
+        raise ValueError("No estimators found for Pareto W/T/L matrix")
+
+    score_matrix = np.zeros((n_est, n_est), dtype=float)
+    text_matrix = np.empty((n_est, n_est), dtype=object)
+
+    for i in range(n_est):
+        for j in range(n_est):
+            if i == j:
+                text_matrix[i, j] = "-"
+                score_matrix[i, j] = 0.0
+                continue
+
+            wins = ties = losses = 0
+            for row_idx in range(f1_matrix.shape[0]):
+                f1_i = f1_matrix[row_idx, i]
+                f1_j = f1_matrix[row_idx, j]
+                atoms_i = atoms_matrix[row_idx, i]
+                atoms_j = atoms_matrix[row_idx, j]
+                if not (np.isfinite(f1_i) and np.isfinite(f1_j) and np.isfinite(atoms_i) and np.isfinite(atoms_j)):
+                    continue
+
+                i_ge_f1 = f1_i >= (f1_j - f1_tolerance)
+                i_le_atoms = atoms_i <= (atoms_j + atoms_tolerance)
+                i_strict = (f1_i > (f1_j + f1_tolerance)) or (atoms_i < (atoms_j - atoms_tolerance))
+                i_dominates = i_ge_f1 and i_le_atoms and i_strict
+
+                j_ge_f1 = f1_j >= (f1_i - f1_tolerance)
+                j_le_atoms = atoms_j <= (atoms_i + atoms_tolerance)
+                j_strict = (f1_j > (f1_i + f1_tolerance)) or (atoms_j < (atoms_i - atoms_tolerance))
+                j_dominates = j_ge_f1 and j_le_atoms and j_strict
+
+                if i_dominates and not j_dominates:
+                    wins += 1
+                elif j_dominates and not i_dominates:
+                    losses += 1
+                else:
+                    ties += 1
+
+            total = wins + ties + losses
+            score_matrix[i, j] = 0.0 if total == 0 else (wins - losses) / total
+            text_matrix[i, j] = f"{wins}/{ties}/{losses}"
+
+    return _render_wtl_matrix(
+        estimator_names=estimator_names,
+        score_matrix=score_matrix,
+        text_matrix=text_matrix,
+        title="Pareto Win/Tie/Loss Matrix (pairwise over datasets, F1 up + n_atoms down)",
+        colorbar_label="Normalized Pareto win margin: (wins-losses)/total",
+        output_base=output_base,
+    )
 
 
 def plot_efficiency_summary(
