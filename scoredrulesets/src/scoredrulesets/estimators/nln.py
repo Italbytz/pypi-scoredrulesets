@@ -120,8 +120,8 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
         n_rules: int = 12,
         n_bins: int = 5,
         learning_rate: float = 0.3,
-        l1_conj: float = 0.002,
-        l1_score: float = 0.001,
+        l1_conj: float = 0.0005,
+        l1_score: float = 0.0003,
         epochs: int = 300,
         batch_size: int = 0,
         atom_threshold: float = 0.1,
@@ -239,10 +239,10 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
         N_train = len(y_train)
         bs = self.batch_size if self.batch_size > 0 else N_train
 
-        # L1 warmup: ramp up L1 penalty over the first 20% of epochs so that
-        # complex conjunctions (needed for MUX-like problems) can establish
-        # before sparsification kicks in.
-        warmup_epochs = max(1, int(self.epochs * 0.2))
+        # L1 warmup: ramp up L1 penalty over the first 40% of epochs so that
+        # complex conjunctions (needed for MUX-like and overlapping-rule
+        # problems) can establish before sparsification kicks in.
+        warmup_epochs = max(1, int(self.epochs * 0.4))
 
         for epoch in range(self.epochs):
             perm = rng.permutation(N_train)

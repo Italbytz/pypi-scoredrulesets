@@ -190,6 +190,7 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                     y_train=y_train,
                     y_test=y_test,
                     timeout_seconds=config.timeout_seconds,
+                    is_no_split=is_no_split,
                 )
                 new_results.append(result)
                 completed_runs += 1
@@ -437,6 +438,36 @@ def build_pareto_per_dataset(
     }
 
 
+# -- Backends, die validation_fraction als Constructor-Parameter akzeptieren --
+_BACKENDS_WITH_VALIDATION_FRACTION = frozenset(
+    {"pittsburgh", "rulegp", "nln", "rulekit_native", "logicgp"}
+)
+
+
+def _disable_validation_fraction(estimator: object) -> None:
+    """Set ``validation_fraction=0.0`` on estimators that support it.
+
+    Called for *no_split* datasets (e.g. MUX) where ``X_train == X_test`` and
+    holding out a validation set would unnecessarily reduce training data.
+
+    Works for both :class:`ScoredRuleSetClassifier` (patches ``backend_params``)
+    and direct backend estimators (patches the attribute).
+    """
+    # ScoredRuleSetClassifier: patch backend_params before fit() builds the
+    # backend estimator.
+    backend = getattr(estimator, "backend", None)
+    if backend is not None and str(backend).lower() in _BACKENDS_WITH_VALIDATION_FRACTION:
+        bp = dict(getattr(estimator, "backend_params", None) or {})
+        bp["validation_fraction"] = 0.0
+        estimator.backend_params = bp  # type: ignore[attr-defined]
+        return
+
+    # Direct backend estimator (e.g. PittsburghRuleSetClassifier used without
+    # the wrapper): patch the attribute directly.
+    if hasattr(estimator, "validation_fraction"):
+        estimator.validation_fraction = 0.0  # type: ignore[attr-defined]
+
+
 def _run_single(
     estimator_name: str,
     estimator_factory,
@@ -447,6 +478,7 @@ def _run_single(
     y_train,
     y_test,
     timeout_seconds: float | None = None,
+    is_no_split: bool = False,
 ) -> BenchmarkResult:
     """Fuehrt einen einzelnen Benchmark-Lauf aus.
 
@@ -482,6 +514,7 @@ def _run_single(
             X_test=X_test,
             y_train=y_train,
             y_test=y_test,
+            is_no_split=is_no_split,
         )
     except _RunTimeoutError as exc:
         print(f"[TIMEOUT] {exc}", flush=True)
@@ -538,6 +571,7 @@ def _run_single_inner(
     X_test,
     y_train,
     y_test,
+    is_no_split: bool = False,
 ) -> BenchmarkResult:
     try:
         estimator = estimator_factory()
@@ -545,6 +579,11 @@ def _run_single_inner(
         raise RuntimeError(
             f"Schätzer '{estimator_name}' konnte nicht initialisiert werden: {exc}"
         ) from exc
+
+    # -- no_split-Datensätze: validation_fraction auf 0.0 setzen, damit
+    #    Estimatoren 100 % der Daten zum Training nutzen (X_train == X_test).
+    if is_no_split:
+        _disable_validation_fraction(estimator)
 
     try:
         fit_start = perf_counter()

@@ -77,7 +77,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         enable_compaction: bool = False,
         window_fraction: float = 1.0,
         # -- Multi-class strategy --
-        multiclass_strategy: str = "direct",
+        multiclass_strategy: str = "auto",
         # -- Low-cardinality detection --
         low_cardinality_threshold: int = 10,
     ):
@@ -101,6 +101,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         self.window_fraction = window_fraction
         self.multiclass_strategy = multiclass_strategy
         self.low_cardinality_threshold = low_cardinality_threshold
+        self._ovr_binary_f1_ = False
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
@@ -119,12 +120,17 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         prior_counts = np.bincount(train_y, minlength=n_classes).astype(float)
         self._default_scores_ = self._distribution_to_scores(prior_counts)
 
-        if self.multiclass_strategy not in ("direct", "ovr"):
+        if self.multiclass_strategy not in ("direct", "ovr", "auto"):
             raise ValueError(
-                f"multiclass_strategy must be 'direct' or 'ovr', got {self.multiclass_strategy!r}"
+                f"multiclass_strategy must be 'direct', 'ovr' or 'auto', got {self.multiclass_strategy!r}"
             )
 
-        use_ovr = self.multiclass_strategy == "ovr" and n_classes > 2
+        # 'auto' → OvR for >=3 classes, direct for binary
+        effective_strategy = self.multiclass_strategy
+        if effective_strategy == "auto":
+            effective_strategy = "ovr" if n_classes >= 3 else "direct"
+
+        use_ovr = effective_strategy == "ovr" and n_classes > 2
 
         if use_ovr:
             selected_rules, iterations_ran = self._fit_ovr(
@@ -353,6 +359,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         # Save originals – will be restored after all OvR rounds
         saved_default_scores = list(self._default_scores_)
         saved_classes = self.classes_.copy()
+        saved_include_default = self.include_default_rule
 
         max_rules_per_class = max(1, int(self.max_rules))
         binary_classes = np.array([0, 1])
@@ -364,10 +371,19 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
             # Temporarily set up binary environment so _build_ruleset
             # and the runtime create consistent 2-class rulesets.
             self.classes_ = binary_classes
+            # Use binary F1 (for the positive class) during OvR subproblems
+            # so that rules for minority classes are properly rewarded.
+            self._ovr_binary_f1_ = True
+            # Disable default rule during OvR search so that rules can
+            # actually shift predictions toward the positive class
+            # (with argmax_sum the default prior overwhelms minority rules).
+            self.include_default_rule = False
 
-            # Temporary binary defaults
+            # Temporary binary defaults (still needed for _distribution_to_scores)
             bin_train_y = y_bin[train_idx]
             bin_counts = np.bincount(bin_train_y, minlength=2).astype(float)
+            # Store base rate for contrast scoring
+            self._ovr_base_rate_ = float(bin_counts[1]) / max(1.0, float(bin_counts.sum()))
             self._default_scores_ = self._distribution_to_scores(bin_counts)
 
             if self.sequential_covering:
@@ -391,12 +407,101 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         # Restore originals
         self.classes_ = saved_classes
         self._default_scores_ = saved_default_scores
+        self._ovr_binary_f1_ = False
+        self.include_default_rule = saved_include_default
 
         # Limit total rules: keep at most max_rules (round-robin across classes)
         if len(all_rules) > max_rules_per_class * n_classes:
             all_rules = all_rules[: max_rules_per_class * n_classes]
 
+        # -- Post-hoc score rebalancing: scale per-class scores to maximise
+        #    macro-F1 on the evaluation set.  Lift scoring amplifies minority
+        #    classes, so we search for per-class scale factors in (0, 1] that
+        #    improve the combined model.
+        eval_idx = val_idx if val_idx is not None else train_idx
+        all_rules = self._rebalance_ovr_scores(
+            all_rules, X_valid, y_idx, eval_idx, n_classes,
+        )
+
         return all_rules, total_iterations
+
+    def _rebalance_ovr_scores(
+        self,
+        rules: list[Rule],
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        eval_idx: np.ndarray,
+        n_classes: int,
+    ) -> list[Rule]:
+        """Scale per-class scores to maximise macro-F1 on the evaluation set.
+
+        After OvR, minority-class rules often have inflated lift scores that
+        cause over-prediction.  We search for per-class scale factors that
+        improve the combined macro-F1.
+        """
+        if not rules:
+            return rules
+
+        # Group rules by OvR class index
+        class_rule_indices: dict[int, list[int]] = {}
+        for i, rule in enumerate(rules):
+            ci = rule.metadata.get("ovr_class_index")
+            if ci is not None:
+                class_rule_indices.setdefault(int(ci), []).append(i)
+
+        if not class_rule_indices:
+            return rules
+
+        # Evaluate baseline macro-F1
+        def _eval_f1() -> float:
+            rs = self._build_ruleset(rules)
+            y_pred = predict_from_ruleset(rs, X[eval_idx])
+            y_true = np.asarray(self.classes_[y_idx[eval_idx]], dtype=str)
+            y_pred = np.asarray(y_pred, dtype=str)
+            return float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+
+        best_f1 = _eval_f1()
+
+        # Coordinate descent: for each class, search for best scale factor
+        scale_grid = [0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0]
+        best_scales = {ci: 1.0 for ci in class_rule_indices}
+
+        for _pass in range(3):  # 3 passes of coordinate descent
+            improved = False
+            for ci in sorted(class_rule_indices.keys()):
+                cur_scale = best_scales[ci]
+                best_ci_scale = cur_scale
+                # Save current scores
+                saved = {idx: list(rules[idx].scores) for idx in class_rule_indices[ci]}
+
+                for scale in scale_grid:
+                    if abs(scale - cur_scale) < 1e-9:
+                        continue
+                    # Apply new scale
+                    ratio = scale / cur_scale
+                    for idx in class_rule_indices[ci]:
+                        rules[idx].scores = [s * ratio for s in saved[idx]]
+                    trial_f1 = _eval_f1()
+                    # Restore
+                    for idx in class_rule_indices[ci]:
+                        rules[idx].scores = list(saved[idx])
+
+                    if trial_f1 > best_f1 + 1e-6:
+                        best_f1 = trial_f1
+                        best_ci_scale = scale
+                        improved = True
+
+                # Apply best scale permanently
+                if best_ci_scale != cur_scale:
+                    ratio = best_ci_scale / cur_scale
+                    for idx in class_rule_indices[ci]:
+                        rules[idx].scores = [s * ratio for s in rules[idx].scores]
+                    best_scales[ci] = best_ci_scale
+
+            if not improved:
+                break
+
+        return rules
 
     @staticmethod
     def _expand_binary_scores_to_multiclass(
@@ -440,7 +545,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         y_pred = predict_from_ruleset(ruleset, X[eval_idx])
         y_true = np.asarray(self.classes_[y_idx[eval_idx]], dtype=str)
         y_pred = np.asarray(y_pred, dtype=str)
-        return float(f1_score(y_true, y_pred, average="macro"))
+        return float(f1_score(y_true, y_pred, **self._f1_kwargs))
 
     # ------------------------------------------------------------------
     # Post-hoc Rule Compaction (BioHEL-inspired)
@@ -478,6 +583,13 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
 
         return current_rules
 
+    @property
+    def _f1_kwargs(self) -> dict:
+        """Return f1_score kwargs: 'binary' with pos_label='1' during OvR, 'macro' otherwise."""
+        if getattr(self, "_ovr_binary_f1_", False):
+            return {"average": "binary", "pos_label": "1", "zero_division": 0}
+        return {"average": "macro", "zero_division": 0}
+
     def _evaluate_rule_list_f1(
         self,
         rules: list[Rule],
@@ -489,7 +601,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         y_pred = predict_from_ruleset(ruleset, X[eval_idx])
         y_true = np.asarray(self.classes_[y_idx[eval_idx]], dtype=str)
         y_pred = np.asarray(y_pred, dtype=str)
-        return float(f1_score(y_true, y_pred, average="macro"))
+        return float(f1_score(y_true, y_pred, **self._f1_kwargs))
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
@@ -658,7 +770,105 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
 
         candidates = [c for c in candidates if c is not None]
         candidates.sort(key=lambda c: (c.gain, c.coverage, -len(c.rule.atoms)), reverse=True)
+
+        feat_name_to_idx = {str(fn): idx for idx, fn in enumerate(self.feature_names_in_)}
+
+        # -- Conjunctive candidates: combine top single-atom rules from
+        #    different features into 2-atom conjunctions.  This is essential
+        #    for datasets where individual features are weak (e.g. categorical
+        #    multi-class datasets like car_evaluation).
+        single_atom = [c for c in candidates if len(c.rule.atoms) == 1]
+        n_conj_base = min(len(single_atom), max(6, int(self.candidate_pool_size // 4)))
+        top_singles = single_atom[:n_conj_base]
+        conj2_candidates: list[_CandidateRule] = []
+        for i in range(len(top_singles)):
+            for j in range(i + 1, len(top_singles)):
+                a_i = top_singles[i].rule.atoms[0]
+                a_j = top_singles[j].rule.atoms[0]
+                if a_i.feature == a_j.feature:
+                    continue
+                c = self._make_conjunction_candidate(
+                    [a_i, a_j], X, y_idx, n_classes, feat_name_to_idx,
+                    (top_singles[i].gain + top_singles[j].gain) / 2.0,
+                    seen_signatures,
+                )
+                if c is not None:
+                    conj2_candidates.append(c)
+
+        candidates.extend(conj2_candidates)
+
+        # -- 3-atom conjunctions: extend top 2-atom rules with an extra
+        #    single atom from a different feature.  This is critical for
+        #    minority classes on datasets like car_evaluation where 3–4
+        #    feature interactions determine class membership.
+        conj3_candidates: list[_CandidateRule] = []
+        top_conj2 = sorted(conj2_candidates, key=lambda c: c.gain, reverse=True)[
+            : max(4, int(self.candidate_pool_size // 6))
+        ]
+        for c2 in top_conj2:
+            used_features = {str(a.feature) for a in c2.rule.atoms}
+            for s in top_singles:
+                a_s = s.rule.atoms[0]
+                if str(a_s.feature) in used_features:
+                    continue
+                atoms3 = list(c2.rule.atoms) + [a_s]
+                c3 = self._make_conjunction_candidate(
+                    atoms3, X, y_idx, n_classes, feat_name_to_idx,
+                    c2.gain * 0.9,  # slight discount for deeper rules
+                    seen_signatures,
+                )
+                if c3 is not None:
+                    conj3_candidates.append(c3)
+
+        candidates.extend(conj3_candidates)
+        candidates.sort(key=lambda c: (c.gain, c.coverage, -len(c.rule.atoms)), reverse=True)
         return candidates[: max(1, int(self.candidate_pool_size))]
+
+    def _make_conjunction_candidate(
+        self,
+        atoms: list[Atom],
+        X: np.ndarray,
+        y_idx: np.ndarray,
+        n_classes: int,
+        feat_name_to_idx: dict[str, int],
+        base_gain: float,
+        seen_signatures: set[tuple[tuple[str, str, str], ...]],
+    ) -> _CandidateRule | None:
+        """Create a conjunctive candidate rule from a list of atoms."""
+        mask = np.ones(X.shape[0], dtype=bool)
+        for atom in atoms:
+            feat_idx = feat_name_to_idx.get(str(atom.feature))
+            if feat_idx is None:
+                continue
+            col = X[:, feat_idx]
+            if atom.op == "==":
+                mask &= col == atom.value
+            elif atom.op == "<=":
+                mask &= col <= atom.value
+            elif atom.op == ">":
+                mask &= col > atom.value
+            elif atom.op == "in":
+                vals = atom.value if isinstance(atom.value, (list, tuple)) else [atom.value]
+                mask &= np.isin(col, vals)
+            elif atom.op == "between":
+                lo, hi = atom.value[0], atom.value[1]
+                mask &= (col >= lo) & (col <= hi)
+
+        coverage = int(mask.sum())
+        if coverage < max(1, self.min_samples_leaf):
+            return None
+
+        conj_y = y_idx[mask]
+        counts = np.bincount(conj_y, minlength=n_classes).astype(float)
+
+        feat_tag = "_".join(str(a.feature) for a in atoms)
+        rule = Rule(
+            atoms=atoms,
+            scores=self._distribution_to_scores(counts),
+            rule_id=f"pittsburgh_conj_{feat_tag}",
+            metadata={"source": "pittsburgh", "gain": float(base_gain), "kind": "conjunction"},
+        )
+        return self._candidate_from_rule(rule, base_gain, coverage, seen_signatures)
 
     def _candidate_from_rule(
         self,
@@ -724,7 +934,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         y_pred = predict_from_ruleset(ruleset, X[window_idx])
         y_true = np.asarray(self.classes_[y_idx[window_idx]], dtype=str)
         y_pred = np.asarray(y_pred, dtype=str)
-        f1 = float(f1_score(y_true, y_pred, average="macro"))
+        f1 = float(f1_score(y_true, y_pred, **self._f1_kwargs))
         n_rules = len(selected_rules)
         n_atoms = sum(len(rule.atoms) for rule in selected_rules)
         complexity = self.complexity_penalty * (
@@ -758,6 +968,23 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         return sum(len(candidates[idx].rule.atoms) for idx in state)
 
     def _distribution_to_scores(self, counts: np.ndarray) -> list[float]:
+        if getattr(self, "_ovr_binary_f1_", False) and len(counts) == 2:
+            # OvR contrast scoring: use lift-based scores so that rules
+            # covering regions enriched in the positive class actually
+            # predict class 1 under argmax_sum aggregation.
+            total = float(counts.sum())
+            if total == 0:
+                return [0.0, 0.0]
+            pos_rate = float(counts[1]) / total
+            base_rate = getattr(self, "_ovr_base_rate_", 0.5)
+            if pos_rate > base_rate:
+                # Positive-enriched region → favor class 1
+                lift = min(pos_rate / max(base_rate, 1e-6), 10.0)
+                return [0.0, float(lift)]
+            else:
+                # Negative-enriched region → favor class 0
+                lift = min((1.0 - pos_rate) / max(1.0 - base_rate, 1e-6), 10.0)
+                return [float(lift), 0.0]
         return distribution_to_scores(counts, self.aggregation)
 
     def _best_numeric_split(self, feature_values, y_idx: np.ndarray, n_classes: int):

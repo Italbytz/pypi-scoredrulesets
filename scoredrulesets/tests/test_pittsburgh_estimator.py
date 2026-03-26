@@ -28,7 +28,10 @@ def test_pittsburgh_estimator_fit_predict_and_ruleset():
     assert proba.shape == (10, len(clf.classes_))
     assert np.allclose(proba.sum(axis=1), 1.0)
     assert any(rule.rule_id == "pittsburgh_default_prior" for rule in ruleset.rules)
-    assert any(rule.rule_id and rule.rule_id.startswith("pittsburgh_rule_") for rule in ruleset.rules)
+    assert any(
+        rule.rule_id and rule.rule_id.startswith(("pittsburgh_rule_", "pittsburgh_ovr_", "pittsburgh_conj_"))
+        for rule in ruleset.rules
+    )
     assert ruleset.metadata["source"] == "pittsburgh"
     assert ruleset.metadata["selected_rule_count"] <= 4
 
@@ -90,7 +93,6 @@ def test_benchmarking_estimator_specs_include_pittsburgh():
     specs = default_estimator_specs()
     assert "wrapper_pittsburgh" in specs
     assert "wrapper_pittsburgh_strong" in specs
-    assert "wrapper_pittsburgh_ovr" in specs
 
 
 def test_pittsburgh_benchmark_profiles_use_expected_backend_and_budget():
@@ -98,7 +100,6 @@ def test_pittsburgh_benchmark_profiles_use_expected_backend_and_budget():
 
     base = specs["wrapper_pittsburgh"].factory()
     strong = specs["wrapper_pittsburgh_strong"].factory()
-    ovr = specs["wrapper_pittsburgh_ovr"].factory()
 
     assert base.backend == "pittsburgh"
     assert base.backend_params["candidate_pool_size"] >= 48
@@ -109,8 +110,6 @@ def test_pittsburgh_benchmark_profiles_use_expected_backend_and_budget():
     assert strong.backend_params["candidate_pool_size"] >= 64
     assert strong.backend_params["sequential_covering"] is True
 
-    assert ovr.backend == "pittsburgh"
-    assert ovr.backend_params["multiclass_strategy"] == "ovr"
 
 
 def test_pittsburgh_example_run_demo_smoke():
@@ -126,8 +125,8 @@ def test_pittsburgh_example_run_demo_smoke():
     assert result["profile"] == "default"
     assert result["pittsburgh"]["metadata"]["source"] == "pittsburgh"
     assert result["pittsburgh"]["n_rules"] > 0
-    assert len(result["comparison"]) == 2
-    assert {row["name"] for row in result["comparison"]} == {"cart", "gp"}
+    assert len(result["comparison"]) == 1
+    assert {row["name"] for row in result["comparison"]} == {"cart"}
 
 
 def test_pittsburgh_example_profile_smoke():

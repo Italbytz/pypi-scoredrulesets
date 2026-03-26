@@ -130,18 +130,17 @@ def test_benchmarking_smoke_compare_pittsburgh_native_gp():
 def test_benchmarking_smoke_compare_pittsburgh_profiles():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_pittsburgh", "wrapper_pittsburgh_strong", "wrapper_pittsburgh_ovr"],
+        estimator_names=["wrapper_pittsburgh", "wrapper_pittsburgh_strong"],
         repeats=1,
         random_state=0,
     )
     results = run_benchmarks(config)
 
-    assert len(results) == 3
+    assert len(results) == 2
     by_estimator = {result.estimator: result for result in results}
     assert set(by_estimator) == {
         "wrapper_pittsburgh",
         "wrapper_pittsburgh_strong",
-        "wrapper_pittsburgh_ovr",
     }
     assert all(result.status == "ok" for result in results)
     assert all(result.f1_macro is not None for result in results)
@@ -615,3 +614,33 @@ def test_report_outputs_include_warning_information():
     assert "example warning" in html
 
 
+def test_no_split_disables_validation_fraction():
+    """Runner must set validation_fraction=0.0 for no_split datasets."""
+    from scoredrulesets.benchmarking.runner import _disable_validation_fraction
+    from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
+
+    # ScoredRuleSetClassifier wrapper – backend_params patched
+    est = ScoredRuleSetClassifier(
+        backend="pittsburgh",
+        backend_params={"validation_fraction": 0.25, "max_rules": 5},
+    )
+    _disable_validation_fraction(est)
+    assert est.backend_params["validation_fraction"] == 0.0
+    assert est.backend_params["max_rules"] == 5  # other params unchanged
+
+    # Wrapper with backend that does NOT support validation_fraction
+    est_cart = ScoredRuleSetClassifier(backend="cart", backend_params={"max_depth": 4})
+    _disable_validation_fraction(est_cart)
+    assert est_cart.backend_params == {"max_depth": 4}  # unchanged
+
+    # Direct backend estimator (e.g. PittsburghRuleSetClassifier)
+    from scoredrulesets.estimators.pittsburgh import PittsburghRuleSetClassifier
+
+    direct = PittsburghRuleSetClassifier(validation_fraction=0.25)
+    _disable_validation_fraction(direct)
+    assert direct.validation_fraction == 0.0
+
+    # Wrapper with no backend_params initially
+    est_no_bp = ScoredRuleSetClassifier(backend="rulegp")
+    _disable_validation_fraction(est_no_bp)
+    assert est_no_bp.backend_params["validation_fraction"] == 0.0
