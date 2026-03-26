@@ -26,7 +26,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     ----------
     backend : str
         Backend estimator to use (e.g. 'cart', 'hs', 'rulekit', 'exstracs',
-        'logicgp', 'pittsburgh', 'nln').
+        'logicgp', 'rulelcs', 'rulenln').
     backend_params : dict, optional
         Parameters forwarded to the backend estimator constructor.
     transform_params : dict, optional
@@ -42,7 +42,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         - ``"k"`` (int): number of features to keep (default 20).
         - ``"max_thresholds_per_feature"`` (int): cap on numeric thresholds
           for native backends that build their own atom candidates
-          (gp, pittsburgh, nln, logicgp).
+          (gp, rulelcs, rulenln, logicgp).
     estimator : object, optional
         A pre-built sklearn-compatible estimator; overrides *backend*.
     random_state : int, optional
@@ -50,7 +50,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     """
 
     # Backends whose estimator exposes `max_thresholds_per_feature` attribute
-    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "pittsburgh", "nln", "logicgp", "rulegp"})
+    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "rulelcs", "rulenln", "logicgp", "rulegp"})
 
     def __init__(
         self,
@@ -164,21 +164,21 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "LogicGPClassifier hat kein 'ruleset_' nach fit(). "
                     "Bitte logicgp.py auf Fehler pruefen."
                 )
-        elif backend_lower == "pittsburgh":
+        elif backend_lower == "rulelcs":
             if hasattr(self.estimator_, "ruleset_"):
                 self.ruleset_ = self.estimator_.ruleset_
             else:
                 raise RuntimeError(
-                    "PittsburghRuleSetClassifier has no 'ruleset_' after fit(). "
-                    "Please check pittsburgh.py for errors."
+                    "RuleLCSClassifier has no 'ruleset_' after fit(). "
+                    "Please check rulelcs.py for errors."
                 )
-        elif backend_lower == "nln":
+        elif backend_lower == "rulenln":
             if hasattr(self.estimator_, "ruleset_"):
                 self.ruleset_ = self.estimator_.ruleset_
             else:
                 raise RuntimeError(
-                    "NeuralLogicNetClassifier has no 'ruleset_' after fit(). "
-                    "Please check nln.py for errors."
+                    "RuleNLNClassifier has no 'ruleset_' after fit(). "
+                    "Please check rulenln.py for errors."
                 )
         elif backend_lower == "rulekit_native":
             if hasattr(self.estimator_, "ruleset_"):

@@ -5,7 +5,7 @@ Usage::
     from scoredrulesets import AutoScoredRuleSetClassifier
 
     clf = AutoScoredRuleSetClassifier(
-        candidate_backends=["cart", "hs", "pittsburgh", "gp"],
+        candidate_backends=["cart", "hs", "rulelcs", "gp"],
         cv=5,
         scoring="f1_weighted",
     )
@@ -30,7 +30,7 @@ from .base import BaseRuleSetEstimator
 from .sklearn_wrapper import ScoredRuleSetClassifier
 
 
-_DEFAULT_BACKENDS = ["cart", "hs", "pittsburgh"]
+_DEFAULT_BACKENDS = ["cart", "hs", "rulelcs"]
 
 
 class AutoScoredRuleSetClassifier(BaseRuleSetEstimator):
@@ -40,7 +40,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator):
     ----------
     candidate_backends : list[str] | None
         List of backend names to evaluate (default: ``["cart", "hs",
-        "pittsburgh"]``).  Any backend supported by
+        "rulelcs"]``).  Any backend supported by
         :class:`ScoredRuleSetClassifier` can be listed.
     backend_params : dict[str, dict] | None
         Per-backend constructor parameters.  Keys are backend names, values

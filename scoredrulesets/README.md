@@ -74,8 +74,8 @@ print(format_ruleset_table(ruleset))
 
 See `examples/README.md` for runnable demos:
 
-- direct estimator demo: `examples/estimators/example_pittsburgh_backend.py`
-- wrapper backend demo: `examples/estimators/example_pittsburgh_wrapper.py`
+- direct estimator demo: `examples/estimators/example_rulelcs_backend.py`
+- wrapper backend demo: `examples/estimators/example_rulelcs_wrapper.py`
 
 ## logicGP-Import
 
@@ -86,23 +86,23 @@ ruleset = import_logicgp_json("ext/logicgp_model.json")
 dump_ruleset_json(ruleset, "converted_ruleset.json")
 ```
 
-## Pittsburgh-Estimator
+## RuleLCS-Estimator
 
 ```python
 from sklearn.datasets import load_iris
-from scoredrulesets import PittsburghRuleSetClassifier
+from scoredrulesets import RuleLCSClassifier
 
 X, y = load_iris(return_X_y=True)
 
-clf = PittsburghRuleSetClassifier(max_rules=5, random_state=42)
+clf = RuleLCSClassifier(max_rules=5, random_state=42)
 clf.fit(X, y)
 print(clf.predict(X[:3]))
 
 # Optional: Beam-Search-Parameter steuern
-# PittsburghRuleSetClassifier(max_rules=6, beam_width=10, max_iterations=20)
+# RuleLCSClassifier(max_rules=6, beam_width=10, max_iterations=20)
 ```
 
-Der Pittsburgh-Lerner erzeugt je nach Datenlage Atome mit `<=`, `>`, `between`, `==` und `in`.
+Der RuleLCS-Lerner erzeugt je nach Datenlage Atome mit `<=`, `>`, `between`, `==` und `in`.
 
 ## Benchmarking
 

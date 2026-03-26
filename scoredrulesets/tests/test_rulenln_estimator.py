@@ -8,7 +8,7 @@ from sklearn.datasets import load_iris, load_wine, load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 
-from scoredrulesets.estimators.nln import NeuralLogicNetClassifier
+from scoredrulesets.estimators.rulenln import RuleNLNClassifier
 from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 from scoredrulesets.schema import ScoredRuleSet
 
@@ -31,12 +31,12 @@ def _wine_split(random_state: int = 42):
 # Basic tests
 # ---------------------------------------------------------------------------
 
-class TestNeuralLogicNetClassifier:
+class TestRuleNLNClassifier:
     """Core tests for the NLN estimator."""
 
     def test_fit_predict_iris(self):
         X_train, X_test, y_train, y_test = _iris_split()
-        clf = NeuralLogicNetClassifier(
+        clf = RuleNLNClassifier(
             n_rules=12, n_bins=5, epochs=300,
             learning_rate=0.3, l1_conj=0.002, l1_score=0.001,
             early_stopping_rounds=30, random_state=0,
@@ -52,7 +52,7 @@ class TestNeuralLogicNetClassifier:
 
     def test_fit_predict_wine(self):
         X_train, X_test, y_train, y_test = _wine_split()
-        clf = NeuralLogicNetClassifier(
+        clf = RuleNLNClassifier(
             n_rules=15, n_bins=4, epochs=400,
             learning_rate=0.3, l1_conj=0.001, l1_score=0.0005,
             early_stopping_rounds=40, random_state=0,
@@ -65,7 +65,7 @@ class TestNeuralLogicNetClassifier:
 
     def test_to_ruleset_valid(self):
         X_train, _, y_train, _ = _iris_split()
-        clf = NeuralLogicNetClassifier(n_rules=8, epochs=50, random_state=0)
+        clf = RuleNLNClassifier(n_rules=8, epochs=50, random_state=0)
         clf.fit(X_train, y_train)
 
         rs = clf.to_ruleset()
@@ -81,7 +81,7 @@ class TestNeuralLogicNetClassifier:
     def test_rules_have_atoms(self):
         """Non-default rules should have atoms with valid ops."""
         X_train, _, y_train, _ = _iris_split()
-        clf = NeuralLogicNetClassifier(
+        clf = RuleNLNClassifier(
             n_rules=10, n_bins=5, epochs=120, random_state=0,
         )
         clf.fit(X_train, y_train)
@@ -98,7 +98,7 @@ class TestNeuralLogicNetClassifier:
 
     def test_predict_proba_shape(self):
         X_train, X_test, y_train, _ = _iris_split()
-        clf = NeuralLogicNetClassifier(n_rules=6, epochs=50, random_state=0)
+        clf = RuleNLNClassifier(n_rules=6, epochs=50, random_state=0)
         clf.fit(X_train, y_train)
 
         proba = clf.predict_proba(X_test)
@@ -112,7 +112,7 @@ class TestNeuralLogicNetClassifier:
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.3, random_state=42, stratify=y,
         )
-        clf = NeuralLogicNetClassifier(
+        clf = RuleNLNClassifier(
             n_rules=12, n_bins=4, epochs=300,
             learning_rate=0.3, l1_conj=0.002, l1_score=0.001,
             early_stopping_rounds=30, random_state=0,
@@ -134,7 +134,7 @@ class TestNLNWrapper:
     def test_wrapper_backend_nln(self):
         X_train, X_test, y_train, y_test = _iris_split()
         clf = ScoredRuleSetClassifier(
-            backend="nln",
+            backend="rulenln",
             backend_params={
                 "n_rules": 10,
                 "n_bins": 4,
@@ -154,7 +154,7 @@ class TestNLNWrapper:
     def test_wrapper_to_ruleset(self):
         X_train, _, y_train, _ = _iris_split()
         clf = ScoredRuleSetClassifier(
-            backend="nln",
+            backend="rulenln",
             backend_params={"n_rules": 8, "epochs": 60},
             random_state=0,
         )
@@ -167,14 +167,14 @@ class TestNLNWrapper:
         """F1 through the wrapper should equal F1 of the native model
         (since the wrapper routes prediction through the ScoredRuleSet)."""
         X_train, X_test, y_train, y_test = _iris_split()
-        native = NeuralLogicNetClassifier(
+        native = RuleNLNClassifier(
             n_rules=10, n_bins=4, epochs=80, random_state=0,
         )
         native.fit(X_train, y_train)
         y_native = native.predict(X_test)
 
         wrapper = ScoredRuleSetClassifier(
-            backend="nln",
+            backend="rulenln",
             backend_params={"n_rules": 10, "n_bins": 4, "epochs": 80},
             random_state=0,
         )
@@ -197,7 +197,7 @@ class TestNLNDisplay:
 
     def test_display_ruleset(self):
         X_train, X_test, y_train, y_test = _iris_split()
-        clf = NeuralLogicNetClassifier(
+        clf = RuleNLNClassifier(
             n_rules=12, n_bins=5, epochs=300,
             learning_rate=0.3, early_stopping_rounds=30, random_state=0,
         )
@@ -241,7 +241,7 @@ class TestNLNSparsity:
         X_train, _, y_train, _ = _iris_split()
 
         # Low L1
-        clf_low = NeuralLogicNetClassifier(
+        clf_low = RuleNLNClassifier(
             n_rules=10, n_bins=4, l1_conj=0.001, l1_score=0.0005,
             epochs=100, random_state=0,
         )
@@ -250,7 +250,7 @@ class TestNLNSparsity:
         atoms_low = sum(len(r.atoms) for r in rs_low.rules)
 
         # High L1
-        clf_high = NeuralLogicNetClassifier(
+        clf_high = RuleNLNClassifier(
             n_rules=10, n_bins=4, l1_conj=0.05, l1_score=0.02,
             epochs=100, random_state=0,
         )

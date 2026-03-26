@@ -32,7 +32,7 @@ from scoredrulesets.benchmarking.runner import (
 def test_benchmarking_runs_for_core_estimators():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh", "wrapper_logicgp"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs", "wrapper_logicgp"],
         repeats=1,
         random_state=0,
     )
@@ -76,7 +76,7 @@ def test_benchmarking_unknown_dataset_raises():
 def test_benchmark_plot_is_written_as_png_and_pdf(tmp_path: Path):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh", "wrapper_logicgp"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs", "wrapper_logicgp"],
         repeats=1,
         random_state=0,
     )
@@ -96,7 +96,7 @@ def test_benchmark_plot_is_written_as_png_and_pdf(tmp_path: Path):
 def test_benchmarking_aggregation_over_repeats():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs"],
         repeats=2,
         random_state=0,
     )
@@ -110,10 +110,10 @@ def test_benchmarking_aggregation_over_repeats():
     assert all(item.f1_macro_error is not None for item in aggregated)
 
 
-def test_benchmarking_smoke_compare_pittsburgh_native_gp():
+def test_benchmarking_smoke_compare_rulelcs_native_gp():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_pittsburgh", "wrapper_cart", "wrapper_logicgp"],
+        estimator_names=["wrapper_rulelcs", "wrapper_cart", "wrapper_logicgp"],
         repeats=1,
         random_state=0,
     )
@@ -121,16 +121,16 @@ def test_benchmarking_smoke_compare_pittsburgh_native_gp():
 
     assert len(results) == 3
     by_estimator = {result.estimator: result for result in results}
-    assert set(by_estimator) == {"wrapper_pittsburgh", "wrapper_cart", "wrapper_logicgp"}
+    assert set(by_estimator) == {"wrapper_rulelcs", "wrapper_cart", "wrapper_logicgp"}
     assert all(result.status == "ok" for result in results)
     assert all(result.f1_macro is not None for result in results)
     assert all(result.n_rules is not None and result.n_rules > 0 for result in results)
 
 
-def test_benchmarking_smoke_compare_pittsburgh_profiles():
+def test_benchmarking_smoke_compare_rulelcs_profiles():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_pittsburgh", "wrapper_pittsburgh_strong"],
+        estimator_names=["wrapper_rulelcs", "wrapper_rulelcs_strong"],
         repeats=1,
         random_state=0,
     )
@@ -139,26 +139,9 @@ def test_benchmarking_smoke_compare_pittsburgh_profiles():
     assert len(results) == 2
     by_estimator = {result.estimator: result for result in results}
     assert set(by_estimator) == {
-        "wrapper_pittsburgh",
-        "wrapper_pittsburgh_strong",
+        "wrapper_rulelcs",
+        "wrapper_rulelcs_strong",
     }
-    assert all(result.status == "ok" for result in results)
-    assert all(result.f1_macro is not None for result in results)
-    assert all(result.n_rules is not None and result.n_rules > 0 for result in results)
-
-
-def test_benchmarking_smoke_compare_pittsburgh_native_gp():
-    config = BenchmarkConfig(
-        dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_pittsburgh", "wrapper_cart", "wrapper_logicgp"],
-        repeats=1,
-        random_state=0,
-    )
-    results = run_benchmarks(config)
-
-    assert len(results) == 3
-    by_estimator = {result.estimator: result for result in results}
-    assert set(by_estimator) == {"wrapper_pittsburgh", "wrapper_cart", "wrapper_logicgp"}
     assert all(result.status == "ok" for result in results)
     assert all(result.f1_macro is not None for result in results)
     assert all(result.n_rules is not None and result.n_rules > 0 for result in results)
@@ -185,7 +168,7 @@ def test_benchmarking_progress_output_is_emitted(capsys):
 def test_benchmark_plot_aggregated_is_written_as_png_and_pdf(tmp_path: Path):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs"],
         repeats=2,
         random_state=0,
     )
@@ -209,7 +192,7 @@ def test_benchmark_plot_aggregated_is_written_as_png_and_pdf(tmp_path: Path):
 def test_benchmark_plot_multiple_datasets_is_written_as_png_and_pdf(tmp_path: Path):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris", "sklearn_wine"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs"],
         repeats=2,
         random_state=0,
     )
@@ -233,7 +216,7 @@ def test_benchmark_plot_multiple_datasets_is_written_as_png_and_pdf(tmp_path: Pa
 def test_benchmark_heatmap_is_written_as_png_and_pdf(tmp_path: Path):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris", "sklearn_wine"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs"],
         repeats=2,
         random_state=0,
     )
@@ -256,7 +239,7 @@ def test_combined_heatmap_cell_uses_shared_colour_scale():
     fit_norm = LogNorm(vmin=0.1, vmax=10.0)
     entry = AggregatedBenchmarkResult(
         dataset="synthetic",
-        estimator="wrapper_pittsburgh",
+        estimator="wrapper_rulelcs",
         n_repeats=1,
         status="ok",
         f1_macro_mean=0.75,
@@ -295,7 +278,7 @@ def test_combined_heatmap_adds_single_unlabelled_legend_bar(tmp_path: Path, monk
     results = [
         BenchmarkResult(
             dataset="synthetic_a",
-            estimator="wrapper_pittsburgh",
+            estimator="wrapper_rulelcs",
             repeat=0,
             status="ok",
             skip_reason=None,
@@ -342,7 +325,7 @@ def test_combined_heatmap_adds_single_unlabelled_legend_bar(tmp_path: Path, monk
 def test_benchmark_leaderboard_sorting_and_markdown_output():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh", "wrapper_logicgp"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs", "wrapper_logicgp"],
         repeats=2,
         random_state=0,
     )
@@ -363,7 +346,7 @@ def test_benchmark_leaderboard_sorting_and_markdown_output():
 def test_benchmark_report_markdown_contains_sections_and_artifacts():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs"],
         repeats=2,
         random_state=0,
     )
@@ -411,7 +394,7 @@ def test_benchmark_report_markdown_contains_sections_and_artifacts():
 def test_benchmark_report_html_contains_sections_and_preview():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs"],
         repeats=2,
         random_state=0,
     )
@@ -450,7 +433,7 @@ def test_benchmark_report_html_contains_sections_and_preview():
 def test_benchmark_leaderboard_html_contains_table():
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
-        estimator_names=["wrapper_cart", "wrapper_pittsburgh"],
+        estimator_names=["wrapper_cart", "wrapper_rulelcs"],
         repeats=2,
         random_state=0,
     )
@@ -621,7 +604,7 @@ def test_no_split_disables_validation_fraction():
 
     # ScoredRuleSetClassifier wrapper – backend_params patched
     est = ScoredRuleSetClassifier(
-        backend="pittsburgh",
+        backend="rulelcs",
         backend_params={"validation_fraction": 0.25, "max_rules": 5},
     )
     _disable_validation_fraction(est)
@@ -633,10 +616,10 @@ def test_no_split_disables_validation_fraction():
     _disable_validation_fraction(est_cart)
     assert est_cart.backend_params == {"max_depth": 4}  # unchanged
 
-    # Direct backend estimator (e.g. PittsburghRuleSetClassifier)
-    from scoredrulesets.estimators.pittsburgh import PittsburghRuleSetClassifier
+    # Direct backend estimator (e.g. RuleLCSClassifier)
+    from scoredrulesets import RuleLCSClassifier
 
-    direct = PittsburghRuleSetClassifier(validation_fraction=0.25)
+    direct = RuleLCSClassifier(validation_fraction=0.25)
     _disable_validation_fraction(direct)
     assert direct.validation_fraction == 0.0
 

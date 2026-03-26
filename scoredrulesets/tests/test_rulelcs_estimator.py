@@ -5,13 +5,13 @@ from pathlib import Path
 
 from sklearn.datasets import load_iris, load_breast_cancer
 
-from scoredrulesets import PittsburghRuleSetClassifier, ScoredRuleSetClassifier
+from scoredrulesets import RuleLCSClassifier, ScoredRuleSetClassifier
 from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
 
-def test_pittsburgh_estimator_fit_predict_and_ruleset():
+def test_rulelcs_estimator_fit_predict_and_ruleset():
     X, y = load_iris(return_X_y=True)
-    clf = PittsburghRuleSetClassifier(
+    clf = RuleLCSClassifier(
         max_rules=4,
         candidate_pool_size=16,
         beam_width=5,
@@ -27,16 +27,16 @@ def test_pittsburgh_estimator_fit_predict_and_ruleset():
     assert pred.shape == (10,)
     assert proba.shape == (10, len(clf.classes_))
     assert np.allclose(proba.sum(axis=1), 1.0)
-    assert any(rule.rule_id == "pittsburgh_default_prior" for rule in ruleset.rules)
+    assert any(rule.rule_id == "rulelcs_default_prior" for rule in ruleset.rules)
     assert any(
-        rule.rule_id and rule.rule_id.startswith(("pittsburgh_rule_", "pittsburgh_ovr_", "pittsburgh_conj_"))
+        rule.rule_id and rule.rule_id.startswith(("rulelcs_rule_", "rulelcs_ovr_", "rulelcs_conj_"))
         for rule in ruleset.rules
     )
-    assert ruleset.metadata["source"] == "pittsburgh"
+    assert ruleset.metadata["source"] == "rulelcs"
     assert ruleset.metadata["selected_rule_count"] <= 4
 
 
-def test_pittsburgh_estimator_handles_categorical_rules():
+def test_rulelcs_estimator_handles_categorical_rules():
     X = np.array(
         [
             ["red", "small"],
@@ -52,7 +52,7 @@ def test_pittsburgh_estimator_handles_categorical_rules():
     )
     y = np.array([1, 1, 0, 0, 0, 0, 1, 0])
 
-    clf = PittsburghRuleSetClassifier(
+    clf = RuleLCSClassifier(
         max_rules=3,
         min_samples_leaf=1,
         candidate_pool_size=12,
@@ -67,10 +67,10 @@ def test_pittsburgh_estimator_handles_categorical_rules():
 
 
 
-def test_sklearn_wrapper_pittsburgh_backend():
+def test_sklearn_wrapper_rulelcs_backend():
     X, y = load_iris(return_X_y=True)
     clf = ScoredRuleSetClassifier(
-        backend="pittsburgh",
+        backend="rulelcs",
         backend_params={
             "max_rules": 4,
             "candidate_pool_size": 16,
@@ -85,94 +85,98 @@ def test_sklearn_wrapper_pittsburgh_backend():
     proba = clf.predict_proba(X[:6])
     assert pred.shape == (6,)
     assert proba.shape == (6, 3)
-    assert clf.to_ruleset().metadata["source"] == "pittsburgh"
+    assert clf.to_ruleset().metadata["source"] == "rulelcs"
 
 
 
-def test_benchmarking_estimator_specs_include_pittsburgh():
+def test_benchmarking_estimator_specs_include_rulelcs():
     specs = default_estimator_specs()
-    assert "wrapper_pittsburgh" in specs
-    assert "wrapper_pittsburgh_strong" in specs
+    assert "wrapper_rulelcs" in specs
+    assert "wrapper_rulelcs_strong" in specs
 
 
-def test_pittsburgh_benchmark_profiles_use_expected_backend_and_budget():
+def test_rulelcs_benchmark_profiles_use_expected_backend_and_budget():
     specs = default_estimator_specs()
 
-    base = specs["wrapper_pittsburgh"].factory()
-    strong = specs["wrapper_pittsburgh_strong"].factory()
+    base = specs["wrapper_rulelcs"].factory()
+    strong = specs["wrapper_rulelcs_strong"].factory()
 
-    assert base.backend == "pittsburgh"
+    assert base.backend == "rulelcs"
     assert base.backend_params["candidate_pool_size"] >= 48
     assert base.backend_params["max_rules"] >= 10
 
-    assert strong.backend == "pittsburgh"
+    assert strong.backend == "rulelcs"
     assert strong.backend_params["beam_width"] >= 16
     assert strong.backend_params["candidate_pool_size"] >= 64
     assert strong.backend_params["sequential_covering"] is True
 
 
 
-def test_pittsburgh_example_run_demo_smoke():
+def test_rulelcs_example_run_demo_smoke():
     example_path = (
         Path(__file__).resolve().parents[1]
         / "examples"
-        / "example_pittsburgh_backend.py"
+        / "estimators"
+        / "example_rulelcs_backend.py"
     )
     module_globals = runpy.run_path(str(example_path))
     result = module_globals["run_demo"](random_state=0)
 
     assert result["dataset"] == "sklearn_iris"
     assert result["profile"] == "default"
-    assert result["pittsburgh"]["metadata"]["source"] == "pittsburgh"
-    assert result["pittsburgh"]["n_rules"] > 0
+    assert result["rulelcs"]["metadata"]["source"] == "rulelcs"
+    assert result["rulelcs"]["n_rules"] > 0
     assert len(result["comparison"]) == 1
     assert {row["name"] for row in result["comparison"]} == {"cart"}
 
 
-def test_pittsburgh_example_profile_smoke():
+def test_rulelcs_example_profile_smoke():
     example_path = (
         Path(__file__).resolve().parents[1]
         / "examples"
-        / "example_pittsburgh_backend.py"
+        / "estimators"
+        / "example_rulelcs_backend.py"
     )
     module_globals = runpy.run_path(str(example_path))
     result = module_globals["run_demo"](random_state=0, profile="strong")
 
     assert result["profile"] == "strong"
-    meta = result["pittsburgh"]["metadata"]
-    assert meta["source"] == "pittsburgh"
+    meta = result["rulelcs"]["metadata"]
+    assert meta["source"] == "rulelcs"
     assert meta["beam_width"] >= 6
 
 
-def test_pittsburgh_wrapper_example_run_demo_smoke():
+def test_rulelcs_wrapper_example_run_demo_smoke():
     example_path = (
         Path(__file__).resolve().parents[1]
         / "examples"
-        / "example_pittsburgh_wrapper.py"
+        / "estimators"
+        / "example_rulelcs_wrapper.py"
     )
     module_globals = runpy.run_path(str(example_path))
     result = module_globals["run_demo"](random_state=0)
 
     assert result["dataset"] == "sklearn_iris"
     assert result["profile"] == "default"
-    assert result["wrapper_pittsburgh"]["metadata"]["source"] == "pittsburgh"
-    assert result["wrapper_pittsburgh"]["n_rules"] > 0
+    assert result["wrapper_rulelcs"]["metadata"]["source"] == "rulelcs"
+    assert result["wrapper_rulelcs"]["n_rules"] > 0
     assert len(result["comparison"]) == 2
     assert {row["name"] for row in result["comparison"]} == {"wrapper_cart_d2", "wrapper_cart_d4"}
 
 
-def test_pittsburgh_wrapper_example_profile_smoke():
+def test_rulelcs_wrapper_example_profile_smoke():
     example_path = (
         Path(__file__).resolve().parents[1]
         / "examples"
-        / "example_pittsburgh_wrapper.py"
+        / "estimators"
+        / "example_rulelcs_wrapper.py"
     )
     module_globals = runpy.run_path(str(example_path))
     result = module_globals["run_demo"](random_state=0, profile="strong")
 
     assert result["profile"] == "strong"
-    meta = result["wrapper_pittsburgh"]["metadata"]
-    assert meta["source"] == "pittsburgh"
+    meta = result["wrapper_rulelcs"]["metadata"]
+    assert meta["source"] == "rulelcs"
     assert meta["beam_width"] >= 6
 
 
@@ -181,13 +185,13 @@ def test_pittsburgh_wrapper_example_profile_smoke():
 # ---------------------------------------------------------------------------
 
 
-class TestPittsburghOvRMulticlass:
+class TestRuleLCSOvRMulticlass:
     """Tests for the One-vs-Rest multiclass strategy."""
 
     def test_ovr_multiclass_iris(self):
         """OvR on Iris (3 classes): correct shapes, proba sums to 1, metadata."""
         X, y = load_iris(return_X_y=True)
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=4,
             candidate_pool_size=16,
             beam_width=5,
@@ -207,7 +211,7 @@ class TestPittsburghOvRMulticlass:
 
         ruleset = clf.to_ruleset()
         assert ruleset.metadata["multiclass_strategy"] == "ovr"
-        assert ruleset.metadata["source"] == "pittsburgh"
+        assert ruleset.metadata["source"] == "rulelcs"
 
         # At least some rules should carry ovr_class_index metadata
         ovr_rules = [
@@ -223,7 +227,7 @@ class TestPittsburghOvRMulticlass:
     def test_ovr_binary_skips_decomposition(self):
         """With 2 classes, OvR should fall back to direct (no decomposition)."""
         X, y = load_breast_cancer(return_X_y=True)
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=3,
             candidate_pool_size=12,
             beam_width=4,
@@ -251,7 +255,7 @@ class TestPittsburghOvRMulticlass:
     def test_direct_unchanged_regression(self):
         """Default 'direct' strategy on Iris should work as before."""
         X, y = load_iris(return_X_y=True)
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=4,
             candidate_pool_size=16,
             beam_width=5,
@@ -272,7 +276,7 @@ class TestPittsburghOvRMulticlass:
     def test_ovr_sequential_covering(self):
         """OvR combined with sequential covering on Iris."""
         X, y = load_iris(return_X_y=True)
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=4,
             candidate_pool_size=16,
             beam_width=5,
@@ -294,7 +298,7 @@ class TestPittsburghOvRMulticlass:
         """OvR through the ScoredRuleSetClassifier wrapper."""
         X, y = load_iris(return_X_y=True)
         clf = ScoredRuleSetClassifier(
-            backend="pittsburgh",
+            backend="rulelcs",
             backend_params={
                 "max_rules": 4,
                 "candidate_pool_size": 16,
@@ -315,7 +319,7 @@ class TestPittsburghOvRMulticlass:
     def test_ovr_with_compaction(self):
         """OvR with post-hoc compaction enabled."""
         X, y = load_iris(return_X_y=True)
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=5,
             candidate_pool_size=20,
             beam_width=6,
@@ -333,7 +337,7 @@ class TestPittsburghOvRMulticlass:
     def test_invalid_strategy_raises(self):
         """Unknown multiclass_strategy should raise ValueError."""
         X, y = load_iris(return_X_y=True)
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=3,
             random_state=0,
             multiclass_strategy="foo",
@@ -344,7 +348,7 @@ class TestPittsburghOvRMulticlass:
     def test_ovr_score_vector_length(self):
         """Each OvR rule should have a score vector of length n_classes."""
         X, y = load_iris(return_X_y=True)
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=3,
             candidate_pool_size=12,
             beam_width=4,
@@ -361,7 +365,7 @@ class TestPittsburghOvRMulticlass:
             )
 
 
-class TestPittsburghLowCardinality:
+class TestRuleLCSLowCardinality:
     """Tests for low-cardinality detection (Fix 1).
 
     Integer-encoded categorical features (≤ k unique values) should
@@ -388,7 +392,7 @@ class TestPittsburghLowCardinality:
     def test_equality_splits_generated(self):
         """Low-cardinality numeric features should produce == rules."""
         X, y = self._monk_like_data()
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=6,
             candidate_pool_size=32,
             beam_width=6,
@@ -405,9 +409,9 @@ class TestPittsburghLowCardinality:
         )
 
     def test_nonzero_atoms_on_low_cardinality(self):
-        """Pittsburgh must not return 0 atoms on integer-encoded data."""
+        """RuleLCS must not return 0 atoms on integer-encoded data."""
         X, y = self._monk_like_data()
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=6,
             candidate_pool_size=32,
             beam_width=6,
@@ -422,7 +426,7 @@ class TestPittsburghLowCardinality:
     def test_threshold_disabled_does_not_generate_equality(self):
         """With low_cardinality_threshold=0, no extra equality splits."""
         X, y = self._monk_like_data()
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=4,
             candidate_pool_size=16,
             beam_width=4,
@@ -448,7 +452,7 @@ class TestPittsburghLowCardinality:
             rng.integers(0, 5, size=300),
         ])
         y = X[:, 0] % 3  # 3 classes
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=6,
             candidate_pool_size=24,
             beam_width=5,
@@ -467,7 +471,7 @@ class TestPittsburghLowCardinality:
         # Feature with 50 unique values → above default threshold of 10
         X = rng.uniform(0, 10, size=(200, 3))
         y = (X[:, 0] > 5).astype(int)
-        clf = PittsburghRuleSetClassifier(
+        clf = RuleLCSClassifier(
             max_rules=4,
             candidate_pool_size=16,
             beam_width=4,

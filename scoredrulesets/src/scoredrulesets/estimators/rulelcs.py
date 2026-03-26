@@ -29,7 +29,7 @@ class _CandidateRule:
     coverage: int
 
 
-class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
+class RuleLCSClassifier(BaseRuleSetEstimator):
     """Pittsburgh-style rule-set learner with beam search over rule subsets.
 
     Supports several BioHEL-inspired enhancements beyond a simple beam search:
@@ -152,8 +152,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         ruleset = self._build_ruleset(selected_rules)
         ruleset.metadata.update(
             {
-                "source": "pittsburgh",
-                "model_type": "pittsburgh_rule_set_search",
+                "source": "rulelcs",
+                "model_type": "rulelcs_rule_set_search",
                 "candidate_pool_size": int(self._candidate_count_),
                 "beam_width": int(self.beam_width),
                 "max_iterations": int(self.max_iterations),
@@ -527,7 +527,7 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         return Rule(
             atoms=rule.atoms,
             scores=full_scores,
-            rule_id=f"pittsburgh_ovr_c{class_idx}_{rule.rule_id or 'rule'}",
+            rule_id=f"rulelcs_ovr_c{class_idx}_{rule.rule_id or 'rule'}",
             metadata=new_metadata,
         )
 
@@ -624,8 +624,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
                 Rule(
                     atoms=[],
                     scores=list(self._default_scores_),
-                    rule_id="pittsburgh_default_prior",
-                    metadata={"source": "pittsburgh", "kind": "class_prior"},
+                    rule_id="rulelcs_default_prior",
+                    metadata={"source": "rulelcs", "kind": "class_prior"},
                 )
             )
         return ScoredRuleSet(
@@ -684,8 +684,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
                                 Rule(
                                     atoms=[Atom(feature=feature_name, op="<=", value=float(threshold))],
                                     scores=self._distribution_to_scores(left_counts),
-                                    rule_id=f"pittsburgh_rule_f{feature_idx}_le",
-                                    metadata={"source": "pittsburgh", "gain": float(gain)},
+                                    rule_id=f"rulelcs_rule_f{feature_idx}_le",
+                                    metadata={"source": "rulelcs", "gain": float(gain)},
                                 ),
                                 gain,
                                 left_cov,
@@ -695,8 +695,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
                                 Rule(
                                     atoms=[Atom(feature=feature_name, op=">", value=float(threshold))],
                                     scores=self._distribution_to_scores(right_counts),
-                                    rule_id=f"pittsburgh_rule_f{feature_idx}_gt",
-                                    metadata={"source": "pittsburgh", "gain": float(gain)},
+                                    rule_id=f"rulelcs_rule_f{feature_idx}_gt",
+                                    metadata={"source": "rulelcs", "gain": float(gain)},
                                 ),
                                 gain,
                                 right_cov,
@@ -715,8 +715,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
                             Rule(
                                 atoms=[Atom(feature=feature_name, op="between", value=[float(low), float(high)])],
                                 scores=self._distribution_to_scores(counts),
-                                rule_id=f"pittsburgh_rule_f{feature_idx}_between_{interval_idx}",
-                                metadata={"source": "pittsburgh", "gain": float(interval_gain)},
+                                rule_id=f"rulelcs_rule_f{feature_idx}_between_{interval_idx}",
+                                metadata={"source": "rulelcs", "gain": float(interval_gain)},
                             ),
                             interval_gain,
                             coverage,
@@ -741,8 +741,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
                             Rule(
                                 atoms=[Atom(feature=feature_name, op="==", value=category)],
                                 scores=self._distribution_to_scores(match_counts),
-                                rule_id=f"pittsburgh_rule_f{feature_idx}_eq_{category_idx}",
-                                metadata={"source": "pittsburgh", "gain": float(gain), "category": category},
+                                rule_id=f"rulelcs_rule_f{feature_idx}_eq_{category_idx}",
+                                metadata={"source": "rulelcs", "gain": float(gain), "category": category},
                             ),
                             gain,
                             coverage,
@@ -759,8 +759,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
                             Rule(
                                 atoms=[Atom(feature=feature_name, op="in", value=group_values)],
                                 scores=self._distribution_to_scores(group_counts),
-                                rule_id=f"pittsburgh_rule_f{feature_idx}_in_{group_idx}",
-                                metadata={"source": "pittsburgh", "gain": float(gain), "group": group_values},
+                                rule_id=f"rulelcs_rule_f{feature_idx}_in_{group_idx}",
+                                metadata={"source": "rulelcs", "gain": float(gain), "group": group_values},
                             ),
                             gain,
                             coverage,
@@ -865,8 +865,8 @@ class PittsburghRuleSetClassifier(BaseRuleSetEstimator):
         rule = Rule(
             atoms=atoms,
             scores=self._distribution_to_scores(counts),
-            rule_id=f"pittsburgh_conj_{feat_tag}",
-            metadata={"source": "pittsburgh", "gain": float(base_gain), "kind": "conjunction"},
+            rule_id=f"rulelcs_conj_{feat_tag}",
+            metadata={"source": "rulelcs", "gain": float(base_gain), "kind": "conjunction"},
         )
         return self._candidate_from_rule(rule, base_gain, coverage, seen_signatures)
 

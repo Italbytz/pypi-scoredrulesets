@@ -4,7 +4,7 @@ ruleGP – Genetic Programming on full Scored Rule Set individuals
 
 Combines ideas from:
 - **logicGP**: Pareto-based GP, FLCW weight computation, model-size objective
-- **pittsburgh**: post-hoc compaction (backward elimination)
+- **ruleLCS**: post-hoc compaction (backward elimination)
 - **NSGA-II**: crowding-distance for diversity on the Pareto front
 
 Key differences from existing estimators:

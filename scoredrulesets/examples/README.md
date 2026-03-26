@@ -7,21 +7,21 @@ Die Beispiele sind jetzt nach Zweck getrennt:
 
 ## Estimator-Demos
 
-Direkter Pittsburgh-Schaetzer:
+Direkter RuleLCS-Schaetzer:
 
 ```bash
-python3 examples/estimators/example_pittsburgh_backend.py
+python3 examples/estimators/example_rulelcs_backend.py
 ```
 
-Pittsburgh ueber Wrapper:
+RuleLCS ueber Wrapper:
 
 ```bash
-python3 examples/estimators/example_pittsburgh_wrapper.py
+python3 examples/estimators/example_rulelcs_wrapper.py
 ```
 
 Weitere fachliche Demos:
 
-- `examples/estimators/example_nln_backend.py`
+- `examples/estimators/example_rulenln_backend.py`
 - `examples/estimators/example_rule_shrinking.py`
 - `examples/estimators/example_exstracs_shrinking.py`
 - `examples/estimators/example_rulekit_exstracs.py`

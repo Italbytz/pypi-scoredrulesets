@@ -70,7 +70,7 @@ def _cross_entropy(proba: np.ndarray, targets: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 
 
-class NeuralLogicNetClassifier(BaseRuleSetEstimator):
+class RuleNLNClassifier(BaseRuleSetEstimator):
     """Differentiable-logic rule learner inspired by Neural Logic Networks.
 
     The model architecture has two differentiable layers:
@@ -333,7 +333,7 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
 
         Returns logits (B, C) and a cache dict for backward.
         """
-        scale = NeuralLogicNetClassifier._GATE_SCALE
+        scale = RuleNLNClassifier._GATE_SCALE
         R, D = W_conj.shape
         B = P.shape[0]
 
@@ -378,7 +378,7 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
 
         Returns (dW_conj, db_conj, dW_score, db_score).
         """
-        scale = NeuralLogicNetClassifier._GATE_SCALE
+        scale = RuleNLNClassifier._GATE_SCALE
         B = P.shape[0]
         gate = cache["gate"]       # (R, D)
         match = cache["match"]     # (B, R, D)
@@ -521,7 +521,7 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
                 atoms=[],
                 scores=default_scores,
                 rule_id="default",
-                metadata={"source": "nln_bias"},
+                metadata={"source": "rulenln_bias"},
             )
         )
 
@@ -620,8 +620,8 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
                 Rule(
                     atoms=atoms,
                     scores=scores_r,
-                    rule_id=f"nln_{r}",
-                    metadata={"source": "nln", "rule_idx": r},
+                    rule_id=f"rulenln_{r}",
+                    metadata={"source": "rulenln", "rule_idx": r},
                 )
             )
 
@@ -631,7 +631,7 @@ class NeuralLogicNetClassifier(BaseRuleSetEstimator):
             rules=rules,
             aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
             metadata={
-                "backend": "nln",
+                "backend": "rulenln",
                 "n_rules_learned": self.n_rules,
                 "n_rules_extracted": len(rules),
                 "epochs": self.epochs,

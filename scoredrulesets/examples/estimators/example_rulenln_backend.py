@@ -11,7 +11,7 @@ Das NLN-Backend:
   - Benötigt nur NumPy (kein PyTorch/TensorFlow)
 
 Aufruf:
-    python examples/estimators/example_nln_backend.py
+    python examples/estimators/example_rulenln_backend.py
 """
 
 import numpy as np
@@ -19,7 +19,7 @@ from sklearn.datasets import load_iris, load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, classification_report
 
-from scoredrulesets.estimators.nln import NeuralLogicNetClassifier
+from scoredrulesets.estimators.rulenln import RuleNLNClassifier
 from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
 
@@ -58,7 +58,7 @@ def demo_native_iris():
         X, y, test_size=0.3, random_state=42, stratify=y,
     )
 
-    clf = NeuralLogicNetClassifier(
+    clf = RuleNLNClassifier(
         n_rules=12,
         n_bins=5,
         learning_rate=0.3,
@@ -92,7 +92,7 @@ def demo_wrapper_breast_cancer():
     )
 
     clf = ScoredRuleSetClassifier(
-        backend="nln",
+        backend="rulenln",
         backend_params={
             "n_rules": 10,
             "n_bins": 4,
@@ -134,7 +134,7 @@ def demo_sparsity_control():
     ]
 
     for label, l1_c, l1_s in configs:
-        clf = NeuralLogicNetClassifier(
+        clf = RuleNLNClassifier(
             n_rules=12, n_bins=5, epochs=200,
             learning_rate=0.3, l1_conj=l1_c, l1_score=l1_s,
             early_stopping_rounds=30, random_state=42,

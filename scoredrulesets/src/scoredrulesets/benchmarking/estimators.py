@@ -54,10 +54,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_pittsburgh": EstimatorSpec(
-            name="wrapper_pittsburgh",
+        "wrapper_rulelcs": EstimatorSpec(
+            name="wrapper_rulelcs",
             factory=lambda: ScoredRuleSetClassifier(
-                backend="pittsburgh",
+                backend="rulelcs",
                 backend_params={
                     "max_rules": 10,
                     "min_samples_leaf": 3,
@@ -70,10 +70,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_pittsburgh_strong": EstimatorSpec(
-            name="wrapper_pittsburgh_strong",
+        "wrapper_rulelcs_strong": EstimatorSpec(
+            name="wrapper_rulelcs_strong",
             factory=lambda: ScoredRuleSetClassifier(
-                backend="pittsburgh",
+                backend="rulelcs",
                 backend_params={
                     "max_rules": 15,
                     "min_samples_leaf": 3,
@@ -180,10 +180,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_nln_strong": EstimatorSpec(
-            name="wrapper_nln_strong",
+        "wrapper_rulenln_strong": EstimatorSpec(
+            name="wrapper_rulenln_strong",
             factory=lambda: ScoredRuleSetClassifier(
-                backend="nln",
+                backend="rulenln",
                 backend_params={
                     "n_rules": 20,
                     "n_bins": 6,

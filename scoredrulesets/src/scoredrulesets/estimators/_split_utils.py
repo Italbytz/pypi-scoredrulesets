@@ -4,7 +4,7 @@ Gemeinsame Gini-basierte Split-Funktionen fuer regelbasierte Schaetzer.
 Dieses Modul buendelt die Logik zum Finden von numerischen und
 kategorischen Splits (bester Schwellenwert, Intervall-Splits,
 Einzel-Kategorie-Splits und Gruppen-Splits).  Die Funktionen werden
-von ``PittsburghRuleSetClassifier`` (und ggf. weiteren Schätzern) genutzt.
+von ``RuleLCSClassifier`` (und ggf. weiteren Schätzern) genutzt.
 """
 
 from __future__ import annotations

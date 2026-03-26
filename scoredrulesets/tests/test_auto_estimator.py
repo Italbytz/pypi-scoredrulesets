@@ -74,16 +74,16 @@ class TestAutoEstimator:
     def test_per_backend_params(self, iris_data):
         X, y = iris_data
         clf = AutoScoredRuleSetClassifier(
-            candidate_backends=["cart", "pittsburgh"],
+            candidate_backends=["cart", "rulelcs"],
             backend_params={
                 "cart": {"max_depth": 2},
-                "pittsburgh": {"max_rules": 3},
+                "rulelcs": {"max_rules": 3},
             },
             cv=2,
             random_state=0,
         )
         clf.fit(X, y)
-        assert clf.best_backend_ in ("cart", "pittsburgh")
+        assert clf.best_backend_ in ("cart", "rulelcs")
 
     def test_failing_backend_skipped(self, iris_data):
         """A backend that fails during CV should be skipped with a warning."""
@@ -104,6 +104,6 @@ class TestAutoEstimator:
         X, y = iris_data
         clf = AutoScoredRuleSetClassifier(cv=2, random_state=0)
         clf.fit(X, y)
-        assert clf.best_backend_ in ("cart", "hs", "pittsburgh")
+        assert clf.best_backend_ in ("cart", "hs", "rulelcs")
 
 

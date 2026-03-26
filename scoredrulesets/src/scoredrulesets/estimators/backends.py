@@ -206,11 +206,11 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return logicgp_cls(**params)
 
-    if backend_key == "pittsburgh":
-        pittsburgh_cls = _resolve_pittsburgh_class()
-        if random_state is not None and _supports_kwarg(pittsburgh_cls, "random_state"):
+    if backend_key == "rulelcs":
+        rulelcs_cls = _resolve_rulelcs_class()
+        if random_state is not None and _supports_kwarg(rulelcs_cls, "random_state"):
             params.setdefault("random_state", random_state)
-        return pittsburgh_cls(**params)
+        return rulelcs_cls(**params)
 
 
     if backend_key == "rulekit_native":
@@ -220,11 +220,11 @@ def build_backend_estimator(
         return rulekit_native_cls(**params)
 
 
-    if backend_key == "nln":
-        nln_cls = _resolve_nln_class()
-        if random_state is not None and _supports_kwarg(nln_cls, "random_state"):
+    if backend_key == "rulenln":
+        rulenln_cls = _resolve_rulenln_class()
+        if random_state is not None and _supports_kwarg(rulenln_cls, "random_state"):
             params.setdefault("random_state", random_state)
-        return nln_cls(**params)
+        return rulenln_cls(**params)
 
     if backend_key == "rulegp":
         from .rulegp import RuleGPClassifier
@@ -235,7 +235,7 @@ def build_backend_estimator(
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: "
         f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', "
-        f"'pittsburgh', 'nln', 'rulegp'."
+        f"'rulelcs', 'rulenln', 'rulegp'."
     )
 
 
@@ -372,14 +372,14 @@ def _resolve_logicgp_class():
         ) from e
 
 
-def _resolve_pittsburgh_class():
+def _resolve_rulelcs_class():
     try:
-        from .pittsburgh import PittsburghRuleSetClassifier
+        from .rulelcs import RuleLCSClassifier
 
-        return PittsburghRuleSetClassifier
+        return RuleLCSClassifier
     except ImportError as e:
         raise ImportError(
-            "backend='pittsburgh' could not load PittsburghRuleSetClassifier. "
+            "backend='rulelcs' could not load RuleLCSClassifier. "
             f"Import error: {e}"
         ) from e
 
@@ -396,14 +396,14 @@ def _rulekit_jvm_hint() -> str:
     return hint
 
 
-def _resolve_nln_class():
-    """Load the NeuralLogicNetClassifier from this package."""
+def _resolve_rulenln_class():
+    """Load the RuleNLNClassifier from this package."""
     try:
-        from .nln import NeuralLogicNetClassifier
-        return NeuralLogicNetClassifier
+        from .rulenln import RuleNLNClassifier
+        return RuleNLNClassifier
     except ImportError as e:
         raise ImportError(
-            "backend='nln' could not load NeuralLogicNetClassifier. "
+            "backend='rulenln' could not load RuleNLNClassifier. "
             f"Import error: {e}"
         ) from e
 

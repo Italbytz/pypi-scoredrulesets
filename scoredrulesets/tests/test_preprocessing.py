@@ -91,11 +91,11 @@ class TestThresholdBudget:
     """max_thresholds_per_feature for native backends."""
 
 
-    def test_pittsburgh_threshold_cap_fit(self, iris_data):
-        """PittsburghRuleSetClassifier with max_thresholds_per_feature fits OK."""
+    def test_rulelcs_threshold_cap_fit(self, iris_data):
+        """RuleLCSClassifier with max_thresholds_per_feature fits OK."""
         X, y = iris_data
         clf = ScoredRuleSetClassifier(
-            backend="pittsburgh",
+            backend="rulelcs",
             backend_params={"max_thresholds_per_feature": 3, "max_rules": 4},
             random_state=0,
         )
@@ -105,10 +105,10 @@ class TestThresholdBudget:
 
     def test_nln_threshold_cap(self, iris_data):
         """NLN respects max_thresholds_per_feature."""
-        from scoredrulesets.estimators.nln import NeuralLogicNetClassifier
+        from scoredrulesets.estimators.rulenln import RuleNLNClassifier
 
         X, y = iris_data
-        clf = NeuralLogicNetClassifier(
+        clf = RuleNLNClassifier(
             n_bins=10,  # would normally produce many thresholds
             max_thresholds_per_feature=3,
             epochs=5,
@@ -122,7 +122,7 @@ class TestThresholdBudget:
         """max_thresholds_per_feature set via preprocessing dict."""
         X, y = iris_data
         clf = ScoredRuleSetClassifier(
-            backend="pittsburgh",
+            backend="rulelcs",
             backend_params={"max_rules": 4},
             preprocessing={"max_thresholds_per_feature": 3},
             random_state=0,
@@ -142,7 +142,7 @@ class TestCombinedPreprocessing:
     def test_feature_selection_and_threshold_budget(self, iris_data):
         X, y = iris_data
         clf = ScoredRuleSetClassifier(
-            backend="pittsburgh",
+            backend="rulelcs",
             backend_params={"max_rules": 4},
             preprocessing={
                 "feature_selection": "kbest",

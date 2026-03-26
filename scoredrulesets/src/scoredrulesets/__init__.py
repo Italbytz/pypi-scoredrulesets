@@ -24,8 +24,8 @@ from .benchmarking import (
 )
 from .estimators.auto import AutoScoredRuleSetClassifier
 from .estimators.logicgp import LogicGPClassifier
-from .estimators.nln import NeuralLogicNetClassifier
-from .estimators.pittsburgh import PittsburghRuleSetClassifier
+from .estimators.rulenln import RuleNLNClassifier
+from .estimators.rulelcs import RuleLCSClassifier
 from .estimators.rulegp import RuleGPClassifier
 from .estimators.rulekit_native import RuleKitNativeClassifier
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
@@ -45,8 +45,8 @@ __all__ = [
     "BenchmarkConfig",
     "BenchmarkResult",
     "LogicGPClassifier",
-    "NeuralLogicNetClassifier",
-    "PittsburghRuleSetClassifier",
+    "RuleNLNClassifier",
+    "RuleLCSClassifier",
     "RuleGPClassifier",
     "RuleKitNativeClassifier",
     "ScoredRuleSetClassifier",
