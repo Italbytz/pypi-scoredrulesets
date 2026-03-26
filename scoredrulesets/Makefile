@@ -1,14 +1,12 @@
-.PHONY: help benchmark benchmark-resume benchmark-recover benchmark-clean benchmark-status recover-latest \
+.PHONY: help benchmark benchmark-resume benchmark-recover benchmark-clean benchmark-status \
        benchmark-standard benchmark-standard-resume benchmark-standard-clean benchmark-standard-status \
 	benchmark-normal benchmark-normal-resume benchmark-normal-clean benchmark-normal-status \
 	benchmark-normal-lite benchmark-normal-lite-resume benchmark-normal-lite-clean benchmark-normal-lite-status \
-       benchmark-logicgp benchmark-logicgp-clean benchmark-logicgp-status \
 	reports-normal reports-normal-lite reports-standard reports-full
 
 CHECKPOINT ?= benchmarks/checkpoint.jsonl
 CHECKPOINT_STANDARD ?= benchmarks/checkpoint_standard.jsonl
 CHECKPOINT_NORMAL_LITE ?= benchmarks/checkpoint_normal_lite.jsonl
-CHECKPOINT_LOGICGP ?= benchmarks/checkpoint_logicgp.jsonl
 TIMEOUT    ?= 300
 REPEATS    ?= 3
 MAX_ATTEMPTS ?= 5
@@ -20,7 +18,6 @@ help:
 	@echo "                                 (max $(MAX_ATTEMPTS) Versuche, Checkpoint: $(CHECKPOINT))"
 	@echo "  make benchmark-clean         - Loescht Checkpoint und startet von vorne"
 	@echo "  make benchmark-status        - Zeigt Checkpoint-Status (fertige Laeufe)"
-	@echo "  make recover-latest          - Recovery aus letztem Log"
 	@echo ""
 	@echo "Standard-Benchmark-Targets (alle Schaetzer, 10 Datasets):"
 	@echo "  make benchmark-standard          - Einmaliger Standard-Report (mit Checkpoint/Resume)"
@@ -36,11 +33,6 @@ help:
 	@echo "                                       (Checkpoint: $(CHECKPOINT_NORMAL_LITE))"
 	@echo "  make benchmark-normal-lite-clean  - Loescht Normal-Lite-Checkpoint und startet von vorne"
 	@echo "  make benchmark-normal-lite-status - Zeigt Normal-Lite-Checkpoint-Status"
-	@echo ""
-	@echo "LogicGP-Varianten-Benchmark (12 Varianten, 9 Datasets):"
-	@echo "  make benchmark-logicgp       - LogicGP-Varianten-Benchmark mit Paarvergleich"
-	@echo "  make benchmark-logicgp-clean - Loescht LogicGP-Checkpoint und startet von vorne"
-	@echo "  make benchmark-logicgp-status- Zeigt LogicGP-Checkpoint-Status"
 	@echo ""
 	@echo "Report-Generierung (aus existierenden Ergebnissen):"
 	@echo "  make reports-normal          - Alias fuer reports-standard"
@@ -85,9 +77,6 @@ benchmark-status:
 	else \
 		echo "Kein Checkpoint vorhanden: $(CHECKPOINT)"; \
 	fi
-
-recover-latest:
-	./scripts/recover_latest_benchmark.sh $(ARGS)
 
 # ---------------------------------------------------------------------------
 # Standard-Benchmark (alle Schaetzer, 10 ausgewaehlte Datasets)
@@ -161,33 +150,6 @@ benchmark-normal-lite-status:
 		tail -3 $(CHECKPOINT_NORMAL_LITE) | python -m json.tool --compact 2>/dev/null || tail -3 $(CHECKPOINT_NORMAL_LITE); \
 	else \
 		echo "Kein Normal-Lite-Checkpoint vorhanden: $(CHECKPOINT_NORMAL_LITE)"; \
-	fi
-
-# ---------------------------------------------------------------------------
-# LogicGP-Varianten-Benchmark (12 Varianten × 9 Datasets – Achsenvergleich)
-# ---------------------------------------------------------------------------
-
-benchmark-logicgp:
-	python -u examples/benchmark_logicgp_variants.py \
-		--checkpoint $(CHECKPOINT_LOGICGP) \
-		--timeout $(TIMEOUT) \
-		--repeats $(REPEATS) \
-		$(ARGS)
-
-benchmark-logicgp-clean:
-	@echo "Loesche LogicGP-Checkpoint: $(CHECKPOINT_LOGICGP)"
-	rm -f $(CHECKPOINT_LOGICGP)
-	@echo "Fertig. Naechster 'make benchmark-logicgp' startet von vorne."
-
-benchmark-logicgp-status:
-	@if [ -f "$(CHECKPOINT_LOGICGP)" ]; then \
-		echo "LogicGP-Checkpoint: $(CHECKPOINT_LOGICGP)"; \
-		echo "Zeilen (fertige Laeufe): $$(wc -l < $(CHECKPOINT_LOGICGP))"; \
-		echo "Dateigroesse: $$(du -h $(CHECKPOINT_LOGICGP) | cut -f1)"; \
-		echo "Letzte 3 Laeufe:"; \
-		tail -3 $(CHECKPOINT_LOGICGP) | python -m json.tool --compact 2>/dev/null || tail -3 $(CHECKPOINT_LOGICGP); \
-	else \
-		echo "Kein LogicGP-Checkpoint vorhanden: $(CHECKPOINT_LOGICGP)"; \
 	fi
 
 # ---------------------------------------------------------------------------
