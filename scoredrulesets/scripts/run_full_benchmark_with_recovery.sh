@@ -10,5 +10,5 @@ if [ -f ".venv/bin/activate" ]; then
   source ".venv/bin/activate"
 fi
 
-python examples/benchmark_full_report_with_recovery.py "$@"
+python3 examples/benchmark_full_report.py "$@"
 

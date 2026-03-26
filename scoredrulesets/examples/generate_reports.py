@@ -10,10 +10,10 @@ werden, ohne die Benchmarks erneut zu laufen. Dies ist nützlich für:
 - Verschiedene Report-Formate
 
 Aufruf:
-    python examples/generate_reports.py slim
+    python examples/generate_reports.py normal-lite
     python examples/generate_reports.py standard
     python examples/generate_reports.py full
-    python examples/generate_reports.py --input-dir benchmarks/slim --output-dir benchmarks/slim
+    python examples/generate_reports.py --input-dir benchmarks/normal_lite --output-dir benchmarks/normal_lite
 """
 from __future__ import annotations
 
@@ -215,8 +215,8 @@ def main():
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=["slim", "standard", "full"],
-        help="Vordefinierter Mode (slim/standard/full) oder --input-dir verwenden",
+        choices=["normal-lite", "standard", "full"],
+        help="Vordefinierter Mode (normal-lite/standard/full) oder --input-dir verwenden",
     )
     
     # Custom Directories
@@ -252,13 +252,18 @@ def main():
         output_dir = args.output_dir or input_dir
     elif args.mode:
         mode = args.mode
-        input_dir = Path("benchmarks") / mode
+        mode_to_dir = {
+            "normal-lite": "normal_lite",
+            "standard": "standard",
+            "full": "full",
+        }
+        input_dir = Path("benchmarks") / mode_to_dir[mode]
         output_dir = args.output_dir or input_dir
         
         # Set defaults for mode
-        if mode == "slim":
-            args.title = "ScoredRuleSets Slim Benchmark – Maximale Typ-Diskriminierung"
-            args.design = "10 Datasets mit hoechster Typ-Diskriminierung (TypeSpread ≥ 0.39), 13 Schaetzer"
+        if mode == "normal-lite":
+            args.title = "ScoredRuleSets Normal-Lite Benchmark"
+            args.design = "10 Datasets, voller Estimator-Katalog (ohne MUX), reduzierte Repeats"
         elif mode == "standard":
             args.title = "ScoredRuleSets Standard Benchmark"
             args.design = "10 reale Datasets, breite Schaetzer-Auswahl"

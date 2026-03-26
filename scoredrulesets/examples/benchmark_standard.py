@@ -1,12 +1,11 @@
 """Standard-Benchmark: Alle Schaetzer-Varianten auf ausgewaehlten Datensaetzen.
 
 Kombination aus dem vollen Schaetzer-Katalog (wie ``benchmark_full_report``)
-und der schlanken Datensatz-Auswahl (wie ``benchmark_slim_discriminability``).
+und einer fokussierten Datensatz-Auswahl.
 
 - **Estimators:** Alle aus ``default_estimator_specs()`` abzueglich
   MUX-spezifischer Varianten (identisch mit dem Full-Benchmark).
-- **Datasets:** 10 Datensaetze mit hoechster Typ-Diskriminierung
-  (identisch mit dem Slim-Benchmark).
+- **Datasets:** 10 Datensaetze mit hoechster Typ-Diskriminierung.
 
 Damit koennen alle Schaetzer-Varianten direkt verglichen werden,
 ohne die Laufzeit des Full-Benchmarks (mit allen Datensaetzen) in Kauf
@@ -53,7 +52,7 @@ from scoredrulesets.benchmarking.estimators import default_estimator_specs
 from scoredrulesets.benchmarking.runner import results_as_dicts
 
 # ---------------------------------------------------------------------------
-# Dataset-Auswahl (identisch mit Slim-Benchmark)
+# Dataset-Auswahl (fokussierte Auswahl mit hoher Typ-Diskriminierung)
 # ---------------------------------------------------------------------------
 # 10 Datensaetze mit hoechster Typ-Diskriminierung (TypeSpread >= 0.39),
 # plus ein realer UCI-Multiclass-Datensatz.
@@ -155,6 +154,9 @@ def main(
     repeats: int = 3,
     timeout_seconds: float | None = 300.0,
     checkpoint_path: str | Path | None = "benchmarks/checkpoint_standard.jsonl",
+    output_dir: str | Path = "benchmarks/standard",
+    console_title: str = "STANDARD BENCHMARK: Alle Schaetzer, ausgewaehlte Datensaetze",
+    report_title: str = "ScoredRuleSets Standard Benchmark – Alle Schaetzer, ausgewaehlte Datensaetze",
 ):
     """Fuehrt den Standard-Benchmark aus und erzeugt alle Reports."""
 
@@ -168,7 +170,7 @@ def main(
     total_runs = len(ds_names) * len(est_names) * repeats
 
     print("=" * 70)
-    print("STANDARD BENCHMARK: Alle Schaetzer, ausgewaehlte Datensaetze")
+    print(console_title)
     print("=" * 70)
     print(f"  Datensaetze ({len(ds_names):2d}): {dn_display}")
     print(f"  Schaetzer   ({len(est_names):2d}): {en_display}")
@@ -179,7 +181,7 @@ def main(
     print("=" * 70)
 
     # Ausgabeverzeichnis
-    out_dir = Path("benchmarks") / "standard"
+    out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     config = BenchmarkConfig(
@@ -246,7 +248,7 @@ def main(
     # Markdown-Report
     md_report = format_benchmark_report_markdown(
         leaderboard,
-        title="ScoredRuleSets Standard Benchmark – Alle Schaetzer, ausgewaehlte Datensaetze",
+        title=report_title,
         config={
             "datasets": dn_display,
             "estimators": en_display,
@@ -285,7 +287,7 @@ def main(
 
     html_report = format_benchmark_report_html(
         leaderboard,
-        title="ScoredRuleSets Standard Benchmark – Alle Schaetzer, ausgewaehlte Datensaetze",
+        title=report_title,
         config={
             "datasets": dn_display,
             "estimators": en_display,
@@ -374,6 +376,10 @@ if __name__ == "__main__":
         help="Checkpoint-Datei fuer Resume (default: benchmarks/checkpoint_standard.jsonl).",
     )
     parser.add_argument(
+        "--output-dir", type=str, default="benchmarks/standard",
+        help="Ausgabeverzeichnis fuer Reports/Artefakte (default: benchmarks/standard).",
+    )
+    parser.add_argument(
         "--no-checkpoint", action="store_true",
         help="Checkpoint/Resume deaktivieren.",
     )
@@ -400,5 +406,6 @@ if __name__ == "__main__":
             repeats=args.repeats,
             timeout_seconds=timeout,
             checkpoint_path=ckpt,
+            output_dir=args.output_dir,
         )
 

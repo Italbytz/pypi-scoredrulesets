@@ -1,12 +1,13 @@
 .PHONY: help benchmark benchmark-resume benchmark-recover benchmark-clean benchmark-status recover-latest \
        benchmark-standard benchmark-standard-resume benchmark-standard-clean benchmark-standard-status \
-       benchmark-slim benchmark-slim-resume benchmark-slim-clean benchmark-slim-status \
+	benchmark-normal benchmark-normal-resume benchmark-normal-clean benchmark-normal-status \
+	benchmark-normal-lite benchmark-normal-lite-resume benchmark-normal-lite-clean benchmark-normal-lite-status \
        benchmark-logicgp benchmark-logicgp-clean benchmark-logicgp-status \
-       reports-slim reports-standard reports-full
+	reports-normal reports-normal-lite reports-standard reports-full
 
 CHECKPOINT ?= benchmarks/checkpoint.jsonl
 CHECKPOINT_STANDARD ?= benchmarks/checkpoint_standard.jsonl
-CHECKPOINT_SLIM ?= benchmarks/checkpoint_slim.jsonl
+CHECKPOINT_NORMAL_LITE ?= benchmarks/checkpoint_normal_lite.jsonl
 CHECKPOINT_LOGICGP ?= benchmarks/checkpoint_logicgp.jsonl
 TIMEOUT    ?= 300
 REPEATS    ?= 3
@@ -23,17 +24,18 @@ help:
 	@echo ""
 	@echo "Standard-Benchmark-Targets (alle Schaetzer, 10 Datasets):"
 	@echo "  make benchmark-standard          - Einmaliger Standard-Report (mit Checkpoint/Resume)"
+	@echo "  make benchmark-normal            - Alias fuer benchmark-standard"
 	@echo "  make benchmark-standard-resume   - Startet/setzt Standard-Benchmark fort"
 	@echo "                                     (max $(MAX_ATTEMPTS) Versuche, Checkpoint: $(CHECKPOINT_STANDARD))"
 	@echo "  make benchmark-standard-clean    - Loescht Standard-Checkpoint und startet von vorne"
 	@echo "  make benchmark-standard-status   - Zeigt Standard-Checkpoint-Status (fertige Laeufe)"
 	@echo ""
-	@echo "Slim-Benchmark-Targets (9 Schaetzer, 10 Datasets):"
-	@echo "  make benchmark-slim          - Einmaliger Slim-Report (mit Checkpoint/Resume)"
-	@echo "  make benchmark-slim-resume   - Startet/setzt Slim-Benchmark fort"
-	@echo "                                 (max $(MAX_ATTEMPTS) Versuche, Checkpoint: $(CHECKPOINT_SLIM))"
-	@echo "  make benchmark-slim-clean    - Loescht Slim-Checkpoint und startet von vorne"
-	@echo "  make benchmark-slim-status   - Zeigt Slim-Checkpoint-Status (fertige Laeufe)"
+	@echo "Normal-Lite-Benchmark-Targets (alle Schaetzer, 10 Datasets, reduzierte Repeats):"
+	@echo "  make benchmark-normal-lite        - Einmaliger Normal-Lite-Report"
+	@echo "  make benchmark-normal-lite-resume - Startet/setzt Normal-Lite-Benchmark fort"
+	@echo "                                       (Checkpoint: $(CHECKPOINT_NORMAL_LITE))"
+	@echo "  make benchmark-normal-lite-clean  - Loescht Normal-Lite-Checkpoint und startet von vorne"
+	@echo "  make benchmark-normal-lite-status - Zeigt Normal-Lite-Checkpoint-Status"
 	@echo ""
 	@echo "LogicGP-Varianten-Benchmark (12 Varianten, 9 Datasets):"
 	@echo "  make benchmark-logicgp       - LogicGP-Varianten-Benchmark mit Paarvergleich"
@@ -41,24 +43,25 @@ help:
 	@echo "  make benchmark-logicgp-status- Zeigt LogicGP-Checkpoint-Status"
 	@echo ""
 	@echo "Report-Generierung (aus existierenden Ergebnissen):"
-	@echo "  make reports-slim            - Regeneriere Reports fuer Slim-Benchmark"
+	@echo "  make reports-normal          - Alias fuer reports-standard"
+	@echo "  make reports-normal-lite     - Regeneriere Reports fuer Normal-Lite-Benchmark"
 	@echo "  make reports-standard        - Regeneriere Reports fuer Standard-Benchmark"
 	@echo "  make reports-full            - Regeneriere Reports fuer Full-Benchmark"
 	@echo ""
 	@echo "Optionen (als Variablen):"
-	@echo "  CHECKPOINT=path.jsonl  CHECKPOINT_STANDARD=path.jsonl  CHECKPOINT_SLIM=path.jsonl"
+	@echo "  CHECKPOINT=path.jsonl  CHECKPOINT_STANDARD=path.jsonl  CHECKPOINT_NORMAL_LITE=path.jsonl"
 	@echo "  TIMEOUT=300  REPEATS=3  MAX_ATTEMPTS=5"
 	@echo "  ARGS='--datasets cart_hard --estimators wrapper_cart,gp'"
 
 benchmark:
-	./scripts/run_full_benchmark_with_recovery.sh \
+	bash scripts/run_full_benchmark_with_recovery.sh \
 		--checkpoint $(CHECKPOINT) \
 		--timeout $(TIMEOUT) \
 		--repeats $(REPEATS) \
 		$(ARGS)
 
 benchmark-resume:
-	./scripts/run_full_benchmark_with_recovery.sh \
+	bash scripts/run_full_benchmark_with_recovery.sh \
 		--max-attempts $(MAX_ATTEMPTS) \
 		--checkpoint $(CHECKPOINT) \
 		--timeout $(TIMEOUT) \
@@ -91,14 +94,14 @@ recover-latest:
 # ---------------------------------------------------------------------------
 
 benchmark-standard:
-	./scripts/run_standard_benchmark_with_recovery.sh \
+	bash scripts/run_standard_benchmark_with_recovery.sh \
 		--checkpoint $(CHECKPOINT_STANDARD) \
 		--timeout $(TIMEOUT) \
 		--repeats $(REPEATS) \
 		$(ARGS)
 
 benchmark-standard-resume:
-	./scripts/run_standard_benchmark_with_recovery.sh \
+	bash scripts/run_standard_benchmark_with_recovery.sh \
 		--max-attempts $(MAX_ATTEMPTS) \
 		--checkpoint $(CHECKPOINT_STANDARD) \
 		--timeout $(TIMEOUT) \
@@ -121,39 +124,43 @@ benchmark-standard-status:
 		echo "Kein Standard-Checkpoint vorhanden: $(CHECKPOINT_STANDARD)"; \
 	fi
 
+benchmark-normal: benchmark-standard
+benchmark-normal-resume: benchmark-standard-resume
+benchmark-normal-clean: benchmark-standard-clean
+benchmark-normal-status: benchmark-standard-status
+
 # ---------------------------------------------------------------------------
-# Slim-Benchmark (9 Schaetzer, 10 Datasets – maximale Typ-Diskriminierung)
+# Normal-Lite-Benchmark (alle Schaetzer, 10 Datasets, weniger Repeats)
 # ---------------------------------------------------------------------------
 
-benchmark-slim:
-	./scripts/run_slim_benchmark_with_recovery.sh \
-		--checkpoint $(CHECKPOINT_SLIM) \
+benchmark-normal-lite:
+	bash scripts/run_normal_lite_benchmark_with_recovery.sh \
+		--checkpoint $(CHECKPOINT_NORMAL_LITE) \
 		--timeout $(TIMEOUT) \
-		--repeats $(REPEATS) \
+		--repeats 2 \
 		$(ARGS)
 
-benchmark-slim-resume:
-	./scripts/run_slim_benchmark_with_recovery.sh \
-		--max-attempts $(MAX_ATTEMPTS) \
-		--checkpoint $(CHECKPOINT_SLIM) \
+benchmark-normal-lite-resume:
+	bash scripts/run_normal_lite_benchmark_with_recovery.sh \
+		--checkpoint $(CHECKPOINT_NORMAL_LITE) \
 		--timeout $(TIMEOUT) \
-		--repeats $(REPEATS) \
+		--repeats 2 \
 		$(ARGS)
 
-benchmark-slim-clean:
-	@echo "Loesche Slim-Checkpoint: $(CHECKPOINT_SLIM)"
-	rm -f $(CHECKPOINT_SLIM)
-	@echo "Fertig. Naechster 'make benchmark-slim' startet von vorne."
+benchmark-normal-lite-clean:
+	@echo "Loesche Normal-Lite-Checkpoint: $(CHECKPOINT_NORMAL_LITE)"
+	rm -f $(CHECKPOINT_NORMAL_LITE)
+	@echo "Fertig. Naechster 'make benchmark-normal-lite' startet von vorne."
 
-benchmark-slim-status:
-	@if [ -f "$(CHECKPOINT_SLIM)" ]; then \
-		echo "Slim-Checkpoint: $(CHECKPOINT_SLIM)"; \
-		echo "Zeilen (fertige Laeufe): $$(wc -l < $(CHECKPOINT_SLIM))"; \
-		echo "Dateigroesse: $$(du -h $(CHECKPOINT_SLIM) | cut -f1)"; \
+benchmark-normal-lite-status:
+	@if [ -f "$(CHECKPOINT_NORMAL_LITE)" ]; then \
+		echo "Normal-Lite-Checkpoint: $(CHECKPOINT_NORMAL_LITE)"; \
+		echo "Zeilen (fertige Laeufe): $$(wc -l < $(CHECKPOINT_NORMAL_LITE))"; \
+		echo "Dateigroesse: $$(du -h $(CHECKPOINT_NORMAL_LITE) | cut -f1)"; \
 		echo "Letzte 3 Laeufe:"; \
-		tail -3 $(CHECKPOINT_SLIM) | python -m json.tool --compact 2>/dev/null || tail -3 $(CHECKPOINT_SLIM); \
+		tail -3 $(CHECKPOINT_NORMAL_LITE) | python -m json.tool --compact 2>/dev/null || tail -3 $(CHECKPOINT_NORMAL_LITE); \
 	else \
-		echo "Kein Slim-Checkpoint vorhanden: $(CHECKPOINT_SLIM)"; \
+		echo "Kein Normal-Lite-Checkpoint vorhanden: $(CHECKPOINT_NORMAL_LITE)"; \
 	fi
 
 # ---------------------------------------------------------------------------
@@ -189,9 +196,11 @@ benchmark-logicgp-status:
 # Nach einem fertigen Benchmark können Reports unabhängig neu erstellt werden.
 # Nützlich für: neue Layouts, andere Aggregationsmethoden, Dokumentation update.
 
-reports-slim:
-	@echo "Regeneriere Reports fuer Slim-Benchmark..."
-	python3 -u examples/generate_reports.py slim
+reports-normal-lite:
+	@echo "Regeneriere Reports fuer Normal-Lite-Benchmark..."
+	python3 -u examples/generate_reports.py normal-lite
+
+reports-normal: reports-standard
 
 reports-standard:
 	@echo "Regeneriere Reports fuer Standard-Benchmark..."
