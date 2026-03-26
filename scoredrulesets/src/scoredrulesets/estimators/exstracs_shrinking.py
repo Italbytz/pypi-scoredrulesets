@@ -7,6 +7,8 @@ Dieser Modul bietet Algorithmen zur Reduktion von ExSTraCS Rule-Populationen:
 2. Aggressive Rule Pruning: Mit Validierungs-Daten, akzeptiert leichte F1-Verluste
 3. Rule Filtering: Entfernt schwache Regeln basierend auf Fitness/Score
 4. Rule Consolidation: Mergt ähnliche Regeln
+5. Lossy Rule Compaction (LRC): Interval-Merge + Conservative Pruning –
+   nicht-äquivalente Kompaktierung mit typischerweise geringem F1-Verlust
 """
 
 from __future__ import annotations
@@ -38,11 +40,13 @@ class ExSTraCSPruningParams:
     consolidate_similar: bool = False
     similarity_threshold: float = 0.8  # Merge wenn > 80% ähnlich
 
-    # Interval-Merge: Nicht-aequivalente Kompaktierung durch Zusammenfassung
-    # von Regeln mit ueberlappenden Feature-Intervallen und gleicher Klasse.
-    # Scores werden aufsummiert (fitness × numerosity), Intervalle vereinigt.
+    # Lossy Rule Compaction (LRC): Nicht-aequivalente Kompaktierung durch
+    # Zusammenfassung von Regeln mit ueberlappenden Feature-Intervallen und
+    # gleicher Klasse. Scores werden aufsummiert (fitness × numerosity),
+    # Intervalle vereinigt. Typischerweise 0–6 % F1-Verlust bei 29–98 %
+    # Reduktion der Regelanzahl.
     interval_merge: bool = False
-    interval_merge_iou_threshold: float = 0.3  # Minimale IoU fuer Merge
+    interval_merge_iou_threshold: float = 0.3  # Minimale IoU fuer Merge (LRC)
 
     # Sicherheitslimits fuer grosse Populationen
     max_pruning_seconds: float = 120.0  # Timeout fuer Pruning-Schleifen (Sekunden)
@@ -414,8 +418,8 @@ def exstracs_apply_all_shrinking(
 
 
 # ---------------------------------------------------------------------------
-# Interval-Merge: Nicht-aequivalente Kompaktierung durch Zusammenfassung
-# von Regeln mit ueberlappenden Feature-Intervallen
+# Lossy Rule Compaction (LRC): Nicht-aequivalente Kompaktierung durch
+# Zusammenfassung von Regeln mit ueberlappenden Feature-Intervallen
 # ---------------------------------------------------------------------------
 
 
@@ -423,7 +427,7 @@ def exstracs_merge_intervals(
     ruleset: ScoredRuleSet,
     iou_threshold: float = 0.3,
 ) -> ScoredRuleSet:
-    """Kompaktiere ExSTraCS-Regelmenge durch Zusammenfassung intervall-aehnlicher Regeln.
+    """Lossy Rule Compaction (LRC): Kompaktiere ExSTraCS-Regelmenge durch Zusammenfassung intervall-aehnlicher Regeln.
 
     Kernidee:
     1. Regeln werden nach *Klasse* (argmax der Scores) und *Feature-Schema*

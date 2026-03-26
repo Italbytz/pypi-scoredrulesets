@@ -130,7 +130,7 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        # -- ExSTraCS compact: interval merge + conservative (0–6% F1 loss, 29–98% reduction) --
+        # -- ExSTraCS + Lossy Rule Compaction (LRC): interval merge + conservative pruning (0–6% F1 loss, 29–98% reduction) --
         "wrapper_exstracs_compact": EstimatorSpec(
             name="wrapper_exstracs_compact",
             factory=lambda: ScoredRuleSetClassifier(
