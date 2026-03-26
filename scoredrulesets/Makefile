@@ -1,7 +1,8 @@
 .PHONY: help benchmark benchmark-resume benchmark-recover benchmark-clean benchmark-status recover-latest \
        benchmark-standard benchmark-standard-resume benchmark-standard-clean benchmark-standard-status \
        benchmark-slim benchmark-slim-resume benchmark-slim-clean benchmark-slim-status \
-       benchmark-logicgp benchmark-logicgp-clean benchmark-logicgp-status
+       benchmark-logicgp benchmark-logicgp-clean benchmark-logicgp-status \
+       reports-slim reports-standard reports-full
 
 CHECKPOINT ?= benchmarks/checkpoint.jsonl
 CHECKPOINT_STANDARD ?= benchmarks/checkpoint_standard.jsonl
@@ -38,6 +39,11 @@ help:
 	@echo "  make benchmark-logicgp       - LogicGP-Varianten-Benchmark mit Paarvergleich"
 	@echo "  make benchmark-logicgp-clean - Loescht LogicGP-Checkpoint und startet von vorne"
 	@echo "  make benchmark-logicgp-status- Zeigt LogicGP-Checkpoint-Status"
+	@echo ""
+	@echo "Report-Generierung (aus existierenden Ergebnissen):"
+	@echo "  make reports-slim            - Regeneriere Reports fuer Slim-Benchmark"
+	@echo "  make reports-standard        - Regeneriere Reports fuer Standard-Benchmark"
+	@echo "  make reports-full            - Regeneriere Reports fuer Full-Benchmark"
 	@echo ""
 	@echo "Optionen (als Variablen):"
 	@echo "  CHECKPOINT=path.jsonl  CHECKPOINT_STANDARD=path.jsonl  CHECKPOINT_SLIM=path.jsonl"
@@ -176,4 +182,22 @@ benchmark-logicgp-status:
 	else \
 		echo "Kein LogicGP-Checkpoint vorhanden: $(CHECKPOINT_LOGICGP)"; \
 	fi
+
+# ---------------------------------------------------------------------------
+# Report-Generierung (aus existierenden Benchmark-Ergebnissen)
+# ---------------------------------------------------------------------------
+# Nach einem fertigen Benchmark können Reports unabhängig neu erstellt werden.
+# Nützlich für: neue Layouts, andere Aggregationsmethoden, Dokumentation update.
+
+reports-slim:
+	@echo "Regeneriere Reports fuer Slim-Benchmark..."
+	python3 -u examples/generate_reports.py slim
+
+reports-standard:
+	@echo "Regeneriere Reports fuer Standard-Benchmark..."
+	python3 -u examples/generate_reports.py standard
+
+reports-full:
+	@echo "Regeneriere Reports fuer Full-Benchmark..."
+	python3 -u examples/generate_reports.py full
 
