@@ -53,8 +53,10 @@ class _Individual:
     """A full rule set individual: list of rule-genes + cached fitness."""
     rules: list[_RuleGene]
     fitness_f1: float = -1.0
-    fitness_complexity: int = 999_999
 
+    fitness_complexity: int = 999_999
+    fitness_best_class: int = 0
+    fitness_class_f1: np.ndarray = field(default_factory=lambda: np.array([]))
     @property
     def total_atoms(self) -> int:
         return sum(len(r.atoms) for r in self.rules)
@@ -105,7 +107,15 @@ def _fast_nondominated_sort(pop: list[_Individual]) -> list[list[int]]:
 
 
 def _dominates(a: _Individual, b: _Individual) -> bool:
-    """a dominates b: a is >= on all objectives and > on at least one."""
+    """Class-bound Pareto dominance (RLCW-style).
+
+    A dominates B only if they share the same best-predicted class,
+    A is at least as good on both objectives, and strictly better on at
+    least one.  This creates per-class niches and encourages the population
+    to maintain class-diverse solutions.
+    """
+    if a.fitness_best_class != b.fitness_best_class:
+        return False
     f1_ge = a.fitness_f1 >= b.fitness_f1 - 1e-12
     cx_ge = a.fitness_complexity <= b.fitness_complexity
     f1_gt = a.fitness_f1 > b.fitness_f1 + 1e-12
@@ -412,20 +422,24 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         pop: list[_Individual] = []
         n_init = max(2, self.population_size)
 
-        # (a) Class-discriminative seeds: one rule per class
+        # (a) Systematic single-atom seeds (analogous to logicGP's per-literal seeding)
+        for ind in self._seed_systematic(specs, X, y, n_classes, rng):
+            pop.append(ind)
+
+        # (b) Class-discriminative seeds: one rule per class
         for _ in range(min(n_init // 4, n_classes * 2)):
             ind = self._seed_class_discriminative(specs, X, y, n_classes, rng)
             if ind is not None:
                 self._refit_scores(ind, X, y, n_classes)
                 pop.append(ind)
 
-        # (b) Greedy sequential-cover seed
+        # (c) Greedy sequential-cover seed
         for _ in range(min(3, n_init // 4)):
             ind = self._seed_greedy_cover(specs, X, y, n_classes, rng)
             self._refit_scores(ind, X, y, n_classes)
             pop.append(ind)
 
-        # (c) Random individuals
+        # (d) Random individuals to fill the rest
         while len(pop) < n_init:
             ind = self._random_individual(specs, rng)
             self._refit_scores(ind, X, y, n_classes)
@@ -471,11 +485,85 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     iv = ivs[int(rng.integers(0, len(ivs)))]
                     return _AtomGene(fi, "between", [float(iv[0]), float(iv[1])])
                 if op == "==":
-                    return _AtomGene(fi, "==", cats[int(rng.integers(0, len(cats)))])
+                    k = len(cats)
+                    if k >= 3 and rng.random() < 0.4:
+                        # Random non-trivial subset (analogous to logicGP SetLiterals)
+                        subset_size = int(rng.integers(2, k))
+                        idxs = rng.choice(k, size=subset_size, replace=False)
+                        chosen = sorted([cats[int(i)] for i in idxs])
+                        return _AtomGene(fi, "in", chosen)
+                    return _AtomGene(fi, "==", cats[int(rng.integers(0, k))])
         cats = spec.get("categories", [])
+        k = len(cats)
         if cats:
-            return _AtomGene(fi, "==", cats[int(rng.integers(0, len(cats)))])
+            if k >= 3 and rng.random() < 0.4:
+                # Random non-trivial subset (analogous to logicGP SetLiterals)
+                subset_size = int(rng.integers(2, k))
+                idxs = rng.choice(k, size=subset_size, replace=False)
+                chosen = sorted([cats[int(i)] for i in idxs])
+                return _AtomGene(fi, "in", chosen)
+            return _AtomGene(fi, "==", cats[int(rng.integers(0, k))])
         return _AtomGene(fi, ">", 0.0)
+
+    def _seed_systematic(
+        self,
+        specs: list[dict],
+        X: np.ndarray,
+        y: np.ndarray,
+        n_classes: int,
+        rng: np.random.Generator,
+    ) -> list[_Individual]:
+        """One single-rule individual per representative atom (analogous to logicGP's
+        per-literal seeding).  For each feature, picks at most 2 atoms with the
+        highest discriminative lift and creates a single-atom-rule individual.
+        """
+        seeds: list[_Individual] = []
+        class_counts = np.bincount(y, minlength=n_classes).astype(float)
+        class_counts = np.maximum(class_counts, 1.0)
+
+        for spec in specs:
+            fi = spec["idx"]
+            candidate_atoms: list[_AtomGene] = []
+
+            if spec["kind"] in ("num", "both"):
+                thr = spec.get("thresholds", [])
+                if thr:
+                    # At most 3 evenly spaced thresholds
+                    idxs = np.round(np.linspace(0, len(thr) - 1, min(3, len(thr)))).astype(int)
+                    for i in idxs:
+                        candidate_atoms.append(_AtomGene(fi, "<=", float(thr[i])))
+                        candidate_atoms.append(_AtomGene(fi, ">", float(thr[i])))
+                ivs = spec.get("intervals", [])
+                if ivs:
+                    mid = len(ivs) // 2
+                    candidate_atoms.append(
+                        _AtomGene(fi, "between", [float(ivs[mid][0]), float(ivs[mid][1])])
+                    )
+
+            if spec["kind"] in ("cat", "both"):
+                cats = spec.get("categories", [])
+                for cat in cats[:4]:
+                    candidate_atoms.append(_AtomGene(fi, "==", cat))
+
+            # Score atoms by discriminative lift (max class balanced-weight above uniform)
+            scored: list[tuple[float, _AtomGene]] = []
+            for atom in candidate_atoms:
+                mask = self._atom_mask(atom, X)
+                support = int(mask.sum())
+                if support < self.min_samples_leaf:
+                    continue
+                counts = np.bincount(y[mask], minlength=n_classes).astype(float)
+                balanced = counts / class_counts
+                lift = float(balanced.max() - 1.0 / n_classes)
+                scored.append((lift, atom))
+
+            scored.sort(key=lambda x: x[0], reverse=True)
+            for _, atom in scored[:2]:  # top-2 per feature
+                ind = _Individual(rules=[_RuleGene(atoms=[atom])])
+                self._refit_scores(ind, X, y, n_classes)
+                seeds.append(ind)
+
+        return seeds
 
     def _seed_class_discriminative(
         self,
@@ -578,12 +666,19 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         y: np.ndarray,
         n_classes: int,
     ) -> None:
-        """Compute fitness: F1-macro and total atom count."""
+        """Compute fitness: F1-macro, per-class F1, best-class, and total atom count."""
         preds = self._predict_individual(ind, X, n_classes)
         try:
             ind.fitness_f1 = float(f1_score(y, preds, average="macro", zero_division=0))
+            class_f1 = f1_score(
+                y, preds, average=None, zero_division=0, labels=list(range(n_classes))
+            )
+            ind.fitness_class_f1 = np.asarray(class_f1, dtype=float)
+            ind.fitness_best_class = int(np.argmax(class_f1)) if len(class_f1) > 0 else 0
         except Exception:
             ind.fitness_f1 = 0.0
+            ind.fitness_class_f1 = np.zeros(n_classes, dtype=float)
+            ind.fitness_best_class = 0
         ind.fitness_complexity = ind.total_atoms
 
     def _predict_individual(
