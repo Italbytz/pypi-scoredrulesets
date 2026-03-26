@@ -174,7 +174,7 @@ def plot_benchmark_heatmap(
     fig_height = max(4.5, 1.2 + 0.8 * len(dataset_names))
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
-    cmap = plt.get_cmap("plasma").copy()
+    cmap = plt.get_cmap("viridis").copy()
     cmap.set_bad(color="#e5e7eb")
     im = ax.imshow(np.ma.masked_invalid(matrix), cmap=cmap, vmin=0.0, vmax=1.0, aspect="auto")
 
@@ -435,7 +435,7 @@ def plot_benchmark_heatmap_combined(
             fit_vals.append(float(r.fit_seconds_mean))
 
     # Colour map & norms  ──────────────────────────────────────────────────
-    combined_cmap = plt.colormaps["plasma"]
+    combined_cmap = plt.colormaps["viridis"]
     f1_norm = Normalize(vmin=0.0, vmax=1.0)
 
     atom_norm = _build_positive_log_norm(atom_vals, min_floor=1.0, default_max=100.0)
@@ -718,6 +718,14 @@ def plot_combined_dot(
     for r in aggregated:
         lookup[(r.dataset, r.estimator)] = r
 
+    size_mean_col = f"{size_metric}_mean"
+    size_err_col = f"{size_metric}_error"
+    all_size_values = [
+        float(getattr(r, size_mean_col))
+        for r in aggregated
+        if getattr(r, size_mean_col) is not None
+    ]
+
     # Figure layout
     fig_width = max(10.0, 6.0 + 0.4 * n_estimators)
     fig_height = max(4.0, 1.2 * n_datasets)
@@ -735,9 +743,6 @@ def plot_combined_dot(
     )
 
     estimator_colors = _estimator_color_map(estimator_names)
-
-    size_mean_col = f"{size_metric}_mean"
-    size_err_col = f"{size_metric}_error"
 
     for idx, est in enumerate(estimator_names):
         color = estimator_colors.get(est, "#4b5563")
@@ -791,6 +796,19 @@ def plot_combined_dot(
     ax_f1.set_axisbelow(True)
 
     ax_size.set_xscale("symlog", linthresh=1.0, linscale=1.0)
+    if all_size_values:
+        xmax = max(all_size_values) * 1.05
+        ax_size.set_xlim(left=0.0, right=xmax)
+        tick_candidates = [0.0, 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]
+        tick_values = [tick for tick in tick_candidates if tick <= xmax]
+        if len(tick_values) < 2:
+            tick_values = [0.0, max(1.0, xmax)]
+        ax_size.set_xticks(tick_values)
+        ax_size.set_xticklabels([f"{int(tick)}" if tick >= 1 else "0" for tick in tick_values])
+    else:
+        ax_size.set_xlim(left=0.0)
+        ax_size.set_xticks([0.0, 1.0])
+        ax_size.set_xticklabels(["0", "1"])
     ax_size.set_xlabel(f"{size_metric} (mean ± std)", fontsize=10)
     ax_size.grid(axis="x", alpha=0.3)
     ax_size.set_axisbelow(True)
@@ -892,9 +910,7 @@ def plot_pareto_front(
                 labels_pareto.append(r.estimator)
 
         # All estimators (grey)
-        ax.scatter(x_all, y_all, s=50, c="lightgray", edgecolors="gray", zorder=2)
-        for xv, yv, lbl in zip(x_all, y_all, labels_all):
-            ax.annotate(lbl, (xv, yv), textcoords="offset points", xytext=(4, 4), fontsize=6, color="gray")
+        ax.scatter(x_all, y_all, s=50, c="lightgray", edgecolors="gray", alpha=0.75, zorder=2)
 
         # Pareto-optimal (red, larger)
         ax.scatter(x_pareto, y_pareto, s=120, c="tomato", edgecolors="darkred", zorder=3, label="Pareto-optimal")
@@ -925,6 +941,18 @@ def plot_pareto_front(
         ax.grid(True, alpha=0.3)
         if x_all:
             ax.set_xscale("symlog", linthresh=1.0, linscale=1.0)
+            xmax = max(x_all) * 1.05
+            ax.set_xlim(left=0.0, right=xmax)
+            tick_candidates = [0.0, 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]
+            tick_values = [tick for tick in tick_candidates if tick <= xmax]
+            if len(tick_values) < 2:
+                tick_values = [0.0, max(1.0, xmax)]
+            ax.set_xticks(tick_values)
+            ax.set_xticklabels([f"{int(tick)}" if tick >= 1 else "0" for tick in tick_values])
+        else:
+            ax.set_xlim(left=0.0)
+            ax.set_xticks([0.0, 1.0])
+            ax.set_xticklabels(["0", "1"])
 
     for ax in axes[len(dataset_names):]:
         ax.set_visible(False)
