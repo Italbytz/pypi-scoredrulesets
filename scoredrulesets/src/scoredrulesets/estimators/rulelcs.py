@@ -325,10 +325,14 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
             if remaining_train_idx.size == 0:
                 break
 
-        # Recompute default rule on residual (BioHEL-style dynamic default)
-        if remaining_train_idx.size > 0:
-            residual_counts = np.bincount(y_idx[remaining_train_idx], minlength=n_classes).astype(float)
-            self._default_scores_ = self._distribution_to_scores(residual_counts)
+        # NOTE: _default_scores_ is deliberately NOT recomputed from the
+        # residual here.  The default rule has empty atoms and fires as an
+        # additive baseline for *all* examples via argmax_sum, not just
+        # uncovered ones.  Overwriting it with the (heavily skewed) residual
+        # distribution would corrupt the global prior and cause the model to
+        # predict only the residual's majority class on every sample.  The
+        # full-training-set prior set at the start of fit() is the correct
+        # baseline to keep.
 
         return selected_rules, total_iterations
 

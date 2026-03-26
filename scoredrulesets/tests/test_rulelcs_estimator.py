@@ -488,3 +488,69 @@ class TestRuleLCSLowCardinality:
         )
 
 
+class TestRuleLCSSequentialCoveringStability:
+    """Sequential covering must not degenerate on imbalanced or high-dim data.
+
+    Regression tests for the bug where _default_scores_ was overwritten with
+    the residual distribution after sequential covering.  This caused the model
+    to predict only the residual-majority class on every sample when the
+    residual became heavily skewed.
+    """
+
+    def test_sequential_covering_no_default_score_degeneration_imbalanced(self):
+        """strong profile (sequential_covering=True) must not degenerate on
+        imbalanced binary data (10 % minority).  macro-F1 should stay > 0.5."""
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import f1_score
+        from scoredrulesets.benchmarking.datasets import generate_imbalanced_dataset
+
+        X, y = generate_imbalanced_dataset(
+            n_samples=600, n_features=10, n_informative=4,
+            imbalance_ratio=0.1, random_state=0,
+        )
+        X_tr, X_te, y_tr, y_te = train_test_split(
+            X, y, test_size=0.3, random_state=0, stratify=y,
+        )
+        clf = RuleLCSClassifier(
+            max_rules=8, min_samples_leaf=3, candidate_pool_size=32, beam_width=8,
+            max_iterations=16, validation_fraction=0.25,
+            sequential_covering=True, enable_compaction=True, random_state=0,
+        )
+        clf.fit(X_tr, y_tr)
+        y_pred = clf.predict(X_te)
+        f1 = f1_score(y_te, y_pred, average="macro", zero_division=0)
+
+        # default_scores must still reflect the full training prior, not the residual
+        default_rule = next(r for r in clf.to_ruleset().rules if not r.atoms)
+        majority_score = max(default_rule.scores)
+        assert majority_score < 0.95, (
+            f"default_scores appear to reflect the skewed residual, not the full prior: "
+            f"{default_rule.scores}"
+        )
+        assert f1 > 0.50, f"rulelcs_strong degenerated on imbalanced data: macro-F1={f1:.3f}"
+
+    def test_sequential_covering_breast_cancer_no_collapse(self):
+        """Regression: rulelcs_strong must not predict a single class on breast cancer."""
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import f1_score
+
+        X, y = load_breast_cancer(return_X_y=True)
+        X_tr, X_te, y_tr, y_te = train_test_split(
+            X, y, test_size=0.3, random_state=1000, stratify=y,
+        )
+        clf = RuleLCSClassifier(
+            max_rules=15, min_samples_leaf=3, candidate_pool_size=64, beam_width=16,
+            max_iterations=32, validation_fraction=0.25, complexity_penalty=0.001,
+            sequential_covering=True, enable_compaction=True, random_state=1000,
+        )
+        clf.fit(X_tr, y_tr)
+        y_pred = clf.predict(X_te)
+
+        # Must predict both classes (no single-class collapse)
+        predicted_classes = set(y_pred.tolist())
+        assert len(predicted_classes) >= 2, (
+            f"rulelcs_strong collapsed to single class {predicted_classes} on breast_cancer"
+        )
+        f1 = f1_score(y_te, y_pred, average="macro", zero_division=0)
+        assert f1 > 0.70, f"rulelcs_strong degenerated on breast_cancer: macro-F1={f1:.3f}"
+
