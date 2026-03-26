@@ -72,10 +72,10 @@ print(format_ruleset_table(ruleset))
 
 ## Examples
 
-See `examples/README.md` for runnable Pittsburgh backend demos:
+See `examples/README.md` for runnable demos:
 
-- direct estimator demo: `examples/example_pittsburgh_backend.py`
-- wrapper backend demo: `examples/example_pittsburgh_wrapper.py`
+- direct estimator demo: `examples/estimators/example_pittsburgh_backend.py`
+- wrapper backend demo: `examples/estimators/example_pittsburgh_wrapper.py`
 
 ## logicGP-Import
 
@@ -106,93 +106,32 @@ Der Pittsburgh-Lerner erzeugt je nach Datenlage Atome mit `<=`, `>`, `between`, 
 
 ## Benchmarking
 
-Benchmarking vergleicht die Estimatoren ueber:
+Die stabilen Entrypoints liegen unter `examples/benchmarks/` und sind ueber
+das Makefile gekapselt.
 
-- `f1_macro`
-- Modellgroesse (`n_rules`, `n_atoms`, `ruleset_json_bytes`)
-- Laufzeit (`fit_seconds`, `predict_seconds`)
-
-Datensaetze:
-
-- Standard: `sklearn_iris`, `sklearn_wine`, `sklearn_breast_cancer`
-- Optional lokal: CSV-Dateien aus `SCORERULESETS_UCI_DIR` (letzte Spalte = Ziel)
-- Paper-UCI-Katalog: via Alias `paper_uci` (nutzt verfuegbare Datensaetze aus dem Paper-Katalog)
-
-Beispielaufruf:
+Schnellstart:
 
 ```bash
-python examples/benchmark_runner.py \
-  --datasets sklearn_iris,sklearn_wine \
-  --estimators wrapper_cart,native,wrapper_hs \
-  --repeats 2 \
-  --aggregate-repeats \
-  --error-bar std \
-  --leaderboard-primary-metric f1_macro_mean \
-  --output-markdown benchmark_leaderboard.md \
-  --output-html benchmark_report.html \
-  --output-csv benchmark_results.csv \
-  --output-json benchmark_results.json \
-  --output-plot-base benchmark_results \
-  --plot-size-metric n_rules
+make benchmark
+make benchmark-standard
+make benchmark-normal-lite
 ```
 
-Paper-vergleichbarer Lauf (inkl. Paper-Split-Policy):
+Reports aus vorhandenen Ergebnissen regenerieren:
 
 ```bash
-python examples/benchmark_runner.py \
-  --paper-uci \
-  --paper-split-policy \
-  --estimators wrapper_cart,wrapper_hs,native \
-  --repeats 10 \
-  --aggregate-repeats \
-  --output-markdown benchmarks/2026-03-paper-uci/benchmark_report.md \
-  --output-csv benchmarks/2026-03-paper-uci/benchmark_results.csv \
-  --output-json benchmarks/2026-03-paper-uci/benchmark_results.json
+make reports-standard
+make reports-normal-lite
+make reports-full
 ```
 
-Hinweis: Der Alias `paper_uci` waehlt nur Datensaetze aus, die in deiner Registry verfuegbar sind.
-Fuer lokale UCI-CSVs setze `SCORERULESETS_UCI_DIR` auf ein Verzeichnis mit CSV-Dateien.
-Mit `--paper-uci-strict` faellt der Lauf sofort aus, wenn nicht alle 8 Paper-Datensaetze verfuegbar sind.
-Mit `--offline-uci` werden Online-Quellen (ucimlrepo/OpenML) deaktiviert.
-
-
-Dabei werden standardmaessig folgende Dateien geschrieben:
-
-- `benchmark_results.csv`
-- `benchmark_results.json`
-- `benchmark_results_aggregated.csv` (bei `--aggregate-repeats`)
-- `benchmark_results_aggregated.json` (bei `--aggregate-repeats`)
-- `benchmark_leaderboard.md` (bei `--aggregate-repeats`)
-- `benchmark_report.html` (optional)
-- `benchmark_results.png`
-- `benchmark_results.pdf`
-
-Der Plot zeigt `f1_macro` gegen eine gewaehlte Modellgroessenmetrik (`n_rules`, `n_atoms` oder `ruleset_json_bytes`); die Farbe kodiert die Fit-Zeit.
-Mit `--aggregate-repeats` zeigt der Plot Mittelwerte pro `(dataset, estimator)` und Fehlerbalken (`std` oder `sem`).
-Das Leaderboard sortiert aggregierte Ergebnisse standardmaessig nach `f1_macro_mean`.
-`--output-markdown` erzeugt einen kompakten Markdown-Report mit Konfiguration, Artefaktverweisen und eingebettetem Leaderboard.
-Zusaetzlich enthaelt der Report eine globale "Top per Dataset"-Uebersicht vor dem Gesamt-Leaderboard.
-Pro Datensatz enthaelt der Report zusaetzlich automatische Summary-Punkte fuer bestes Modell, kleinste Modellgroesse und schnellstes Modell.
-Der Report enthaelt zusaetzlich eine kurze Summary mit Top-1-Modell, eine eingebettete Plot-Vorschau und separate Abschnitte pro Datensatz.
-
-Direkter Vergleich zweier aggregierter Benchmark-Laeufe:
+Direkte Python-Aufrufe sind ebenfalls moeglich:
 
 ```bash
-python examples/benchmark_compare.py \
-  --core-aggregated-json benchmarks/2026-03-core/benchmark_results_aggregated.json \
-  --compare-aggregated-json benchmarks/2026-03-hs-compare/benchmark_results_aggregated.json \
-  --output-markdown benchmarks/2026-03-core-vs-hs/benchmark_comparison_report.md \
-  --output-html benchmarks/2026-03-core-vs-hs/benchmark_comparison_report.html
-```
-
-Kombinierter Meta-Report ueber beide Laeufe und ihren Vergleich:
-
-```bash
-python examples/benchmark_meta_report.py \
-  --core-aggregated-json benchmarks/2026-03-core/benchmark_results_aggregated.json \
-  --compare-aggregated-json benchmarks/2026-03-hs-compare/benchmark_results_aggregated.json \
-  --output-markdown benchmarks/2026-03-meta/benchmark_meta_report.md \
-  --output-html benchmarks/2026-03-meta/benchmark_meta_report.html
+python3 examples/benchmarks/benchmark_full_report.py
+python3 examples/benchmarks/benchmark_standard.py
+python3 examples/benchmarks/benchmark_normal_lite.py
+python3 examples/benchmarks/generate_reports.py normal-lite
 ```
 
 ## JSON-Format (Kurz)

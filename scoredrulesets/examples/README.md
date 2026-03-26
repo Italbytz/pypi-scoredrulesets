@@ -1,155 +1,67 @@
 # Examples
 
-This folder contains runnable demos for the Pittsburgh-style backend and wrapper integration.
+Die Beispiele sind jetzt nach Zweck getrennt:
 
-## Pittsburgh Direct Estimator
+- `examples/estimators/`: Endnutzer-Demos fuer einzelne Schaetzer/Backends
+- `examples/benchmarks/`: Benchmark- und Reporting-Entrypoints
 
-File: `examples/example_pittsburgh_backend.py`
+## Estimator-Demos
 
-What it shows:
-- direct training with `PittsburghRuleSetClassifier`
-- metadata and ruleset table output
-- mini comparison against `ScoredRuleSetClassifier(backend="cart")`
-
-Run:
+Direkter Pittsburgh-Schaetzer:
 
 ```bash
-python examples/example_pittsburgh_backend.py
+python3 examples/estimators/example_pittsburgh_backend.py
 ```
 
-Run with profile and seed:
+Pittsburgh ueber Wrapper:
 
 ```bash
-python examples/example_pittsburgh_backend.py --profile fast --random-state 42
-python examples/example_pittsburgh_backend.py --profile strong --random-state 0
-python examples/example_pittsburgh_backend.py --profile diverse --random-state 7
+python3 examples/estimators/example_pittsburgh_wrapper.py
 ```
 
-Available profiles:
-- `default`
-- `fast`
-- `strong`
-- `diverse`
+Weitere fachliche Demos:
 
-When to use which profile:
-- `fast`: quick smoke checks, CI sanity runs, and rapid iteration while editing code
-- `default`: balanced starting point for everyday local experiments
-- `strong`: larger search budget when model quality is more important than runtime
-- `diverse`: broader rule-set exploration when you want alternative model structures
+- `examples/estimators/example_nln_backend.py`
+- `examples/estimators/example_rule_shrinking.py`
+- `examples/estimators/example_exstracs_shrinking.py`
+- `examples/estimators/example_rulekit_exstracs.py`
 
-## Pittsburgh Wrapper Backend
+## Benchmark-Entrypoints
 
-File: `examples/example_pittsburgh_wrapper.py`
-
-What it shows:
-- training through `ScoredRuleSetClassifier(backend="pittsburgh")`
-- metadata and ruleset table output
-- mini wrapper comparison against `wrapper_cart_d2` and `wrapper_cart_d4`
-
-Run:
+Full:
 
 ```bash
-python examples/example_pittsburgh_wrapper.py
+python3 examples/benchmarks/benchmark_full_report.py
 ```
 
-Run with profile and seed:
+Standard (aka Normal):
 
 ```bash
-python examples/example_pittsburgh_wrapper.py --profile fast --random-state 42
-python examples/example_pittsburgh_wrapper.py --profile strong --random-state 0
-python examples/example_pittsburgh_wrapper.py --profile diverse --random-state 7
+python3 examples/benchmarks/benchmark_standard.py
 ```
 
-Available profiles:
-- `default`
-- `fast`
-- `strong`
-- `diverse`
-
-When to use which profile:
-- `fast`: quick smoke checks and wrapper-path sanity checks
-- `default`: balanced wrapper baseline for local runs
-- `strong`: stronger search setup for higher-quality candidate models
-- `diverse`: emphasizes broader rule-set exploration in wrapper mode
-
-## Michigan Wrapper Backend
-
-File: `examples/example_michigan_wrapper.py`
-
-What it shows:
-- training through `ScoredRuleSetClassifier(backend="michigan")`
-- metadata and ruleset table output
-- mini wrapper comparison against `wrapper_cart_d2` and `wrapper_cart_d4`
-
-Run:
+Normal-Lite:
 
 ```bash
-python examples/example_michigan_wrapper.py
+python3 examples/benchmarks/benchmark_normal_lite.py
 ```
 
-Run with profile and seed:
+Reports aus vorhandenen Benchmark-Ergebnissen regenerieren:
 
 ```bash
-python examples/example_michigan_wrapper.py --profile fast --random-state 42
-python examples/example_michigan_wrapper.py --profile strong --random-state 0
+python3 examples/benchmarks/generate_reports.py normal-lite
+python3 examples/benchmarks/generate_reports.py standard
+python3 examples/benchmarks/generate_reports.py full
 ```
 
-Available profiles:
-- `default`
-- `fast`
-- `strong`
-- `compact`
+## Bevorzugter Einstieg
 
-When to use which profile:
-- `fast`: quickest Michigan sanity checks and CI-smoke style runs
-- `default`: balanced Michigan baseline for normal local experiments
-- `strong`: larger Michigan population/epochs when model quality matters more than runtime
-- `compact`: stronger Michigan training with explicit final rule cap for shorter, more readable models
-
-## Michigan Direct Estimator
-
-File: `examples/example_michigan_backend.py`
-
-What it shows:
-- direct training with `MichiganRuleSetClassifier`
-- metadata and ruleset table output
-- mini comparison against `ScoredRuleSetClassifier(backend="cart")`
-
-Run:
+Fuer den Alltag sind die Makefile-Targets die stabilste Schnittstelle:
 
 ```bash
-python examples/example_michigan_backend.py
-```
-
-Run with profile and seed:
-
-```bash
-python examples/example_michigan_backend.py --profile fast --random-state 42
-python examples/example_michigan_backend.py --profile strong --random-state 0
-```
-
-Available profiles:
-- `default`
-- `fast`
-- `strong`
-- `compact`
-
-When to use which profile:
-- `fast`: quickest direct-estimator smoke checks
-- `default`: balanced direct Michigan baseline for local experiments
-- `strong`: larger direct Michigan search budget for quality-focused runs
-- `compact`: quality-oriented direct training with explicit final rule cap
-
-## Quick smoke check
-
-```bash
-python -m pytest tests/test_pittsburgh_estimator.py tests/test_michigan_estimator.py -k "example_run_demo_smoke or wrapper_example_run_demo_smoke" -q
-```
-
-## Full benchmark
-
-Run the full benchmark directly (Checkpoint/Resume erfolgt ueber die Benchmark-Skripte selbst):
-
-```bash
-python3 examples/benchmark_full_report.py
+make benchmark
+make benchmark-standard
+make benchmark-normal-lite
+make reports-standard
+make reports-normal-lite
 ```

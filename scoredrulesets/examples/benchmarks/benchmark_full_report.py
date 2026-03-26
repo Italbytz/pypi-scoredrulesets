@@ -10,10 +10,10 @@ Umfangreicher Benchmark aller relevanten Schaetzer und Datensaetze mit Fortschri
 Laufzeit: Kann je nach Konfiguration sehr lang sein!
 
 Aufruf:
-    python examples/benchmark_full_report.py
-    python examples/benchmark_full_report.py --timeout 120
-    python examples/benchmark_full_report.py --datasets cart_hard,ruleset_hard --estimators wrapper_cart,gp
-    python examples/benchmark_full_report.py --skip-synthetic
+    python examples/benchmarks/benchmark_full_report.py
+    python examples/benchmarks/benchmark_full_report.py --timeout 120
+    python examples/benchmarks/benchmark_full_report.py --datasets cart_hard,ruleset_hard --estimators wrapper_cart,gp
+    python examples/benchmarks/benchmark_full_report.py --skip-synthetic
 """
 
 import argparse

@@ -10,10 +10,10 @@ werden, ohne die Benchmarks erneut zu laufen. Dies ist nützlich für:
 - Verschiedene Report-Formate
 
 Aufruf:
-    python examples/generate_reports.py normal-lite
-    python examples/generate_reports.py standard
-    python examples/generate_reports.py full
-    python examples/generate_reports.py --input-dir benchmarks/normal_lite --output-dir benchmarks/normal_lite
+    python examples/benchmarks/generate_reports.py normal-lite
+    python examples/benchmarks/generate_reports.py standard
+    python examples/benchmarks/generate_reports.py full
+    python examples/benchmarks/generate_reports.py --input-dir benchmarks/normal_lite --output-dir benchmarks/normal_lite
 """
 from __future__ import annotations
 

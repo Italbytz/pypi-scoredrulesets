@@ -11,7 +11,7 @@ Das NLN-Backend:
   - Benötigt nur NumPy (kein PyTorch/TensorFlow)
 
 Aufruf:
-    python examples/example_nln_backend.py
+    python examples/estimators/example_nln_backend.py
 """
 
 import numpy as np

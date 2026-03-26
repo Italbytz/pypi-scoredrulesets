@@ -8,8 +8,8 @@ Profil:
 - eigener Checkpoint: benchmarks/checkpoint_normal_lite.jsonl
 
 Aufruf:
-    python examples/benchmark_normal_lite.py
-    python examples/benchmark_normal_lite.py --repeats 2 --timeout 180
+    python examples/benchmarks/benchmark_normal_lite.py
+    python examples/benchmarks/benchmark_normal_lite.py --repeats 2 --timeout 180
 """
 from __future__ import annotations
 

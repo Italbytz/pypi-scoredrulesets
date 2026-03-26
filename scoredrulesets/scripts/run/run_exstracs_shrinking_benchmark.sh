@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Run from repository root regardless of current working directory.
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 # Use local venv if present.
 if [ -f ".venv/bin/activate" ]; then
@@ -21,5 +21,5 @@ echo "  --repeats N  Anzahl Wiederholungen (default: 3)"
 echo "  --datasets   z.B. sklearn_iris,sklearn_wine"
 echo ""
 
-python -u scripts/benchmark_exstracs_shrinking.py "$@"
+python3 -u tools/analysis/benchmark_exstracs_shrinking.py "$@"
 

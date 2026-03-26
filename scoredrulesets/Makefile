@@ -46,14 +46,14 @@ help:
 	@echo "  ARGS='--datasets cart_hard --estimators wrapper_cart,gp'"
 
 benchmark:
-	bash scripts/run_full_benchmark_with_recovery.sh \
+	bash scripts/run/run_full_benchmark_with_recovery.sh \
 		--checkpoint $(CHECKPOINT) \
 		--timeout $(TIMEOUT) \
 		--repeats $(REPEATS) \
 		$(ARGS)
 
 benchmark-resume:
-	bash scripts/run_full_benchmark_with_recovery.sh \
+	bash scripts/run/run_full_benchmark_with_recovery.sh \
 		--max-attempts $(MAX_ATTEMPTS) \
 		--checkpoint $(CHECKPOINT) \
 		--timeout $(TIMEOUT) \
@@ -83,14 +83,14 @@ benchmark-status:
 # ---------------------------------------------------------------------------
 
 benchmark-standard:
-	bash scripts/run_standard_benchmark_with_recovery.sh \
+	bash scripts/run/run_standard_benchmark_with_recovery.sh \
 		--checkpoint $(CHECKPOINT_STANDARD) \
 		--timeout $(TIMEOUT) \
 		--repeats $(REPEATS) \
 		$(ARGS)
 
 benchmark-standard-resume:
-	bash scripts/run_standard_benchmark_with_recovery.sh \
+	bash scripts/run/run_standard_benchmark_with_recovery.sh \
 		--max-attempts $(MAX_ATTEMPTS) \
 		--checkpoint $(CHECKPOINT_STANDARD) \
 		--timeout $(TIMEOUT) \
@@ -123,14 +123,14 @@ benchmark-normal-status: benchmark-standard-status
 # ---------------------------------------------------------------------------
 
 benchmark-normal-lite:
-	bash scripts/run_normal_lite_benchmark_with_recovery.sh \
+	bash scripts/run/run_normal_lite_benchmark_with_recovery.sh \
 		--checkpoint $(CHECKPOINT_NORMAL_LITE) \
 		--timeout $(TIMEOUT) \
 		--repeats 2 \
 		$(ARGS)
 
 benchmark-normal-lite-resume:
-	bash scripts/run_normal_lite_benchmark_with_recovery.sh \
+	bash scripts/run/run_normal_lite_benchmark_with_recovery.sh \
 		--checkpoint $(CHECKPOINT_NORMAL_LITE) \
 		--timeout $(TIMEOUT) \
 		--repeats 2 \
@@ -160,15 +160,15 @@ benchmark-normal-lite-status:
 
 reports-normal-lite:
 	@echo "Regeneriere Reports fuer Normal-Lite-Benchmark..."
-	python3 -u examples/generate_reports.py normal-lite
+	python3 -u examples/benchmarks/generate_reports.py normal-lite
 
 reports-normal: reports-standard
 
 reports-standard:
 	@echo "Regeneriere Reports fuer Standard-Benchmark..."
-	python3 -u examples/generate_reports.py standard
+	python3 -u examples/benchmarks/generate_reports.py standard
 
 reports-full:
 	@echo "Regeneriere Reports fuer Full-Benchmark..."
-	python3 -u examples/generate_reports.py full
+	python3 -u examples/benchmarks/generate_reports.py full
 
