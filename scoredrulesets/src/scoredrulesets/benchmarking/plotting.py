@@ -9,6 +9,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize, LogNorm
+from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from matplotlib import cm
 
@@ -17,6 +18,18 @@ from .runner import (
     BenchmarkResult,
     aggregate_benchmark_results,
     build_pareto_per_dataset,
+)
+
+
+_PAPER_ESTIMATOR_DISPLAY_ORDER: tuple[str, ...] = (
+    "HS",
+    "RuleKit",
+    "ExSTraCS",
+    "ExSTraCS (LRC)",
+    "logicGP",
+    "ruleGP",
+    "ruleNLN",
+    "ruleLCS",
 )
 
 
@@ -31,8 +44,8 @@ def plot_benchmark_results(
 
     x-axis: model size (`n_rules`, `n_atoms`, `ruleset_json_bytes`)
     y-axis: `f1_macro`
-    color: `fit_seconds`
-    point label: `<dataset>/<estimator>#<repeat>`
+    color: estimator
+    legend: shared across subplots
     """
     valid_size_metrics = {"n_rules", "n_atoms", "ruleset_json_bytes"}
     if size_metric not in valid_size_metrics:
@@ -48,35 +61,31 @@ def plot_benchmark_results(
     if aggregate_repeats:
         aggregated_results = aggregate_benchmark_results(ok_results, error_bar=error_bar)
         dataset_names = sorted({result.dataset for result in aggregated_results})
-        fit_values = [float(result.fit_seconds_mean or 0.0) for result in aggregated_results]
+        estimator_names = _estimator_display_order({result.estimator for result in aggregated_results})
         title = (
             f"Benchmark (aggregated, per dataset): F1 vs model size "
-            f"(color = fit time, error = {error_bar})"
+            f"(color = estimator, error = {error_bar})"
         )
     else:
         aggregated_results = None
         dataset_names = sorted({result.dataset for result in ok_results})
-        fit_values = [float(result.fit_seconds or 0.0) for result in ok_results]
-        title = "Benchmark (per dataset): F1 vs model size (color = fit time)"
+        estimator_names = _estimator_display_order({result.estimator for result in ok_results})
+        title = "Benchmark (per dataset): F1 vs model size (color = estimator)"
+
+    estimator_colors = _estimator_color_map(estimator_names)
 
     fig, axes = _build_dataset_axes(len(dataset_names))
     fig.suptitle(title)
-    fit_norm = _build_fit_norm(fit_values)
 
-    first_scatter = None
-    used_axes = []
     for ax, dataset_name in zip(axes, dataset_names):
-        used_axes.append(ax)
         if aggregate_repeats:
             dataset_results = [
                 result for result in aggregated_results or [] if result.dataset == dataset_name
             ]
-            scatter = _plot_aggregated(ax, dataset_results, size_metric, fit_norm=fit_norm)
+            _plot_aggregated(ax, dataset_results, size_metric, estimator_colors=estimator_colors)
         else:
             dataset_results = [result for result in ok_results if result.dataset == dataset_name]
-            scatter = _plot_raw(ax, dataset_results, size_metric, fit_norm=fit_norm)
-        if first_scatter is None:
-            first_scatter = scatter
+            _plot_raw(ax, dataset_results, size_metric, estimator_colors=estimator_colors)
 
         ax.set_title(dataset_name)
         ax.set_xlabel(size_metric)
@@ -87,12 +96,32 @@ def plot_benchmark_results(
     for ax in axes[len(dataset_names):]:
         ax.set_visible(False)
 
-    if first_scatter is None:
+    if not estimator_names:
         raise ValueError("No plottable benchmark results available")
 
-    cbar = fig.colorbar(first_scatter, ax=used_axes)
-    cbar.set_label("fit_seconds")
-    fig.subplots_adjust(top=0.88, wspace=0.28, hspace=0.35)
+    legend_handles = [
+        Line2D(
+            [0], [0],
+            marker="o",
+            color="none",
+            markerfacecolor=estimator_colors[est],
+            markeredgecolor="black",
+            markeredgewidth=0.7,
+            markersize=7,
+            label=est,
+        )
+        for est in estimator_names
+    ]
+    fig.legend(
+        handles=legend_handles,
+        loc="center left",
+        bbox_to_anchor=(0.86, 0.5),
+        frameon=False,
+        title="Estimator",
+        fontsize=8,
+        title_fontsize=9,
+    )
+    fig.subplots_adjust(top=0.88, right=0.83, wspace=0.28, hspace=0.35)
 
     base = Path(output_base)
     png_path = base.with_suffix(".png")
@@ -145,7 +174,7 @@ def plot_benchmark_heatmap(
     fig_height = max(4.5, 1.2 + 0.8 * len(dataset_names))
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
-    cmap = plt.get_cmap("viridis").copy()
+    cmap = plt.get_cmap("plasma").copy()
     cmap.set_bad(color="#e5e7eb")
     im = ax.imshow(np.ma.masked_invalid(matrix), cmap=cmap, vmin=0.0, vmax=1.0, aspect="auto")
 
@@ -189,24 +218,27 @@ def _plot_raw(
     ok_results: list[BenchmarkResult],
     size_metric: str,
     *,
-    fit_norm: Normalize,
+    estimator_colors: dict[str, tuple[float, float, float, float]],
 ):
-    x_values = [getattr(result, size_metric) for result in ok_results]
-    y_values = [result.f1_macro for result in ok_results]
-    fit_values = [result.fit_seconds for result in ok_results]
-    labels = [f"{result.estimator}#{result.repeat}" for result in ok_results]
-    scatter = ax.scatter(
-        x_values,
-        y_values,
-        c=fit_values,
-        cmap="viridis",
-        norm=fit_norm,
-        s=90,
-        edgecolors="black",
-    )
-    for x, y, label in zip(x_values, y_values, labels):
-        ax.annotate(label, (x, y), textcoords="offset points", xytext=(4, 4), fontsize=8)
-    return scatter
+    if not ok_results:
+        return
+
+    by_estimator: dict[str, list[BenchmarkResult]] = {}
+    for result in ok_results:
+        by_estimator.setdefault(result.estimator, []).append(result)
+
+    for estimator, est_results in by_estimator.items():
+        x_values = [getattr(result, size_metric) for result in est_results]
+        y_values = [result.f1_macro for result in est_results]
+        ax.scatter(
+            x_values,
+            y_values,
+            c=[estimator_colors.get(estimator, "#4b5563")],
+            s=70,
+            edgecolors="black",
+            linewidths=0.7,
+            alpha=0.9,
+        )
 
 
 def _plot_aggregated(
@@ -214,30 +246,37 @@ def _plot_aggregated(
     aggregated: list[AggregatedBenchmarkResult],
     size_metric: str,
     *,
-    fit_norm: Normalize,
+    estimator_colors: dict[str, tuple[float, float, float, float]],
 ):
     metric_name = f"{size_metric}_mean"
     metric_err = f"{size_metric}_error"
-    x_values = [getattr(result, metric_name) for result in aggregated]
-    x_errors = [getattr(result, metric_err) for result in aggregated]
-    y_values = [result.f1_macro_mean for result in aggregated]
-    y_errors = [result.f1_macro_error for result in aggregated]
-    fit_values = [result.fit_seconds_mean for result in aggregated]
-    labels = [result.estimator for result in aggregated]
+    if not aggregated:
+        return
 
-    scatter = ax.scatter(
-        x_values,
-        y_values,
-        c=fit_values,
-        cmap="viridis",
-        norm=fit_norm,
-        s=110,
-        edgecolors="black",
-    )
-    for x, y, xerr, yerr, label in zip(x_values, y_values, x_errors, y_errors, labels):
-        ax.errorbar(x, y, xerr=xerr, yerr=yerr, fmt="none", ecolor="gray", alpha=0.7, capsize=4)
-        ax.annotate(label, (x, y), textcoords="offset points", xytext=(4, 4), fontsize=8)
-    return scatter
+    for result in aggregated:
+        x = getattr(result, metric_name)
+        xerr = getattr(result, metric_err)
+        y = result.f1_macro_mean
+        yerr = result.f1_macro_error
+        if x is None or y is None:
+            continue
+
+        color = estimator_colors.get(result.estimator, "#4b5563")
+        ax.errorbar(
+            x,
+            y,
+            xerr=xerr,
+            yerr=yerr,
+            fmt="o",
+            capsize=4,
+            markersize=6,
+            linewidth=1.0,
+            color=color,
+            markeredgecolor="black",
+            markeredgewidth=0.7,
+            ecolor=color,
+            alpha=0.9,
+        )
 
 
 def _build_dataset_axes(n_datasets: int):
@@ -273,10 +312,63 @@ def _sort_estimators_for_heatmap(
             continue
         estimator_scores.setdefault(result.estimator, []).append(float(result.f1_macro_mean))
 
+    ordered_names = _estimator_display_order(estimator_scores.keys())
     return sorted(
-        estimator_scores,
-        key=lambda name: (-float(np.mean(estimator_scores[name])), name),
+        ordered_names,
+        key=lambda name: (_estimator_order_rank(name), -float(np.mean(estimator_scores[name])), name),
     )
+
+
+def _estimator_order_rank(name: str) -> int:
+    try:
+        return _PAPER_ESTIMATOR_DISPLAY_ORDER.index(name)
+    except ValueError:
+        return len(_PAPER_ESTIMATOR_DISPLAY_ORDER)
+
+
+def _estimator_display_order(names: Iterable[str]) -> list[str]:
+    names_set = set(names)
+    ordered: list[str] = [n for n in _PAPER_ESTIMATOR_DISPLAY_ORDER if n in names_set]
+    ordered.extend(sorted(n for n in names_set if n not in ordered))
+    return ordered
+
+
+def _estimator_color_map(estimator_names: Iterable[str]) -> dict[str, tuple[float, float, float, float]]:
+    # Fixed paper palette (colorblind-friendly) + stable fallback colors.
+    paper_palette = {
+        "HS": "#0072B2",              # blue
+        "RuleKit": "#E69F00",         # orange
+        "ExSTraCS": "#009E73",        # green
+        "ExSTraCS (LRC)": "#D55E00",  # vermillion
+        "logicGP": "#56B4E9",         # sky blue
+        "ruleGP": "#CC79A7",          # purple
+        "ruleNLN": "#F0E442",         # yellow
+        "ruleLCS": "#7F7F7F",         # gray
+    }
+    fallback_palette = [
+        "#332288",  # dark blue
+        "#88CCEE",  # light blue
+        "#44AA99",  # teal
+        "#117733",  # green
+        "#999933",  # olive
+        "#DDCC77",  # sand
+        "#CC6677",  # rose
+        "#882255",  # wine
+        "#AA4499",  # magenta
+        "#661100",  # brown
+    ]
+    ordered = _estimator_display_order(estimator_names)
+    color_map: dict[str, tuple[float, float, float, float]] = {}
+    fallback_idx = 0
+    for est in ordered:
+        if est in paper_palette:
+            color_map[est] = matplotlib.colors.to_rgba(paper_palette[est])
+        else:
+            color_map[est] = matplotlib.colors.to_rgba(
+                fallback_palette[fallback_idx % len(fallback_palette)]
+            )
+            fallback_idx += 1
+    return color_map
 
 
 def _fmt_metric(value: float | None) -> str:
@@ -343,7 +435,7 @@ def plot_benchmark_heatmap_combined(
             fit_vals.append(float(r.fit_seconds_mean))
 
     # Colour map & norms  ──────────────────────────────────────────────────
-    combined_cmap = plt.colormaps["Greens"]
+    combined_cmap = plt.colormaps["plasma"]
     f1_norm = Normalize(vmin=0.0, vmax=1.0)
 
     atom_norm = _build_positive_log_norm(atom_vals, min_floor=1.0, default_max=100.0)
@@ -400,7 +492,10 @@ def plot_benchmark_heatmap_combined(
         combined_cmap,
         legend_norm,
         position=[0.92, 0.20, 0.018, 0.56],
-        show_ticks=False,
+        label="Relative performance",
+        ticks=[0.0, 1.0],
+        ticklabels=["worse", "better"],
+        show_ticks=True,
     )
 
     fig.subplots_adjust(left=0.15, right=0.90, bottom=0.22, top=0.92)
@@ -498,6 +593,8 @@ def _add_legend_bar(
     *,
     position: list[float],
     label: str | None = None,
+    ticks: list[float] | None = None,
+    ticklabels: list[str] | None = None,
     show_ticks: bool = True,
 ):
     """Add a small colour-bar to the figure at `position = [left, bottom, width, height]`."""
@@ -507,6 +604,10 @@ def _add_legend_bar(
     cb = fig.colorbar(sm, cax=cax)
     if label:
         cb.set_label(label, fontsize=8)
+    if ticks is not None:
+        cb.set_ticks(ticks)
+    if ticklabels is not None:
+        cb.set_ticklabels(ticklabels)
     if show_ticks:
         cb.ax.tick_params(labelsize=7)
     else:
@@ -633,14 +734,13 @@ def plot_combined_dot(
         else np.linspace(-0.3, 0.3, num=n_estimators)
     )
 
-    palette = plt.rcParams.get("axes.prop_cycle", None)
-    colors = palette.by_key().get("color", []) if palette is not None else []
+    estimator_colors = _estimator_color_map(estimator_names)
 
     size_mean_col = f"{size_metric}_mean"
     size_err_col = f"{size_metric}_error"
 
     for idx, est in enumerate(estimator_names):
-        color = colors[idx % len(colors)] if colors else None
+        color = estimator_colors.get(est, "#4b5563")
         f1_vals = np.full(n_datasets, np.nan)
         f1_errs = np.full(n_datasets, 0.0)
         size_vals = np.full(n_datasets, np.nan)

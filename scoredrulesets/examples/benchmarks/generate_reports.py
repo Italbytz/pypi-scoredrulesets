@@ -35,6 +35,7 @@ from scoredrulesets.benchmarking import (
     plot_combined_dot,
     plot_pareto_front,
 )
+from scoredrulesets.benchmarking.runner import BenchmarkResult
 
 
 def load_benchmark_results_from_json(json_file: Path):
@@ -51,25 +52,29 @@ def load_benchmark_results_from_json(json_file: Path):
     with json_file.open("r", encoding="utf-8") as f:
         raw_data = json.load(f)
     
-    # Konvertiere zu BenchmarkResult-kompatiblem Format
-    # (dataset, estimator, f1_macro, f1_micro, training_time, prediction_time, n_rules, accuracy, recall_macro, precision_macro, repeat)
     results = []
     for item in raw_data:
-        # Extrahiere alle relevanten Felder
-        result_entry = {
-            "dataset": item.get("dataset"),
-            "estimator": item.get("estimator"),
-            "repeat": item.get("repeat", 0),
-            "f1_macro": item.get("f1_macro"),
-            "f1_micro": item.get("f1_micro"),
-            "accuracy": item.get("accuracy"),
-            "recall_macro": item.get("recall_macro"),
-            "precision_macro": item.get("precision_macro"),
-            "training_time": item.get("training_time"),
-            "prediction_time": item.get("prediction_time"),
-            "n_rules": item.get("n_rules"),
-        }
-        results.append(result_entry)
+        results.append(
+            BenchmarkResult(
+                dataset=item.get("dataset"),
+                estimator=item.get("estimator"),
+                repeat=item.get("repeat", 0),
+                status=item.get("status", "ok"),
+                skip_reason=item.get("skip_reason"),
+                error=item.get("error"),
+                f1_macro=item.get("f1_macro"),
+                fit_seconds=item.get("fit_seconds", item.get("training_time")),
+                predict_seconds=item.get("predict_seconds", item.get("prediction_time")),
+                n_rules=item.get("n_rules"),
+                n_atoms=item.get("n_atoms"),
+                ruleset_json_bytes=item.get("ruleset_json_bytes"),
+                n_train=item.get("n_train"),
+                n_test=item.get("n_test"),
+                n_classes=item.get("n_classes"),
+                validation_action=item.get("validation_action"),
+                validation_message=item.get("validation_message"),
+            )
+        )
     
     return results
 
