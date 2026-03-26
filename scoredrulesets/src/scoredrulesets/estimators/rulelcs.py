@@ -42,7 +42,11 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
       selected rules are penalized, promoting specialization.
     * **Post-hoc Rule Compaction** – ``enable_compaction=True`` runs a backward
       elimination step after fitting: rules are greedily removed if removal does
-      not decrease macro-F1 on the evaluation set.
+      not decrease macro-F1 on the evaluation set.  ``compaction_min_gain``
+      (default ``0.0``) raises the bar: a rule is only removed when its absence
+      *improves* F1 by at least that value.  Set to e.g. ``0.005`` to keep rules
+      that are likely to generalise even if they add no measurable gain on a
+      small val set; set to a negative value for more aggressive pruning.
     * **Windowing** – ``window_fraction`` (0–1] controls stochastic subset
       evaluation.  When set to less than 1.0, each beam-search iteration
       evaluates candidates on a random subset of the evaluation indices,
@@ -68,13 +72,14 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
         beam_width: int = 8,
         max_iterations: int = 16,
         validation_fraction: float = 0.2,
-        complexity_penalty: float = 0.01,
+        complexity_penalty: float = 0.003,
         random_state: int | None = None,
         max_thresholds_per_feature: int | None = None,
         # -- BioHEL-inspired enhancements --
         sequential_covering: bool = False,
         token_competition_weight: float = 0.0,
         enable_compaction: bool = False,
+        compaction_min_gain: float = 0.0,
         window_fraction: float = 1.0,
         # -- Multi-class strategy --
         multiclass_strategy: str = "auto",
@@ -98,6 +103,7 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
         self.sequential_covering = sequential_covering
         self.token_competition_weight = token_competition_weight
         self.enable_compaction = enable_compaction
+        self.compaction_min_gain = compaction_min_gain
         self.window_fraction = window_fraction
         self.multiclass_strategy = multiclass_strategy
         self.low_cardinality_threshold = low_cardinality_threshold
@@ -255,7 +261,7 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
                 no_improvement_rounds = 0
             else:
                 no_improvement_rounds += 1
-            if no_improvement_rounds >= 4:
+            if no_improvement_rounds >= 6:
                 break
 
         selected_rules = [candidates[idx].rule for idx in best_state]
@@ -297,14 +303,20 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
             if not candidates:
                 break
 
-            # Pick the single best rule via beam search with max_rules=1
-            best_rule, best_score = None, -np.inf
+            # Score each candidate in combination with already-selected rules
+            # (not in isolation) so that rules 2+ are evaluated in the context
+            # of earlier rules and don't appear weak just because they specialise
+            # on residual cases.  We always add the best-scoring rule (original
+            # IRL behaviour); the compaction pass prunes redundant rules later.
+            eval_idx_comb = val_idx if val_idx is not None else train_idx
+            best_rule, best_combined_f1 = None, -np.inf
             for cand in candidates:
-                score = self._single_rule_score(
-                    cand.rule, X_valid, y_idx, remaining_train_idx, val_idx,
+                combo_rules = list(selected_rules) + [cand.rule]
+                score = self._evaluate_rule_list_f1(
+                    combo_rules, X_valid, y_idx, eval_idx_comb
                 )
-                if score > best_score:
-                    best_score = score
+                if score > best_combined_f1:
+                    best_combined_f1 = score
                     best_rule = cand.rule
             total_iterations += 1
 
@@ -576,7 +588,12 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
             for i in range(len(current_rules)):
                 reduced = current_rules[:i] + current_rules[i + 1:]
                 reduced_f1 = self._evaluate_rule_list_f1(reduced, X, y_idx, eval_idx)
-                if reduced_f1 >= current_f1 - 1e-9 and reduced_f1 > best_drop_f1:
+                # A rule is removed only when its *absence* improves (or at
+                # worst barely changes) val F1 by at least compaction_min_gain.
+                # Setting compaction_min_gain > 0 makes compaction conservative
+                # so rules with marginal-but-real contributions are kept.
+                remove_threshold = float(self.compaction_min_gain) - 1e-9
+                if reduced_f1 >= current_f1 + remove_threshold and reduced_f1 > best_drop_f1:
                     best_drop_f1 = reduced_f1
                     best_drop_idx = i
 
@@ -896,7 +913,9 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
         candidate_order = list(range(n_candidates))
 
         if len(state) < max(1, int(self.max_rules)):
-            for idx in candidate_order[: max(4, int(self.beam_width))]:
+            # Consider a wider range so mid-tier candidates can be combined
+            n_add = min(n_candidates, max(4 * max(1, int(self.max_rules)), int(self.beam_width) * 2))
+            for idx in candidate_order[:n_add]:
                 if idx not in state_set:
                     neighbors.add(tuple(sorted((*state, idx))))
 
@@ -905,7 +924,7 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
             neighbors.add(reduced)
 
         if state:
-            absent = [idx for idx in candidate_order if idx not in state_set][: max(2, int(self.beam_width // 2) + 1)]
+            absent = [idx for idx in candidate_order if idx not in state_set][: max(4, int(self.beam_width))]
             for drop_idx in state[: max(1, len(state))]:
                 for add_idx in absent:
                     swapped = tuple(sorted([v for v in state if v != drop_idx] + [add_idx]))

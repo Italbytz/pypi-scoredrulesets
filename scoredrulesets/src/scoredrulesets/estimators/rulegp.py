@@ -10,7 +10,8 @@ Combines ideas from:
 Key differences from existing estimators:
 - Each GP individual is a *complete rule set* (multiple rules + default),
   not a single rule or a polynomial with set-literals (logicGP).
-- Two-objective NSGA-II: maximize F1, minimize model complexity (total atoms).
+- Three-objective NSGA-II: maximize F1, maximize mean-other-class F1,
+  minimize model complexity (total atoms), with class-bound dominance.
 - Works natively on numeric and categorical features (no forced discretisation).
 - Post-hoc backward elimination + atom pruning for maximum compactness.
 - Score refit after every structural mutation (FLCW-style).
@@ -53,10 +54,11 @@ class _Individual:
     """A full rule set individual: list of rule-genes + cached fitness."""
     rules: list[_RuleGene]
     fitness_f1: float = -1.0
-
     fitness_complexity: int = 999_999
+    fitness_other_class_f1: float = 0.0
     fitness_best_class: int = 0
     fitness_class_f1: np.ndarray = field(default_factory=lambda: np.array([]))
+
     @property
     def total_atoms(self) -> int:
         return sum(len(r.atoms) for r in self.rules)
@@ -72,7 +74,10 @@ class _Individual:
 # ---------------------------------------------------------------------------
 
 def _fast_nondominated_sort(pop: list[_Individual]) -> list[list[int]]:
-    """NSGA-II fast non-dominated sort. Objectives: max F1, min complexity."""
+    """NSGA-II fast non-dominated sort.
+
+    Objectives: max F1, max mean-other-class F1, min complexity.
+    """
     n = len(pop)
     domination_count = [0] * n
     dominated_set: list[list[int]] = [[] for _ in range(n)]
@@ -110,17 +115,19 @@ def _dominates(a: _Individual, b: _Individual) -> bool:
     """Class-bound Pareto dominance (RLCW-style).
 
     A dominates B only if they share the same best-predicted class,
-    A is at least as good on both objectives, and strictly better on at
-    least one.  This creates per-class niches and encourages the population
+    A is at least as good on all objectives, and strictly better on at
+    least one. This creates per-class niches and encourages the population
     to maintain class-diverse solutions.
     """
     if a.fitness_best_class != b.fitness_best_class:
         return False
     f1_ge = a.fitness_f1 >= b.fitness_f1 - 1e-12
+    oc_ge = a.fitness_other_class_f1 >= b.fitness_other_class_f1 - 1e-12
     cx_ge = a.fitness_complexity <= b.fitness_complexity
     f1_gt = a.fitness_f1 > b.fitness_f1 + 1e-12
+    oc_gt = a.fitness_other_class_f1 > b.fitness_other_class_f1 + 1e-12
     cx_gt = a.fitness_complexity < b.fitness_complexity
-    return f1_ge and cx_ge and (f1_gt or cx_gt)
+    return f1_ge and oc_ge and cx_ge and (f1_gt or oc_gt or cx_gt)
 
 
 def _crowding_distance(pop: list[_Individual], front: list[int]) -> dict[int, float]:
@@ -131,7 +138,11 @@ def _crowding_distance(pop: list[_Individual], front: list[int]) -> dict[int, fl
 
     distances: dict[int, float] = {idx: 0.0 for idx in front}
 
-    for key_fn in [lambda ind: ind.fitness_f1, lambda ind: -ind.fitness_complexity]:
+    for key_fn in [
+        lambda ind: ind.fitness_f1,
+        lambda ind: ind.fitness_other_class_f1,
+        lambda ind: -ind.fitness_complexity,
+    ]:
         sorted_front = sorted(front, key=lambda i: key_fn(pop[i]))
         obj_min = key_fn(pop[sorted_front[0]])
         obj_max = key_fn(pop[sorted_front[-1]])
@@ -269,6 +280,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         Run backward elimination + atom pruning on the final model.
     max_fit_seconds : float or None
         Time budget for the GP loop in seconds (None = unlimited).
+    min_max_weight : float
+        If > 0, prefilters atom candidates by their maximal class-balanced
+        weight on training data. Higher values reduce the search space.
     random_state : int or None
         Random seed.
     """
@@ -287,6 +301,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         early_stopping_rounds: int = 15,
         enable_compaction: bool = True,
         max_fit_seconds: float | None = None,
+        min_max_weight: float = 0.0,
         max_thresholds_per_feature: int | None = None,
         random_state: int | None = None,
     ):
@@ -302,8 +317,10 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         self.early_stopping_rounds = early_stopping_rounds
         self.enable_compaction = enable_compaction
         self.max_fit_seconds = max_fit_seconds
+        self.min_max_weight = min_max_weight
         self.max_thresholds_per_feature = max_thresholds_per_feature
         self.random_state = random_state
+        self._atom_pool_: dict[int, list[_AtomGene]] = {}
 
     # ------------------------------------------------------------------
     # sklearn interface
@@ -329,6 +346,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         y_eval = y_idx[val_idx] if val_idx is not None else y_train
 
         specs = _build_feature_specs(X, self.max_thresholds_per_feature)
+        self._atom_pool_ = self._build_atom_pool(specs, X_train, y_train, n_classes)
 
         # ---------- Initialise population ----------
         pop = self._init_population(specs, X_train, y_train, n_classes, rng)
@@ -464,6 +482,15 @@ class RuleGPClassifier(BaseRuleSetEstimator):
     def _random_atom(
         self, specs: list[dict], rng: np.random.Generator
     ) -> _AtomGene:
+        if self._atom_pool_ and rng.random() < 0.85:
+            fi_keys = list(self._atom_pool_.keys())
+            if fi_keys:
+                fi = int(fi_keys[int(rng.integers(0, len(fi_keys)))])
+                atoms = self._atom_pool_.get(fi, [])
+                if atoms:
+                    atom = atoms[int(rng.integers(0, len(atoms)))]
+                    return _AtomGene(atom.feature_idx, atom.op, atom.value)
+
         spec = specs[int(rng.integers(0, len(specs)))]
         fi = spec["idx"]
         if spec["kind"] in ("num", "both"):
@@ -504,6 +531,90 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                 return _AtomGene(fi, "in", chosen)
             return _AtomGene(fi, "==", cats[int(rng.integers(0, k))])
         return _AtomGene(fi, ">", 0.0)
+
+    def _build_atom_pool(
+        self,
+        specs: list[dict],
+        X: np.ndarray,
+        y: np.ndarray,
+        n_classes: int,
+    ) -> dict[int, list[_AtomGene]]:
+        """Build a feature-indexed atom pool, optionally filtered by min_max_weight.
+
+        The filter mirrors logicGP-RLCW's literal preselection idea: keep atoms
+        whose maximal class-balanced weight exceeds the configured threshold.
+        """
+        class_counts = np.bincount(y, minlength=n_classes).astype(float)
+        class_counts = np.maximum(class_counts, 1.0)
+
+        pool: dict[int, list[_AtomGene]] = {}
+        for spec in specs:
+            fi = int(spec["idx"])
+            candidates: list[_AtomGene] = []
+
+            if spec["kind"] in ("num", "both"):
+                for thr in spec.get("thresholds", []):
+                    candidates.append(_AtomGene(fi, "<=", float(thr)))
+                    candidates.append(_AtomGene(fi, ">", float(thr)))
+                for lo, hi in spec.get("intervals", []):
+                    candidates.append(_AtomGene(fi, "between", [float(lo), float(hi)]))
+
+            if spec["kind"] in ("cat", "both"):
+                cats = list(spec.get("categories", []))
+                for cat in cats:
+                    candidates.append(_AtomGene(fi, "==", cat))
+                if len(cats) >= 3:
+                    # Add a few deterministic non-trivial subsets.
+                    candidates.append(_AtomGene(fi, "in", sorted(cats[:2])))
+                    candidates.append(_AtomGene(fi, "in", sorted(cats[-2:])))
+                    if len(cats) >= 4:
+                        mid = len(cats) // 2
+                        candidates.append(_AtomGene(fi, "in", sorted(cats[mid - 1:mid + 1])))
+
+            if not candidates:
+                continue
+
+            scored: list[tuple[float, _AtomGene]] = []
+            for atom in candidates:
+                mask = self._atom_mask(atom, X)
+                support = int(mask.sum())
+                if support < self.min_samples_leaf:
+                    continue
+                counts = np.bincount(y[mask], minlength=n_classes).astype(float)
+                balanced = counts / class_counts
+                total = float(balanced.sum())
+                if total <= 0:
+                    continue
+                max_weight = float((balanced / total).max())
+                if self.min_max_weight > 0 and max_weight <= self.min_max_weight:
+                    continue
+                scored.append((max_weight, atom))
+
+            # Fallback if filtering was too strict on a feature.
+            if not scored and self.min_max_weight > 0:
+                for atom in candidates:
+                    mask = self._atom_mask(atom, X)
+                    support = int(mask.sum())
+                    if support < self.min_samples_leaf:
+                        continue
+                    counts = np.bincount(y[mask], minlength=n_classes).astype(float)
+                    balanced = counts / class_counts
+                    total = float(balanced.sum())
+                    if total <= 0:
+                        continue
+                    max_weight = float((balanced / total).max())
+                    scored.append((max_weight, atom))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                scored = scored[:2]
+
+            if scored:
+                unique: dict[tuple[int, str, str], _AtomGene] = {}
+                for _, atom in sorted(scored, key=lambda x: x[0], reverse=True):
+                    key = (atom.feature_idx, atom.op, str(atom.value))
+                    unique[key] = atom
+                pool[fi] = list(unique.values())
+
+        return pool
 
     def _seed_systematic(
         self,
@@ -666,7 +777,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         y: np.ndarray,
         n_classes: int,
     ) -> None:
-        """Compute fitness: F1-macro, per-class F1, best-class, and total atom count."""
+        """Compute fitness: F1-macro, class-aware objectives, and complexity."""
         preds = self._predict_individual(ind, X, n_classes)
         try:
             ind.fitness_f1 = float(f1_score(y, preds, average="macro", zero_division=0))
@@ -675,10 +786,16 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             )
             ind.fitness_class_f1 = np.asarray(class_f1, dtype=float)
             ind.fitness_best_class = int(np.argmax(class_f1)) if len(class_f1) > 0 else 0
+            if len(class_f1) > 1:
+                other = np.delete(ind.fitness_class_f1, ind.fitness_best_class)
+                ind.fitness_other_class_f1 = float(np.mean(other)) if other.size else 0.0
+            else:
+                ind.fitness_other_class_f1 = 0.0
         except Exception:
             ind.fitness_f1 = 0.0
             ind.fitness_class_f1 = np.zeros(n_classes, dtype=float)
             ind.fitness_best_class = 0
+            ind.fitness_other_class_f1 = 0.0
         ind.fitness_complexity = ind.total_atoms
 
     def _predict_individual(
@@ -753,10 +870,14 @@ class RuleGPClassifier(BaseRuleSetEstimator):
     ) -> _Individual:
         k = min(self.tournament_size, len(pop))
         idx = rng.choice(len(pop), size=k, replace=False)
-        # Prefer: higher F1, then fewer atoms
+        # Prefer: higher F1, then stronger non-best-class performance, then smaller models.
         return min(
             (pop[i] for i in idx),
-            key=lambda ind: (-ind.fitness_f1, ind.fitness_complexity),
+            key=lambda ind: (
+                -ind.fitness_f1,
+                -ind.fitness_other_class_f1,
+                ind.fitness_complexity,
+            ),
         )
 
     def _crossover(
@@ -903,7 +1024,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         # If multiple have (near-)identical F1, prefer fewer atoms.
         return max(
             front0,
-            key=lambda ind: (ind.fitness_f1, -ind.fitness_complexity),
+            key=lambda ind: (
+                ind.fitness_f1,
+                ind.fitness_other_class_f1,
+                -ind.fitness_complexity,
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -1035,6 +1160,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                 "generations": self.generations,
                 "generations_ran": generations_ran,
                 "enable_compaction": self.enable_compaction,
+                "min_max_weight": self.min_max_weight,
                 "max_rules": self.max_rules,
                 "max_atoms_per_rule": self.max_atoms_per_rule,
             },
