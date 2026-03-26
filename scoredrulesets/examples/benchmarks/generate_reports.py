@@ -34,7 +34,9 @@ from scoredrulesets.benchmarking import (
     plot_benchmark_results,
     plot_critical_difference_diagram,
     plot_combined_dot,
+    plot_dual_cd_diagram,
     plot_efficiency_summary,
+    plot_2d_rank_plot,
     plot_pareto_front,
     plot_win_tie_loss_matrix,
 )
@@ -143,6 +145,12 @@ def generate_reports(
     eff_png, eff_pdf = plot_efficiency_summary(
         raw_data, output_base=output_dir / "benchmark_results_efficiency"
     )
+    dual_cd_png, dual_cd_pdf = plot_dual_cd_diagram(
+        raw_data, output_base=output_dir / "benchmark_results_dual_cd"
+    )
+    rank2d_png, rank2d_pdf = plot_2d_rank_plot(
+        raw_data, output_base=output_dir / "benchmark_results_rank2d"
+    )
     
     # Markdown-Report
     print(f"      Schreibe Markdown-Report...")
@@ -173,6 +181,10 @@ def generate_reports(
             "wtl_pdf": str(wtl_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
+            "dual_cd_png": str(dual_cd_png.name),
+            "dual_cd_pdf": str(dual_cd_pdf.name),
+            "rank2d_png": str(rank2d_png.name),
+            "rank2d_pdf": str(rank2d_pdf.name),
         },
         notes=[
             f"Reports regeneriert von vorhandenen Benchmark-Ergebnissen.",
@@ -210,6 +222,10 @@ def generate_reports(
             "wtl_pdf": str(wtl_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
+            "dual_cd_png": str(dual_cd_png.name),
+            "dual_cd_pdf": str(dual_cd_pdf.name),
+            "rank2d_png": str(rank2d_png.name),
+            "rank2d_pdf": str(rank2d_pdf.name),
         },
     )
     (output_dir / "benchmark_report.html").write_text(html_report, encoding="utf-8")
@@ -230,6 +246,8 @@ def generate_reports(
     print(f"  benchmark_results_cd.png / .pdf (Critical Difference Diagram)")
     print(f"  benchmark_results_wtl.png / .pdf (Win/Tie/Loss Matrix)")
     print(f"  benchmark_results_efficiency.png / .pdf (Executive Efficiency Summary)")
+    print(f"  benchmark_results_dual_cd.png / .pdf (Dual CD Diagram: F1 + Complexity)")
+    print(f"  benchmark_results_rank2d.png / .pdf (2D Rank Plot: Quality vs. Complexity)")
     
     print(f"\nLeaderboard (Top 15):")
     print(format_benchmark_leaderboard_table(leaderboard)[:3000])

@@ -446,6 +446,94 @@ def _nemenyi_q_alpha_05(k: int) -> float:
     return table[20]
 
 
+def _build_dataset_estimator_atoms_matrix(
+    aggregated: list[AggregatedBenchmarkResult],
+) -> tuple[list[str], list[str], np.ndarray]:
+    dataset_names = sorted({result.dataset for result in aggregated})
+    estimator_names = _sort_estimators_for_heatmap(aggregated)
+    matrix = np.full((len(dataset_names), len(estimator_names)), np.nan)
+
+    dataset_index = {name: idx for idx, name in enumerate(dataset_names)}
+    estimator_index = {name: idx for idx, name in enumerate(estimator_names)}
+    for result in aggregated:
+        if result.n_atoms_mean is None:
+            continue
+        matrix[dataset_index[result.dataset], estimator_index[result.estimator]] = float(result.n_atoms_mean)
+
+    return dataset_names, estimator_names, matrix
+
+
+def _average_ranks_asc(values: np.ndarray) -> np.ndarray:
+    """Return average ranks (1=best) with tie handling for ascending metric values (lower is better)."""
+    ranks = np.full(values.shape, np.nan, dtype=float)
+    valid = np.isfinite(values)
+    if not valid.any():
+        return ranks
+
+    valid_idx = np.where(valid)[0]
+    order = valid_idx[np.argsort(values[valid_idx], kind="mergesort")]
+    pos = 1
+    i = 0
+    while i < len(order):
+        j = i + 1
+        while j < len(order) and values[order[j]] == values[order[i]]:
+            j += 1
+        block = j - i
+        avg_rank = (2 * pos + block - 1) / 2.0
+        for idx in order[i:j]:
+            ranks[idx] = avg_rank
+        pos += block
+        i = j
+    return ranks
+
+
+def _cd_subplot(
+    ax,
+    sorted_names: list[str],
+    sorted_ranks: np.ndarray,
+    cd: float,
+    k: int,
+    valid_dataset_count: int,
+    title: str,
+    estimator_colors: dict,
+) -> None:
+    """Draw a single CD diagram into an existing Axes object."""
+    y_positions = np.arange(k)
+    for yi, (name, rank) in enumerate(zip(sorted_names, sorted_ranks)):
+        ax.scatter(rank, yi, s=85, color=estimator_colors[name], edgecolors="black", linewidths=0.8, zorder=3)
+        ax.text(rank + 0.03, yi, name, va="center", ha="left", fontsize=8)
+
+    for yi in y_positions:
+        ax.axhline(yi, color="#f1f5f9", linewidth=0.8, zorder=0)
+
+    bar_y = -0.9
+    for i in range(k - 1):
+        if sorted_ranks[i + 1] - sorted_ranks[i] <= cd:
+            ax.plot(
+                [sorted_ranks[i], sorted_ranks[i + 1]],
+                [bar_y, bar_y],
+                color="black",
+                linewidth=2.6,
+                solid_capstyle="round",
+                zorder=2,
+            )
+
+    cd_x0 = max(1.0, k - cd)
+    cd_y = k - 0.35
+    ax.plot([cd_x0, cd_x0 + cd], [cd_y, cd_y], color="black", linewidth=2.2)
+    ax.plot([cd_x0, cd_x0], [cd_y - 0.15, cd_y + 0.15], color="black", linewidth=1.6)
+    ax.plot([cd_x0 + cd, cd_x0 + cd], [cd_y - 0.15, cd_y + 0.15], color="black", linewidth=1.6)
+    ax.text(cd_x0 + cd / 2.0, cd_y + 0.2, f"CD = {cd:.2f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xlim(1.0, float(k) + 0.9)
+    ax.set_ylim(-1.3, max(y_positions) + 0.8)
+    ax.set_xlabel("Average rank (1 = best)")
+    ax.set_yticks([])
+    ax.set_xticks(range(1, k + 1))
+    ax.set_title(title)
+    ax.grid(axis="x", alpha=0.3)
+
+
 def plot_critical_difference_diagram(
     results: Iterable[BenchmarkResult],
     output_base: str | Path,
@@ -667,6 +755,199 @@ def plot_efficiency_summary(
     ax.set_xlabel("Median atoms across datasets")
     ax.set_ylabel("Median F1-macro across datasets")
     ax.set_title("Executive Summary: median quality vs median model size")
+    ax.grid(True, alpha=0.3)
+    ax.set_axisbelow(True)
+
+    base = Path(output_base)
+    png_path = base.with_suffix(".png")
+    pdf_path = base.with_suffix(".pdf")
+    fig.savefig(png_path, dpi=190, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    return png_path, pdf_path
+
+
+def plot_dual_cd_diagram(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+) -> tuple[Path, Path]:
+    """Plot two CD diagrams side-by-side: F1 ranks (left) and model complexity ranks (right).
+
+    Left panel ranks estimators by F1-macro (higher = rank 1 = better).
+    Right panel ranks by atom count (lower = rank 1 = simpler model).
+    Adjacency bars connect pairs that are NOT significantly different (Nemenyi, α=0.05).
+    """
+    raw_results = list(results)
+    ok_results = [result for result in raw_results if result.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for dual CD diagram")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for dual CD diagram")
+
+    dataset_names, estimator_names, f1_matrix = _build_dataset_estimator_f1_matrix(aggregated)
+    _, _, atoms_matrix = _build_dataset_estimator_atoms_matrix(aggregated)
+    k = len(estimator_names)
+    if k < 2:
+        raise ValueError("Dual CD diagram needs at least two estimators")
+
+    f1_rank_rows = np.full_like(f1_matrix, np.nan, dtype=float)
+    atoms_rank_rows = np.full_like(atoms_matrix, np.nan, dtype=float)
+    valid_f1_count = 0
+    valid_atoms_count = 0
+    for row_idx in range(f1_matrix.shape[0]):
+        row_f1 = f1_matrix[row_idx]
+        if int(np.isfinite(row_f1).sum()) >= 2:
+            f1_rank_rows[row_idx] = _average_ranks_desc(row_f1)
+            valid_f1_count += 1
+        row_atoms = atoms_matrix[row_idx]
+        if int(np.isfinite(row_atoms).sum()) >= 2:
+            atoms_rank_rows[row_idx] = _average_ranks_asc(row_atoms)
+            valid_atoms_count += 1
+
+    if valid_f1_count == 0:
+        raise ValueError("No datasets with enough F1 data for dual CD diagram")
+
+    mean_f1_ranks = np.nanmean(f1_rank_rows, axis=0)
+    q_alpha = _nemenyi_q_alpha_05(k)
+    cd_f1 = q_alpha * math.sqrt(k * (k + 1) / (6.0 * valid_f1_count))
+
+    f1_order = np.argsort(mean_f1_ranks)
+    f1_sorted_names = [estimator_names[i] for i in f1_order]
+    f1_sorted_ranks = mean_f1_ranks[f1_order]
+
+    estimator_colors = _estimator_color_map(estimator_names)
+    fig_h = max(4.2, 0.48 * k + 2.0)
+
+    if valid_atoms_count >= 1:
+        mean_atoms_ranks = np.nanmean(atoms_rank_rows, axis=0)
+        cd_atoms = q_alpha * math.sqrt(k * (k + 1) / (6.0 * valid_atoms_count))
+        atoms_order = np.argsort(mean_atoms_ranks)
+        atoms_sorted_names = [estimator_names[i] for i in atoms_order]
+        atoms_sorted_ranks = mean_atoms_ranks[atoms_order]
+
+        fig, (ax_f1, ax_atoms) = plt.subplots(1, 2, figsize=(21.0, fig_h))
+        _cd_subplot(
+            ax_f1, f1_sorted_names, f1_sorted_ranks, cd_f1, k, valid_f1_count,
+            f"F1 Performance ({valid_f1_count} datasets)", estimator_colors,
+        )
+        _cd_subplot(
+            ax_atoms, atoms_sorted_names, atoms_sorted_ranks, cd_atoms, k, valid_atoms_count,
+            f"Model Complexity — atoms ({valid_atoms_count} datasets)", estimator_colors,
+        )
+        fig.suptitle("Dual Critical Difference Diagram (Nemenyi, α=0.05)", fontsize=11, y=1.01)
+    else:
+        fig, ax_f1 = plt.subplots(figsize=(10.5, fig_h))
+        _cd_subplot(
+            ax_f1, f1_sorted_names, f1_sorted_ranks, cd_f1, k, valid_f1_count,
+            f"F1 Performance ({valid_f1_count} datasets)", estimator_colors,
+        )
+        fig.suptitle("Critical Difference Diagram (Nemenyi, α=0.05)", fontsize=11)
+
+    base = Path(output_base)
+    png_path = base.with_suffix(".png")
+    pdf_path = base.with_suffix(".pdf")
+    fig.savefig(png_path, dpi=190, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    return png_path, pdf_path
+
+
+def plot_2d_rank_plot(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+) -> tuple[Path, Path]:
+    """2D rank plot: mean F1 rank (x-axis) vs mean complexity rank (y-axis) per estimator.
+
+    Both axes use the same Nemenyi scale: a CD reference rectangle in the upper-right
+    corner shows the region size within which differences in both dimensions are
+    simultaneously non-significant.
+    Ideal position: bottom-left corner (best F1 rank AND simplest model).
+    """
+    raw_results = list(results)
+    ok_results = [result for result in raw_results if result.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for 2D rank plot")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for 2D rank plot")
+
+    dataset_names, estimator_names, f1_matrix = _build_dataset_estimator_f1_matrix(aggregated)
+    _, _, atoms_matrix = _build_dataset_estimator_atoms_matrix(aggregated)
+    k = len(estimator_names)
+    if k < 2:
+        raise ValueError("2D rank plot needs at least two estimators")
+
+    f1_rank_rows = np.full_like(f1_matrix, np.nan, dtype=float)
+    atoms_rank_rows = np.full_like(atoms_matrix, np.nan, dtype=float)
+    valid_f1_count = 0
+    valid_atoms_count = 0
+    for row_idx in range(f1_matrix.shape[0]):
+        row_f1 = f1_matrix[row_idx]
+        if int(np.isfinite(row_f1).sum()) >= 2:
+            f1_rank_rows[row_idx] = _average_ranks_desc(row_f1)
+            valid_f1_count += 1
+        row_atoms = atoms_matrix[row_idx]
+        if int(np.isfinite(row_atoms).sum()) >= 2:
+            atoms_rank_rows[row_idx] = _average_ranks_asc(row_atoms)
+            valid_atoms_count += 1
+
+    if valid_f1_count == 0:
+        raise ValueError("No datasets with F1 data for 2D rank plot")
+    if valid_atoms_count == 0:
+        raise ValueError("No datasets with atom count data for 2D rank plot")
+
+    mean_f1_ranks = np.nanmean(f1_rank_rows, axis=0)
+    mean_atoms_ranks = np.nanmean(atoms_rank_rows, axis=0)
+
+    q_alpha = _nemenyi_q_alpha_05(k)
+    cd_f1 = q_alpha * math.sqrt(k * (k + 1) / (6.0 * valid_f1_count))
+    cd_atoms = q_alpha * math.sqrt(k * (k + 1) / (6.0 * valid_atoms_count))
+
+    estimator_colors = _estimator_color_map(estimator_names)
+
+    fig, ax = plt.subplots(figsize=(8.5, 7.5))
+    for idx, name in enumerate(estimator_names):
+        xr = mean_f1_ranks[idx]
+        yr = mean_atoms_ranks[idx]
+        if not (np.isfinite(xr) and np.isfinite(yr)):
+            continue
+        ax.scatter(xr, yr, s=110, color=estimator_colors[name], edgecolors="black", linewidths=0.8, zorder=3)
+        ax.text(xr + 0.07, yr, name, va="center", ha="left", fontsize=8)
+
+    # CD reference rectangle — upper-right corner of data space
+    rect_x0 = k - cd_f1 - 0.05
+    rect_y0 = k - cd_atoms - 0.05
+    rect = Rectangle(
+        (rect_x0, rect_y0), cd_f1, cd_atoms,
+        linewidth=1.4, edgecolor="#475569", facecolor="#e2e8f0", alpha=0.85, zorder=2,
+    )
+    ax.add_patch(rect)
+    ax.text(
+        rect_x0 + cd_f1 / 2.0, rect_y0 + cd_atoms + 0.15,
+        f"CD rectangle (Nemenyi α=0.05)\nF1={cd_f1:.2f}, complexity={cd_atoms:.2f}",
+        ha="center", va="bottom", fontsize=7.5, color="#475569",
+    )
+
+    # Mark ideal corner
+    ax.annotate(
+        "← ideal",
+        xy=(1.0, 1.0), xytext=(1.7, 1.7),
+        fontsize=8, color="#475569",
+        arrowprops=dict(arrowstyle="->", color="#475569", lw=1.2),
+    )
+
+    ax.set_xlim(0.5, k + 1.4)
+    ax.set_ylim(0.5, k + 1.4)
+    ax.set_xlabel(f"Mean F1 rank across {valid_f1_count} datasets (1 = best F1)")
+    ax.set_ylabel(f"Mean complexity rank across {valid_atoms_count} datasets (1 = fewest atoms)")
+    ax.set_title("2D Rank Plot: Quality vs. Complexity (Nemenyi CD, α=0.05)")
+    ax.set_xticks(range(1, k + 1))
+    ax.set_yticks(range(1, k + 1))
     ax.grid(True, alpha=0.3)
     ax.set_axisbelow(True)
 
