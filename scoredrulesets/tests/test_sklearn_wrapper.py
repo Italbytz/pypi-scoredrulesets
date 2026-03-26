@@ -43,7 +43,7 @@ def test_cart_backend_prints_ruleset_table(capsys):
     )
     clf.fit(X, y)
 
-    # Modell am Ende als Tabelle ausgeben (mit -s sichtbar in pytest).
+    # Print the final model as a table (visible in pytest with -s).
     print(format_ruleset_table(clf.to_ruleset()))
     captured = capsys.readouterr()
     assert "| idx " in captured.out
@@ -72,7 +72,7 @@ def test_cart_backend_writes_ruleset_output_file(tmp_path: Path):
 
 
 def test_exstracs_params_unknown_keys_are_filtered():
-    # Kein ExSTraCS-Backend nötig: wir testen die Param-Säuberung direkt.
+    # No ExSTraCS backend required: test parameter sanitization directly.
     raw_params = {
         "conservative_prune": True,
         "prune_atoms": False,  # invalid key -> must be ignored
@@ -91,7 +91,7 @@ def test_cart_pruned_keeps_non_empty_rules_on_iris():
     X, y = load_iris(return_X_y=True)
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
 
-    # Baseline ohne Pruning
+    # Baseline without pruning
     clf_base = ScoredRuleSetClassifier(
         backend="cart",
         backend_params={"max_depth": 4},
@@ -101,7 +101,7 @@ def test_cart_pruned_keeps_non_empty_rules_on_iris():
     y_pred_base = clf_base.predict(X_te)
     n_atoms_base = sum(len(r.atoms) for r in clf_base.to_ruleset().rules)
 
-    # Auto-Pruning (durchsucht mehrere Lambdas automatisch)
+    # Auto-pruning (automatically scans multiple lambdas)
     clf_pruned = ScoredRuleSetClassifier(
         backend="cart",
         backend_params={"max_depth": 4},
@@ -113,14 +113,14 @@ def test_cart_pruned_keeps_non_empty_rules_on_iris():
     ruleset = clf_pruned.to_ruleset()
     n_atoms_pruned = sum(len(r.atoms) for r in ruleset.rules)
 
-    # Pruning darf keine leeren Nicht-Default-Regeln erzeugen
+    # Pruning must not create empty non-default rules
     assert n_atoms_pruned > 0
     assert all(len(rule.atoms) > 0 for rule in ruleset.rules)
 
-    # Pruning muss Vorhersagen erhalten (F1 darf nicht sinken)
+    # Pruning must preserve predictions (F1 must not decrease)
     assert np.array_equal(y_pred_pruned, y_pred_base)
 
-    # Pruning muss Atome reduzieren (oder zumindest nicht erhöhen)
+    # Pruning must reduce atoms (or at least not increase them)
     assert n_atoms_pruned <= n_atoms_base
 
 

@@ -1,13 +1,13 @@
-"""Normal-Lite Benchmark: wie Standard, aber mit weniger Repeats fuer schnellere Iteration.
+"""Normal-Lite benchmark: same as standard, but with fewer repeats for faster iteration.
 
-Profil:
-- gleiche Datensaetze wie Standard
-- gleicher Estimator-Katalog wie Standard
-- default: 2 Repeats (statt 3)
-- eigene Artefakte in benchmarks/normal_lite/
-- eigener Checkpoint: benchmarks/checkpoint_normal_lite.jsonl
+Profile:
+- same datasets as standard
+- same estimator catalog as standard
+- default: 2 repeats (instead of 3)
+- dedicated artifacts in benchmarks/normal_lite/
+- dedicated checkpoint: benchmarks/checkpoint_normal_lite.jsonl
 
-Aufruf:
+Usage:
     python examples/benchmarks/benchmark_normal_lite.py
     python examples/benchmarks/benchmark_normal_lite.py --repeats 2 --timeout 180
 """
@@ -27,43 +27,43 @@ def _default_log_path() -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Normal-Lite Benchmark: Standard-Konfiguration mit weniger Repeats.",
+        description="Normal-Lite Benchmark: standard configuration with fewer repeats.",
     )
     parser.add_argument(
         "--log-file", type=Path, default=None,
-        help="Console-Log-Datei (default: auto-generiert).",
+        help="Console log file (default: auto-generated).",
     )
     parser.add_argument(
         "--no-log", action="store_true",
-        help="Kein Log-File schreiben.",
+        help="Do not write a log file.",
     )
     parser.add_argument(
         "--datasets", type=str, default="",
-        help="Kommaseparierte Dataset-Liste (default: Standard-Datasets).",
+        help="Comma-separated Dataset list (default: standard datasets).",
     )
     parser.add_argument(
         "--estimators", type=str, default="",
-        help="Kommaseparierte Schaetzer-Liste (default: alle ohne MUX).",
+        help="Comma-separated Estimator list (default: all without MUX).",
     )
     parser.add_argument(
         "--repeats", type=int, default=2,
-        help="Wiederholungen pro Kombination (default: 2).",
+        help="Repeats per combination (default: 2).",
     )
     parser.add_argument(
         "--timeout", type=float, default=300.0,
-        help="Timeout pro Einzellauf in Sekunden (default: 300). 0 = kein Timeout.",
+        help="Timeout per single run in seconds (default: 300). 0 = no timeout.",
     )
     parser.add_argument(
         "--checkpoint", type=str, default="benchmarks/checkpoint_normal_lite.jsonl",
-        help="Checkpoint-Datei fuer Resume (default: benchmarks/checkpoint_normal_lite.jsonl).",
+        help="Checkpoint file for resume (default: benchmarks/checkpoint_normal_lite.jsonl).",
     )
     parser.add_argument(
         "--output-dir", type=str, default="benchmarks/normal_lite",
-        help="Ausgabeverzeichnis fuer Reports/Artefakte (default: benchmarks/normal_lite).",
+        help="output directory for reports/artifacts (default: benchmarks/normal_lite).",
     )
     parser.add_argument(
         "--no-checkpoint", action="store_true",
-        help="Checkpoint/Resume deaktivieren.",
+        help="Disable checkpoint/resume.",
     )
     args = parser.parse_args()
 
@@ -88,7 +88,7 @@ def main() -> None:
             timeout_seconds=timeout,
             checkpoint_path=ckpt,
             output_dir=args.output_dir,
-            console_title="NORMAL-LITE BENCHMARK: Alle Schaetzer, ausgewaehlte Datensaetze, reduzierte Repeats",
+            console_title="NORMAL-LITE BENCHMARK: all estimators, selected datasets, reduced repeats",
             report_title="ScoredRuleSets Normal-Lite Benchmark",
         )
 

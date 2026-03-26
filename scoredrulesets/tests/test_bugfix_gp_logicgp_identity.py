@@ -1,7 +1,7 @@
 """
-Tests fuer die Bugfixes:
-  1. gp vs gp_residual: muessen unterschiedliche Konfigurationen haben
-  2. rlcw_macro vs rlcw_micro: muessen unterschiedliches F1-Averaging verwenden
+Tests for bug fixes:
+  1. gp vs gp_residual: must use different configurations
+  2. rlcw_macro vs rlcw_micro: must use different F1 averaging
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Bug 1: gp ≠ gp_residual (Konfigurationen muessen sich unterscheiden)
+# Bug 1: gp != gp_residual (configurations must differ)
 # ---------------------------------------------------------------------------
 
 def test_gp_and_gp_residual_have_different_fitness_mode():
@@ -51,14 +51,14 @@ def test_gp_and_gp_residual_produce_different_results():
 
 
 # ---------------------------------------------------------------------------
-# Bug 2: rlcw_macro ≠ rlcw_micro (F1-Averaging muss sich unterscheiden)
+# Bug 2: rlcw_macro != rlcw_micro (F1 averaging must differ)
 # ---------------------------------------------------------------------------
 
 def test_logicgp_trainer_config_resolves_correctly():
-    """_resolve_trainer_config muss trainer + f1_averaging korrekt aufloesen."""
+    """_resolve_trainer_config must resolve trainer + f1_averaging correctly."""
     from scoredrulesets.estimators.logicgp import LogicGPClassifier
 
-    # Neue Parameter-Form
+    # New parameter form
     clf = LogicGPClassifier(trainer="rlcw", f1_averaging="micro")
     assert clf._resolve_trainer_config() == (True, "micro")
 
@@ -66,15 +66,15 @@ def test_logicgp_trainer_config_resolves_correctly():
     assert clf._resolve_trainer_config() == (False, "macro")
 
 
-    # _run_gp muss average=f1_average verwenden (kein hardcodiertes "macro")
+    # _run_gp must use average=f1_average (no hardcoded "macro")
     import inspect, re
     source = inspect.getsource(LogicGPClassifier._run_gp)
     assert "average=f1_average" in source, (
-        "_run_gp muss average=f1_average statt hardcodiertem 'macro' verwenden"
+        "_run_gp must use average=f1_average instead of hardcoded 'macro'"
     )
     hardcoded_calls = re.findall(r'_f1_score\([^)]*average="macro"', source)
     assert len(hardcoded_calls) == 0, (
-        f"_run_gp darf kein hardcodiertes average='macro' in _f1_score Aufrufen haben, "
+        f"_run_gp must not contain hardcoded average='macro' in _f1_score calls, "
         f"gefunden: {hardcoded_calls}"
     )
 
@@ -92,7 +92,7 @@ def test_rlcw_macro_and_micro_specs_differ():
 
 
 def test_rlcw_macro_micro_different_predictions():
-    """rlcw_macro und rlcw_micro sollten bei gleichem Seed unterschiedlich selektieren."""
+    """rlcw_macro and rlcw_micro should select differently with the same seed."""
     from scoredrulesets.estimators.logicgp import LogicGPClassifier
 
     rng = np.random.default_rng(42)
@@ -134,11 +134,11 @@ def test_rlcw_macro_micro_different_predictions():
     assert meta_micro["trainer"] == "rlcw"
     assert meta_micro["f1_averaging"] == "micro"
 
-    # Stochastisch koennen sie gleich sein – Hauptsache die Logik ist korrekt
+    # Stochastically they may match; key point is correct logic
     if np.array_equal(pred_macro, pred_micro):
         pytest.skip(
-            "macro/micro zufaellig identisch bei diesem Seed – "
-            "Code-Fix ist aber korrekt verifiziert"
+            "macro/micro randomly identical for this seed; "
+            "code fix is still correctly verified"
         )
 
 

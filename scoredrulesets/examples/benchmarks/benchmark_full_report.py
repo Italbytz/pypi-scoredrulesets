@@ -1,15 +1,14 @@
-"""
-Umfangreicher Benchmark aller relevanten Schaetzer und Datensaetze mit Fortschrittsanzeige und Report.
+"""Comprehensive benchmark with full reporting.
 
-- Nutzt alle verfuegbaren Estimatoren aus benchmarking/estimators.py
-- Nutzt alle Datensaetze: sklearn, Paper-UCI, synthetische (inkl. cart_hard, ruleset_hard, rule_hard)
-- Per-Lauf-Timeout (Standard: 300 s) verhindert haengende Laeufe
-- Gibt Fortschritt und Zwischenstaende aus
-- Erstellt Markdown- und HTML-Report sowie CSV/JSON
+- Uses all available estimators from `benchmarking/estimators.py`
+- Uses all datasets: sklearn, Paper-UCI, and synthetic groups
+- Per-run timeout (default: 300s) prevents hanging runs
+- Prints progress and intermediate status
+- Creates Markdown/HTML reports and CSV/JSON artifacts
 
-Laufzeit: Kann je nach Konfiguration sehr lang sein!
+Runtime can be very long depending on configuration.
 
-Aufruf:
+Usage:
     python examples/benchmarks/benchmark_full_report.py
     python examples/benchmarks/benchmark_full_report.py --timeout 120
     python examples/benchmarks/benchmark_full_report.py --datasets cart_hard,ruleset_hard --estimators wrapper_cart,gp
@@ -99,31 +98,31 @@ def main(
     include_pmlb: bool = False,
     checkpoint_path: str | Path | None = "benchmarks/checkpoint.jsonl",
 ):
-    # Alle Estimatoren und Datensaetze sammeln
+    # Collect all estimators and datasets
     all_estimators = list(default_estimator_specs().keys())
-    # Multiplexer-/MUX-spezifische Varianten werden nur auf MUX-Datensaetzen
-    # benoetigt und verzerren das allgemeine Ranking → standardmaessig ausschliessen.
+    # Multiplexer/MUX-specific variants are only meaningful on MUX datasets
+    # and would bias the general ranking -> exclude by default.
     _MUX_ONLY = {"wrapper_logicgp_mux", "wrapper_logicgp_mux_rlcw", "wrapper_cart_mux"}
     if estimator_names is None:
         estimator_names = [e for e in all_estimators if e not in _MUX_ONLY]
 
-    # Ohne explizite Dataset-Auswahl: alle verfuegbaren Quellen nutzen.
+    # Without explicit dataset selection: use all available sources.
     if dataset_names is None:
-        dataset_names = None  # → run_benchmarks nutzt die gesamte Registry
+        dataset_names = None  # run_benchmarks will use the full registry
 
-    dn_display = ", ".join(dataset_names) if dataset_names else "(alle verfuegbaren)"
+    dn_display = ", ".join(dataset_names) if dataset_names else "(all available)"
     en_display = ", ".join(estimator_names)
-    timeout_display = f"{timeout_seconds:.0f}s" if timeout_seconds else "deaktiviert"
-    ckpt_display = str(checkpoint_path) if checkpoint_path else "deaktiviert"
+    timeout_display = f"{timeout_seconds:.0f}s" if timeout_seconds else "disabled"
+    ckpt_display = str(checkpoint_path) if checkpoint_path else "disabled"
 
-    print(f"Starte Benchmark mit {len(estimator_names)} Schaetzern...")
-    print(f"  Estimatoren:       {en_display}")
-    print(f"  Datensaetze:       {dn_display}")
-    print(f"  Wiederholungen:    {repeats}")
-    print(f"  Timeout pro Lauf:  {timeout_display}")
+    print(f"Starting benchmark with {len(estimator_names)} estimators...")
+    print(f"  Estimators:       {en_display}")
+    print(f"  Datasets:       {dn_display}")
+    print(f"  Repeats:    {repeats}")
+    print(f"  Timeout per run:  {timeout_display}")
     print(f"  Checkpoint:        {ckpt_display}")
-    print(f"  Synthetisch:       {'ja' if not skip_synthetic else 'nein'}")
-    print(f"  PMLB:              {'ja' if include_pmlb else 'nein'}")
+    print(f"  synthetic:       {'yes' if not skip_synthetic else 'no'}")
+    print(f"  PMLB:              {'yes' if include_pmlb else 'no'}")
 
     config = BenchmarkConfig(
         dataset_names=dataset_names,
@@ -141,13 +140,13 @@ def main(
     )
 
     # Fortschrittsanzeige
-    print("\n[1/3] Führe Benchmarks aus...")
+    print("\n[1/3] Run benchmarks...")
     t0 = time.time()
     results = run_benchmarks(config)
     t1 = time.time()
-    print(f"Benchmarks abgeschlossen in {t1-t0:.1f} Sekunden.")
+    print(f"Benchmarks completed in {t1-t0:.1f} seconds.")
 
-    print("\n[2/3] Aggregiere und erstelle Reports...")
+    print("\n[2/3] Aggregate and generate reports...")
     payload = results_as_dicts(results)
     aggregated = aggregate_benchmark_results(results, error_bar="std")
     leaderboard = build_benchmark_leaderboard(aggregated)
@@ -159,7 +158,7 @@ def main(
     Path("benchmark_results_aggregated.csv").write_text(_csv_string(aggregated_payload), encoding="utf-8")
     Path("benchmark_results_aggregated.json").write_text(json.dumps(aggregated_payload, indent=2), encoding="utf-8")
 
-    # Plots und Reports
+    # Plots and Reports
     png_path, pdf_path = plot_benchmark_results(results, output_base=Path("benchmark_results"), aggregate_repeats=True)
     heatmap_png, heatmap_pdf = plot_benchmark_heatmap(results, output_base=Path("benchmark_results_heatmap"))
     combined_png, combined_pdf = plot_benchmark_heatmap_combined(results, output_base=Path("benchmark_results_heatmap_combined"))
@@ -209,11 +208,11 @@ def main(
             "efficiency_pdf": str(eff_pdf),
         },
         notes=[
-            "Alle Schaetzer und Datensaetze (sklearn, Paper-UCI, synthetisch: "
+            "All estimators and datasets (sklearn, Paper-UCI, synthetic: "
             "cart_hard, ruleset_hard, rule_hard), Paper-Split-Policy.",
-            f"Timeout pro Einzellauf: {timeout_display}.",
-            f"{repeats} Wiederholungen.",
-            "Laufzeit und Komplexitaet koennen je nach System stark variieren.",
+            f"Timeout per single run: {timeout_display}.",
+            f"{repeats} Repeats.",
+            "Runtime and complexity can vary significantly by system.",
         ],
     )
     Path("benchmark_leaderboard.md").write_text(md_report, encoding="utf-8")
@@ -255,19 +254,19 @@ def main(
             "efficiency_pdf": str(eff_pdf),
         },
         notes=[
-            "Alle Schaetzer und Datensaetze (sklearn, Paper-UCI, synthetisch: "
+            "All estimators and datasets (sklearn, Paper-UCI, synthetic: "
             "cart_hard, ruleset_hard, rule_hard), Paper-Split-Policy.",
-            f"Timeout pro Einzellauf: {timeout_display}.",
-            f"{repeats} Wiederholungen.",
-            "Laufzeit und Komplexitaet koennen je nach System stark variieren.",
+            f"Timeout per single run: {timeout_display}.",
+            f"{repeats} Repeats.",
+            "Runtime and complexity can vary significantly by system.",
         ],
     )
     Path("benchmark_leaderboard.html").write_text(html_report, encoding="utf-8")
 
-    print("\n[3/3] Fertig! Ergebnisse und Reports wurden geschrieben.")
-    print("Wichtige Dateien:")
-    print("- benchmark_results.csv / .json (Rohdaten)")
-    print("- benchmark_results_aggregated.csv / .json (Aggregiert)")
+    print("\n[3/3] Done! Results and reports were written.")
+    print("Key files:")
+    print("- benchmark_results.csv / .json (Raw data)")
+    print("- benchmark_results_aggregated.csv / .json (Aggregated)")
     print("- benchmark_leaderboard.md / .html (Report)")
     print("- benchmark_results.png / .pdf (Plots)")
     print("- benchmark_results_heatmap.png / .pdf (Heatmap)")
@@ -319,47 +318,47 @@ if __name__ == "__main__":
         "--datasets",
         type=str,
         default="",
-        help="Kommaseparierte Liste von Datensaetzen oder Gruppenaliasen "
-             "(z.B. cart_hard,ruleset_hard,rule_hard). Leer = alle.",
+           help="Comma-separated list of datasets or group aliases "
+               "(e.g. cart_hard,ruleset_hard,rule_hard). Empty = all.",
     )
     parser.add_argument(
         "--estimators",
         type=str,
         default="",
-        help="Kommaseparierte Liste von Schaetzern. Leer = alle (ohne MUX-Varianten).",
+        help="Comma-separated list of estimators. Empty = all (without MUX variants).",
     )
     parser.add_argument(
         "--repeats",
         type=int,
         default=3,
-        help="Anzahl Wiederholungen pro Datensatz/Schaetzer (default: 3).",
+        help="Number of repeats per dataset/estimator (default: 3).",
     )
     parser.add_argument(
         "--timeout",
         type=float,
         default=300.0,
-        help="Timeout in Sekunden pro Einzellauf (default: 300). 0 = kein Timeout.",
+        help="Timeout in seconds pro Einzellauf (default: 300). 0 = no timeout.",
     )
     parser.add_argument(
         "--skip-synthetic",
         action="store_true",
-        help="Synthetische Datensaetze ueberspringen.",
+        help="synthetice Datasets skip.",
     )
     parser.add_argument(
         "--include-pmlb",
         action="store_true",
-        help="PMLB-Datensaetze einschliessen (erfordert: pip install pmlb).",
+        help="PMLB-Datasets include (requires: pip install pmlb).",
     )
     parser.add_argument(
         "--checkpoint",
         type=str,
         default="benchmarks/checkpoint.jsonl",
-        help="JSONL-Checkpoint-Datei fuer Resume (default: benchmarks/checkpoint.jsonl).",
+        help="JSONL-Checkpoint file for resume (default: benchmarks/checkpoint.jsonl).",
     )
     parser.add_argument(
         "--no-checkpoint",
         action="store_true",
-        help="Checkpoint/Resume deaktivieren.",
+        help="Disable checkpoint/resume.",
     )
     args = parser.parse_args()
 

@@ -1736,7 +1736,7 @@ def plot_pareto_front(
                 y_pareto.append(float(f1))
                 labels_pareto.append(r.estimator)
 
-        # Alle Punkte farbcodiert nach Schaetzer
+        # Color all points by estimator.
         for estimator in estimator_names:
             est_x = [x for x, e in zip(x_all, est_all) if e == estimator and e not in pareto_set]
             est_y = [y for y, e in zip(y_all, est_all) if e == estimator and e not in pareto_set]

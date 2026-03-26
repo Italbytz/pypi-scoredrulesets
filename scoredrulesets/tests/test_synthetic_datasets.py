@@ -1,4 +1,4 @@
-"""Tests fuer synthetische biomedizinische Datensaetze."""
+"""Tests for synthetic biomedical datasets."""
 from __future__ import annotations
 
 import numpy as np
@@ -38,14 +38,14 @@ class TestGenerateEpistasisDataset:
         assert set(np.unique(y)).issubset({0, 1})
 
     def test_heritability_affects_balance(self):
-        # Hohe Heritabilitaet → staerkeres Signal → besser trennbar
+        # High heritability -> stronger signal -> better separability
         _, y_easy = generate_epistasis_dataset(
             n_samples=5000, n_snps=10, n_interacting=2, heritability=0.9, random_state=42
         )
         _, y_hard = generate_epistasis_dataset(
             n_samples=5000, n_snps=10, n_interacting=2, heritability=0.1, random_state=42
         )
-        # Beide sollten grob balanciert sein (ca. 50/50)
+        # Both should be roughly balanced (~50/50)
         easy_ratio = np.mean(y_easy)
         hard_ratio = np.mean(y_hard)
         assert 0.3 < easy_ratio < 0.7
@@ -66,8 +66,8 @@ class TestGenerateXorParityDataset:
         assert set(np.unique(y)).issubset({0, 1})
 
     def test_parity_logic_without_noise(self):
-        # Ohne Rauschen und Permutation koennen wir die Paritaet pruefen.
-        # Wir pruefen indirekt: die Labels sollten grob 50/50 sein.
+        # Without noise and permutation we can validate parity.
+        # We check indirectly: labels should be roughly 50/50.
         X, y = generate_xor_parity_dataset(n_bits=3, n_noise_features=0, n_samples=10000, random_state=42)
         ratio = np.mean(y)
         assert 0.45 < ratio < 0.55
@@ -95,14 +95,14 @@ class TestGenerateImbalancedDataset:
         )
         assert X.shape[0] == 1000
         minority_ratio = np.mean(y == 1)
-        # Sollte ungefaehr 10% sein (mit etwas Toleranz)
+        # Should be about 10% (with some tolerance)
         assert 0.03 < minority_ratio < 0.25
 
 
 class TestLoadSyntheticDatasets:
     def test_returns_nonempty_dict(self):
         bundles = load_synthetic_datasets()
-        assert len(bundles) >= 8  # Mindestens 8 vordefinierte Configs
+        assert len(bundles) >= 8  # At least 8 predefined configs
 
     def test_all_bundles_valid(self):
         bundles = load_synthetic_datasets()
@@ -152,7 +152,7 @@ class TestResolveSyntheticAliases:
 
 
 # ---------------------------------------------------------------------------
-# Tests fuer CART-schwierige Datensaetze
+# Tests for CART-difficult datasets
 # ---------------------------------------------------------------------------
 
 
@@ -167,7 +167,7 @@ class TestGenerateDnfConceptDataset:
     def test_positive_class_present(self):
         X, y = generate_dnf_concept_dataset(n_disjuncts=2, n_conjuncts=2,
                                             n_samples=2000, random_state=42)
-        # DNF mit 2 Disjunkten → positive Klasse sollte substantiell vertreten sein
+        # DNF with 2 disjuncts -> positive class should be substantially represented
         assert 0.2 < np.mean(y) < 0.9
 
     def test_noise_flips(self):
@@ -175,7 +175,7 @@ class TestGenerateDnfConceptDataset:
                                                   n_samples=5000, noise_rate=0.0, random_state=42)
         _, y_noisy = generate_dnf_concept_dataset(n_disjuncts=2, n_conjuncts=2,
                                                   n_samples=5000, noise_rate=0.2, random_state=42)
-        # Bei 20% Rauschen sollten sich die Labels merklich unterscheiden
+        # With 20% noise, labels should differ noticeably
         diff_rate = np.mean(y_clean != y_noisy)
         assert 0.1 < diff_rate < 0.35
 
@@ -202,13 +202,13 @@ class TestGenerateCheckerboardDataset:
 class TestGenerateMonk1Dataset:
     def test_full_enumeration(self):
         X, y = generate_monk1_dataset(n_samples=5000, random_state=0)
-        # Volle Enumeration hat 432 Instanzen
+        # Full enumeration has 432 instances
         assert X.shape[0] == 432
         assert X.shape[1] == 6
 
     def test_concept_correct(self):
         X, y = generate_monk1_dataset(n_samples=5000, random_state=0)
-        # Manuell pruefen: (a1==a2) OR (a5==1) auf einem Sample
+        # Manually validate: (a1==a2) OR (a5==1) on each sample
         for i in range(X.shape[0]):
             expected = int((X[i, 0] == X[i, 1]) or (X[i, 4] == 1))
             assert y[i] == expected, f"Row {i}: expected {expected}, got {y[i]}"
@@ -236,7 +236,7 @@ class TestGenerateOverlappingRulesDataset:
 
     def test_positive_class(self):
         _, y = generate_overlapping_rules_dataset(n_rules=4, n_samples=5000, random_state=42)
-        # Mindestens einige Positive erwartet
+        # Expect at least some positives
         assert np.sum(y == 1) > 50
 
 
@@ -249,7 +249,7 @@ class TestGenerateModularSumDataset:
         assert set(np.unique(y)).issubset({0, 1})
 
     def test_approx_balance(self):
-        # Bei mod 3 sollte ca. 1/3 positiv sein
+        # For mod 3, about 1/3 should be positive
         _, y = generate_modular_sum_dataset(n_relevant=4, n_samples=10000,
                                             modulus=3, random_state=42)
         assert 0.25 < np.mean(y) < 0.45
@@ -270,7 +270,7 @@ class TestCartHardDatasetsInRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Tests fuer Ruleset-schwierige Datensaetze (CART besser als Rule Sets)
+# Tests for ruleset-difficult datasets (CART better than rule sets)
 # ---------------------------------------------------------------------------
 
 
@@ -302,7 +302,7 @@ class TestGenerateSequentialThresholdDataset:
         assert set(np.unique(y)).issubset({0, 1})
 
     def test_bins_alternate(self):
-        # Mit 4 Bins: Bin 0 → 0, 1 → 1, 2 → 0, 3 → 1 → ca. 50/50
+        # With 4 bins: bin 0 -> 0, 1 -> 1, 2 -> 0, 3 -> 1 -> about 50/50
         _, y = generate_sequential_threshold_dataset(n_bins=4, n_samples=10000, random_state=42)
         assert 0.45 < np.mean(y) < 0.55
 
@@ -318,7 +318,7 @@ class TestGenerateHierarchicalInteractionDataset:
 
 
 # ---------------------------------------------------------------------------
-# Tests fuer alle-regelbasierten-schwierige Datensaetze (SVM/kNN besser)
+# Tests for datasets difficult for all rule-based methods (SVM/kNN better)
 # ---------------------------------------------------------------------------
 
 

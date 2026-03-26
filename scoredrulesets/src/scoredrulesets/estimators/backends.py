@@ -188,10 +188,10 @@ def build_backend_estimator(
         except FileNotFoundError as e:
             jvm_hint = _rulekit_jvm_hint()
             raise ImportError(
-                "backend='rulekit' konnte die JVM nicht starten. "
-                "Installiere mit: pip install 'scoredrulesets[rulekit]' und pruefe "
-                "JAVA_HOME und den JPype-JVM-Pfad. "
-                f"{jvm_hint} Fehler: {e}"
+                "backend='rulekit' could not start the JVM. "
+                "Install with: pip install 'scoredrulesets[rulekit]' and check "
+                "JAVA_HOME and the JPype JVM path. "
+                f"{jvm_hint} Error: {e}"
             ) from e
 
     if backend_key == "exstracs":
@@ -262,22 +262,22 @@ def _resolve_hs_class():
         tried.append(f"{module_name}.{class_name}")
 
     raise ImportError(
-        "backend='hs' braucht eine imodels-HS-Klasse, konnte aber keine finden. "
-        "Installiere/aktualisiere mit: pip install -e '.[hs]'. "
-        "Geprueft wurden: "
+        "backend='hs' requires an imodels HS class, but none could be found. "
+        "Install/update with: pip install -e '.[hs]'. "
+        "Checked: "
         + ", ".join(tried)
     )
 
 
 def _resolve_rulekit_class():
     """
-    Versuche RuleKit-Klasse zu laden.
-    RuleKit benötigt Java - gebe aussagekräftige Fehlermeldung aus.
+    Try to load the RuleKit class.
+    RuleKit requires Java; provide actionable error messages.
     """
     _ensure_java_home()
 
     try:
-        # Überprüfe ob Java installiert ist
+        # Check whether Java is installed.
         result = sp.run(
             ["java", "-version"],
             capture_output=True,
@@ -285,13 +285,13 @@ def _resolve_rulekit_class():
             timeout=5,
         )
         if result.returncode != 0:
-            raise RuntimeError("Java nicht gefunden oder nicht lauffähig")
+            raise RuntimeError("Java not found or not runnable")
     except (FileNotFoundError, sp.TimeoutExpired, RuntimeError) as e:
         raise ImportError(
-            "backend='rulekit' benötigt Java, aber kein Java gefunden oder funktionsfähig. "
-            "Installiere mit: pip install 'scoredrulesets[rulekit]' und stelle sicher, "
-            "dass Java (JDK 11+) installiert ist. "
-            f"Fehler: {e}"
+            "backend='rulekit' requires Java, but no working Java was found. "
+            "Install with: pip install 'scoredrulesets[rulekit]' and ensure "
+            "Java (JDK 11+) is installed. "
+            f"Error: {e}"
         ) from e
 
     candidate_locations = [
@@ -313,18 +313,18 @@ def _resolve_rulekit_class():
         tried.append(f"{module_name}.{class_name}")
 
     raise ImportError(
-        "backend='rulekit' braucht das 'rulekit' Paket. "
-        "Installiere mit: pip install 'scoredrulesets[rulekit]'. "
-        "Beachte: RuleKit benötigt Java (JDK 11+). "
-        "Geprueft wurden: "
+        "backend='rulekit' requires the 'rulekit' package. "
+        "Install with: pip install 'scoredrulesets[rulekit]'. "
+        "Note: RuleKit requires Java (JDK 11+). "
+        "Checked: "
         + ", ".join(tried)
     )
 
 
 def _resolve_exstracs_class():
     """
-    Versuche ExSTraCS-Klasse zu laden.
-    ExSTraCS wird durch skExSTraCS bereitgestellt.
+    Try to load the ExSTraCS class.
+    ExSTraCS is provided by skExSTraCS.
     """
     candidate_locations = [
         ("skExSTraCS", "ExSTraCS"),
@@ -345,9 +345,9 @@ def _resolve_exstracs_class():
         tried.append(f"{module_name}.{class_name}")
 
     raise ImportError(
-        "backend='exstracs' braucht scikit-exstracs (Importnamen: skExSTraCS oder skexstracs). "
-        "Installiere mit: pip install 'scoredrulesets[exstracs]'. "
-        "Geprueft wurden: "
+        "backend='exstracs' requires scikit-exstracs (import names: skExSTraCS or skexstracs). "
+        "Install with: pip install 'scoredrulesets[exstracs]'. "
+        "Checked: "
         + ", ".join(tried)
     )
 
@@ -361,14 +361,14 @@ def _supports_kwarg(cls: type[Any], param_name: str) -> bool:
 
 
 def _resolve_logicgp_class():
-    """Laedt die LogicGPClassifier-Klasse aus dem Projekt selbst."""
+    """Load the LogicGPClassifier class from this project."""
     try:
         from .logicgp import LogicGPClassifier
         return LogicGPClassifier
     except ImportError as e:
         raise ImportError(
-            "backend='logicgp' konnte LogicGPClassifier nicht laden. "
-            f"Import-Fehler: {e}"
+            "backend='logicgp' could not load LogicGPClassifier. "
+            f"Import error: {e}"
         ) from e
 
 

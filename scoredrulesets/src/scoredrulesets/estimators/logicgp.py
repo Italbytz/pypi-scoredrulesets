@@ -1,43 +1,43 @@
 """
-logicGP – Python-Implementierung (logicGP-FLCW Variante)
-=========================================================
-Basiert auf dem Paper:
+logicGP - Python implementation (logicGP-FLCW variant)
+=======================================================
+Based on the paper:
   Nunkesser (GECCO'25): "logicGP -- A Framework for Literal Based
   Classification with a Focus on Software Architecture and Open Source
   Implementation"
   DOI: 10.1145/3712255.3734300
 
-und dem C#-Referenz-Repository:
+and the C# reference repository:
   https://github.com/Italbytz/nuget-adapters-algorithms-ea
 
-Implementiert wird die logicGP-FLCW-Macro/Micro-Variante fuer
-Mehrklassen-Klassifikation mit kategorischen oder diskretisierten
-kontinuierlichen Features.
+This module implements the logicGP FLCW macro/micro variant for
+multi-class classification with categorical or discretized
+continuous features.
 
-Vorhersagemodell
+Prediction model
 ----------------
   M_hat = sum_i  w_i  * prod_j ( 1 if l_{i,j}(x) else 0 )
-  Y_hat = M_hat  falls irgendein Monom gefeuert hat, sonst w_0
+    Y_hat = M_hat  if any monomial fired, else w_0
   G_hat = argmax_c Y_hat[c]
 
-Gewichte (FLCW)
+Weights (FLCW)
 ---------------
-  w_i[c] = P(Klasse=c | Monom i feuert)   (= relative Klassenhaeufigkeit
-            unter den Trainingsinstanzen, fuer die Monom i wahr ist)
-  w_0[c] = relative Klassenhaeufigkeit unter den Instanzen, fuer die
-            KEIN Monom feuert
+    w_i[c] = P(class=c | monomial i fires)  (= relative class frequency
+                        among training instances where monomial i is true)
+    w_0[c] = relative class frequency among instances where
+                        NO monomial fires
 
-GP-Algorithmus
+GP algorithm
 --------------
   Initialpopulation: ein Individuum pro Literal
   Pro Generation:
     - 2 Eltern -> Crossover -> 1 Kind
     - 5 Mutationstypen, je 1 Individuum -> 5 neue Individuen
-    - Reproduktion: alle aktuellen Individuen
-    - Selektion: Pareto-Dominanz-Selektion (behalte nicht-dominierte)
-  Fitness: pro Klasse Recall + Modellgroesse (Anzahl distinkte Literale)
-  Terminierung: max_generations oder Stagnation
-  Finale Modellauswahl: bestes Modell je Groesse, dann Auswahlstrategie
+        - Reproduction: all current individuals
+        - Selection: Pareto-dominance selection (keep non-dominated)
+    Fitness: per-class recall + model size (number of distinct literals)
+    Termination: max_generations or stagnation
+    Final model selection: best model per size, then selection strategy
 """
 
 from __future__ import annotations
@@ -120,10 +120,10 @@ class _Monomial:
 @dataclass
 class _Polynomial:
     """
-    Gewichtetes Polynom: Liste von Monomen + Default-Gewichte w_0.
-    Vorhersage:
-      M_hat = sum der Monom-Gewichte fuer gefeuerte Monome
-      Y_hat = M_hat falls irgendein Monom feuerte, sonst w_0
+        Weighted polynomial: list of monomials + default weights w_0.
+        Prediction:
+            M_hat = sum of monomial weights for fired monomials
+            Y_hat = M_hat if any monomial fired, else w_0
       G_hat = argmax(Y_hat)
     """
     monomials: list[_Monomial]
@@ -131,7 +131,7 @@ class _Polynomial:
 
     @property
     def size(self) -> int:
-        """Anzahl distinkte Literale im Polynom."""
+        """Number of distinct literals in the polynomial."""
         all_lits: set[_SetLiteral] = set()
         for m in self.monomials:
             all_lits.update(m.literals)
@@ -175,53 +175,53 @@ class _Polynomial:
 @dataclass
 class _Fitness:
     """
-    Multi-objective Fitness: per-Klasse Recall + Modellgroesse.
+    Multi-objective fitness: per-class recall + model size.
     Objective[c] = Recall_c = TP_c / max(N_c, 1)
-    Size = Anzahl distinkte Literale (minimize)
+    Size = number of distinct literals (minimize)
     """
     objectives: np.ndarray  # shape (n_classes,), recall per class
     size: int
 
     def dominates(self, other: "_Fitness") -> bool:
-        """True iff self dominiert other (mindestens gleich gut, mind. 1 besser)."""
+        """True iff self dominates other (at least as good, better in >=1 objective)."""
         if self.size > other.size:
-            # size muss <= sein fuer Dominanz
+            # size must be <= for dominance
             return False
-        # per-Klasse Recall muss >= sein
+        # per-class recall must be >=
         if np.any(self.objectives < other.objectives - 1e-12):
             return False
-        # mind. eine Komponente strikt besser
+        # at least one component must be strictly better
         return (self.size < other.size) or np.any(self.objectives > other.objectives + 1e-12)
 
     @property
     def consolidated(self) -> float:
-        """Zusammengefasstes Fitness-Mass fuer finale Sortierung."""
+        """Consolidated fitness metric for final ranking."""
         return float(np.mean(self.objectives))
 
 
 @dataclass
 class _FitnessRLCW:
     """
-    3-Objective Fitness fuer RLCW-Trainer (Restricted Literals Computed Weights).
+    3-objective fitness for the RLCW trainer (Restricted Literals Computed Weights).
 
     Objective 1 (max_recall):   max per-class recall
-    Objective 2 (mean_other):   mean of remaining per-class recalls (ohne argmax-Klasse)
-    Objective 3 (size):         Modellgroesse (minimize)
+    Objective 2 (mean_other):   mean of remaining per-class recalls (excluding argmax class)
+    Objective 3 (size):         model size (minimize)
 
-    Domination: A dominiert B nur wenn
-      - A.best_class == B.best_class  (class-bound Dominanz)
+        Domination: A dominates B only if
+            - A.best_class == B.best_class  (class-bound dominance)
       - A.size <= B.size
       - A.max_recall >= B.max_recall
       - A.mean_other >= B.mean_other
-      - mindestens eine Komponente strikt besser
+    - at least one component is strictly better
     """
     max_recall: float    # obj1: max(per_class_recalls)
-    mean_other: float    # obj2: mean der uebrigen per-class recalls
-    size: int            # obj3: Modellgroesse (minimize)
-    best_class: int      # argmax der per-class recalls (fuer class-bound Vergleich)
+    mean_other: float    # obj2: mean of remaining per-class recalls
+    size: int            # obj3: model size (minimize)
+    best_class: int      # argmax of per-class recalls (for class-bound comparison)
 
     def dominates(self, other: "_FitnessRLCW") -> bool:
-        """True iff self dominiert other (class-bound Pareto-Dominanz)."""
+        """True iff self dominates other (class-bound Pareto dominance)."""
         if self.best_class != other.best_class:
             return False
         if self.size > other.size:
@@ -238,12 +238,12 @@ class _FitnessRLCW:
 
     @property
     def consolidated(self) -> float:
-        """Zusammengefasstes Fitness-Mass fuer finale Sortierung."""
+        """Consolidated fitness metric for final ranking."""
         return (self.max_recall + self.mean_other) / 2.0
 
 
 # ---------------------------------------------------------------------------
-# Gewichtsberechnung (FLCW)
+# Weight computation (FLCW)
 # ---------------------------------------------------------------------------
 
 def _compute_weights(
@@ -253,16 +253,16 @@ def _compute_weights(
     n_classes: int,
 ) -> None:
     """
-    Berechnet Gewichte in-place fuer FLCW-Variante (klassenbalanciert).
+    Compute weights in place for the FLCW variant (class-balanced).
 
     w_i[c] = (count_c_in_firing / N_c)  normalisiert auf Summe 1.
-    Dies entspricht dem normalisierten per-class Recall des Monoms und
-    verhindert, dass Majority-Klassen die Gewichte dominieren.
-    w_0 = analog fuer Instanzen, fuer die KEIN Monom feuert.
+    This corresponds to normalized per-class recall of the monomial and
+    prevents majority classes from dominating the weights.
+    w_0 is analogous for instances where NO monomial fires.
     """
     n = X_disc.shape[0]
     any_fired = np.zeros(n, dtype=bool)
-    # Klassengroessen fuer Balancierung
+    # Class counts for balancing.
     class_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
     class_counts = np.maximum(class_counts, 1.0)  # Division durch 0 vermeiden
 
@@ -272,14 +272,14 @@ def _compute_weights(
         counts = np.bincount(y_idx[mask], minlength=n_classes).astype(float)
         total = counts.sum()
         if total > 0:
-            # Klassenbalanciert: Anteil der abgedeckten Klasseninstanzen
+            # Class-balanced: share of covered instances per class.
             balanced = counts / class_counts
             bal_total = balanced.sum()
             mon.weights = balanced / bal_total if bal_total > 0 else np.ones(n_classes) / n_classes
         else:
             mon.weights = np.ones(n_classes, dtype=float) / n_classes
 
-    # Default-Gewichte: wo kein Monom gefeuert hat
+    # Default weights: where no monomial fired.
     no_fire_mask = ~any_fired
     if no_fire_mask.any():
         counts0 = np.bincount(y_idx[no_fire_mask], minlength=n_classes).astype(float)
@@ -291,7 +291,7 @@ def _compute_weights(
 
 
 # ---------------------------------------------------------------------------
-# Fitness-Berechnung
+# Fitness computation
 # ---------------------------------------------------------------------------
 
 def _evaluate_fitness(
@@ -317,10 +317,10 @@ def _evaluate_fitness_rlcw(
     n_classes: int,
 ) -> _FitnessRLCW:
     """
-    Berechnet RLCW-Fitness mit 3 Zielen:
+    Compute RLCW fitness with 3 objectives:
     1. max per-class recall
-    2. mean der uebrigen per-class recalls
-    3. Modellgroesse (minimize)
+    2. mean of remaining per-class recalls
+    3. model size (minimize)
     """
     preds = poly.predict_classes(X_disc)
     recalls = np.zeros(n_classes, dtype=float)
@@ -351,7 +351,7 @@ def _evaluate_fitness_rlcw(
 def _pareto_front(
     individuals: list[tuple[_Polynomial, _Fitness]],
 ) -> list[tuple[_Polynomial, _Fitness]]:
-    """Behaelt nur nicht-dominierte Individuen."""
+    """Keep only non-dominated individuals."""
     front: list[tuple[_Polynomial, _Fitness]] = []
     for poly, fit in individuals:
         dominated = False
@@ -367,7 +367,7 @@ def _pareto_front(
 def _pareto_front_rlcw(
     individuals: list[tuple[_Polynomial, _FitnessRLCW]],
 ) -> list[tuple[_Polynomial, _FitnessRLCW]]:
-    """Behaelt nur nicht-dominierte Individuen (class-bound RLCW-Dominanz)."""
+    """Keep only non-dominated individuals (class-bound RLCW dominance)."""
     front: list[tuple[_Polynomial, _FitnessRLCW]] = []
     for poly, fit in individuals:
         dominated = False
@@ -387,14 +387,14 @@ def _tournament_trim(
     rng: np.random.Generator,
 ) -> list:
     """
-    Trimmt eine Population auf n_keep Individuen durch Turnier-Selektion.
-    Wird verwendet, wenn die Pareto-Front die Populationsgroesse uebersteigt.
+    Trim a population to n_keep individuals using tournament selection.
+    Used when the Pareto front exceeds the target population size.
     """
     if len(individuals) <= n_keep:
         return individuals
 
     selected = []
-    # Arbeite mit Indizes, um numpy-Array-Vergleiche bei pool.remove() zu vermeiden
+    # Work with indices to avoid numpy array comparison pitfalls with remove().
     remaining_idx = list(range(len(individuals)))
 
     for _ in range(n_keep):
@@ -423,7 +423,7 @@ def _tournament_trim(
 
 
 # ---------------------------------------------------------------------------
-# Mutations- und Crossover-Operatoren
+# Mutation and crossover operators
 # ---------------------------------------------------------------------------
 
 def _crossover(
@@ -432,8 +432,8 @@ def _crossover(
     rng: np.random.Generator,
 ) -> _Polynomial:
     """
-    Crossover: Nehme poly_b als Basis, ersetze ein zufaelliges Monom durch
-    ein zufaelliges Monom aus poly_a.
+    Crossover: take poly_b as base and replace one random monomial
+    with one random monomial from poly_a.
     """
     offspring = poly_b.clone()
     if not poly_a.monomials or not offspring.monomials:
@@ -449,7 +449,7 @@ def _mut_insert_literal(
     all_literals: list[_SetLiteral],
     rng: np.random.Generator,
 ) -> _Polynomial:
-    """Fuegt ein zufaelliges Literal in ein zufaelliges Monom ein."""
+    """Insert a random literal into a random monomial."""
     if not all_literals:
         return poly
     result = poly.clone()
@@ -463,9 +463,9 @@ def _mut_delete_literal(
     poly: _Polynomial,
     rng: np.random.Generator,
 ) -> _Polynomial:
-    """Loescht ein zufaelliges Literal aus einem zufaelligen Monom."""
+    """Delete a random literal from a random monomial."""
     result = poly.clone()
-    # Nur Monome mit mehr als einem Literal kommen in Frage
+    # Only monomials with more than one literal are eligible.
     candidates = [i for i, m in enumerate(result.monomials) if len(m.literals) > 1]
     if not candidates:
         return result
@@ -480,7 +480,7 @@ def _mut_replace_literal(
     all_literals: list[_SetLiteral],
     rng: np.random.Generator,
 ) -> _Polynomial:
-    """Ersetzt ein zufaelliges Literal durch ein neues zufaelliges Literal."""
+    """Replace a random literal with a new random literal."""
     if not all_literals:
         return poly
     result = poly.clone()
@@ -498,7 +498,7 @@ def _mut_insert_monomial(
     n_classes: int,
     rng: np.random.Generator,
 ) -> _Polynomial:
-    """Fuegt ein neues Monom (einzelnes Literal) hinzu."""
+    """Add a new monomial (single literal)."""
     if not all_literals:
         return poly
     result = poly.clone()
@@ -515,7 +515,7 @@ def _mut_delete_monomial(
     poly: _Polynomial,
     rng: np.random.Generator,
 ) -> _Polynomial:
-    """Loescht ein zufaelliges Monom."""
+    """Delete a random monomial."""
     if len(poly.monomials) <= 1:
         return poly
     result = poly.clone()
@@ -525,13 +525,13 @@ def _mut_delete_monomial(
 
 
 # ---------------------------------------------------------------------------
-# Literal-Generierung (Suchraum)
+# Literal generation (search space)
 # ---------------------------------------------------------------------------
 
 def _generate_literals(X_disc: np.ndarray) -> list[_SetLiteral]:
     """
-    Generiert alle nicht-trivialen Teilmengen-Literale (SetLiterals) fuer
-    jedes Feature in X_disc. Entspricht dem FLCW-Suchraum (Full Literals).
+    Generate all non-trivial subset literals (SetLiterals) for each
+    feature in X_disc. This matches the FLCW search space (full literals).
     """
     n_features = X_disc.shape[1]
     literals: list[_SetLiteral] = []
@@ -540,10 +540,10 @@ def _generate_literals(X_disc: np.ndarray) -> list[_SetLiteral]:
         cats = sorted(set(col.tolist()))
         k = len(cats)
         if k < 2:
-            continue  # Kein Literal moeglich fuer konstante Features
+            continue  # No literal possible for constant features.
         all_cats = tuple(cats)
         power_set_count = 1 << k
-        for bitmask in range(1, power_set_count - 1):  # alle nicht-trivialen Teilmengen
+        for bitmask in range(1, power_set_count - 1):  # all non-trivial subsets
             cat_set = frozenset(cats[i] for i in range(k) if (bitmask >> i) & 1)
             literals.append(_SetLiteral(
                 feature_idx=feat_idx,
@@ -607,7 +607,7 @@ def _select_model_best_f1(
 
 
 # ---------------------------------------------------------------------------
-# Finale Modellauswahl (aus paper: Algorithm 1)
+# Final model selection (from paper: Algorithm 1)
 # ---------------------------------------------------------------------------
 
 def _final_model_selection(
@@ -615,15 +615,15 @@ def _final_model_selection(
     min_improvement: float = 0.01,
 ) -> _Polynomial:
     """
-    Implementiert die Auswahlstrategie aus dem logicGP-Paper:
-    1. Behalte bestes Modell je Groesse (Konsolidierung)
-    2. Verwerfe Modelle, die weniger als 1% Verbesserung gegenueber kleineren bieten
-    3. Waehle groesstes Modell mit maximaler Genauigkeit
+    Implements the model selection strategy from the logicGP paper:
+    1. Keep best model per size (consolidation)
+    2. Discard models with less than 1% improvement vs smaller ones
+    3. Choose the largest model with maximal accuracy
     """
     if not candidates:
-        raise ValueError("Keine Kandidaten vorhanden.")
+        raise ValueError("No candidates available.")
 
-    # Schritt 1: Bestes Modell je Groesse
+    # Step 1: best model per size
     best_per_size: dict[int, tuple[_Polynomial, _Fitness, float]] = {}
     for poly, fit, acc in candidates:
         s = fit.size
@@ -632,7 +632,7 @@ def _final_model_selection(
 
     sorted_by_size = sorted(best_per_size.values(), key=lambda x: x[1].size)
 
-    # Schritt 2: Verwerfe Modelle ohne ausreichende Verbesserung ggb. kleineren
+    # Step 2: discard models without sufficient improvement vs smaller ones
     filtered: list[tuple[_Polynomial, _Fitness, float]] = []
     for poly, fit, acc in sorted_by_size:
         smaller_max_acc = max(
@@ -645,13 +645,13 @@ def _final_model_selection(
     if not filtered:
         filtered = sorted_by_size
 
-    # Schritt 3: Waehle Modell mit maximaler Genauigkeit (bei Gleichstand: groesstes)
+    # Step 3: pick model with maximal accuracy (ties: largest model)
     best = max(filtered, key=lambda x: (x[2], x[1].size))
     return best[0]
 
 
 # ---------------------------------------------------------------------------
-# Diskretisierung kontinuierlicher Features
+# Discretization of continuous features
 # ---------------------------------------------------------------------------
 
 def _discretize_features(
@@ -661,10 +661,10 @@ def _discretize_features(
     cat_masks: np.ndarray | None = None,
 ) -> tuple[np.ndarray, list, np.ndarray]:
     """
-    Diskretisiert kontinuierliche Features in Bin-Indizes.
-    Kategorische Features (nicht-numerisch oder <= n_bins unique Werte) bleiben unveraendert.
-    Gibt (X_disc, fitted_binners, cat_mask) zurueck.
-    cat_mask[i] = True -> Feature i wurde als kategorisch behandelt (kein Binner).
+    Discretize continuous features into bin indices.
+    Categorical features (non-numeric or <= n_bins unique values) stay unchanged.
+    Returns (X_disc, fitted_binners, cat_mask).
+    cat_mask[i] = True means feature i was treated as categorical (no binner).
     """
     n_samples, n_features = X.shape
     X_disc = np.empty((n_samples, n_features), dtype=object)
@@ -675,7 +675,7 @@ def _discretize_features(
         fitted_binners = []
         cat_masks_list = []
     else:
-        cat_masks_list = None  # wird nicht benoetigt
+        cat_masks_list = None  # not needed when using pre-fitted binners
 
     for f in range(n_features):
         col = X[:, f]
@@ -734,74 +734,73 @@ def _discretize_features(
 
 
 # ---------------------------------------------------------------------------
-# Hauptklasse: LogicGPClassifier
+# Main class: LogicGPClassifier
 # ---------------------------------------------------------------------------
 
 class LogicGPClassifier(BaseRuleSetEstimator):
     """
-    logicGP Python-Implementierung (FLCW und RLCW Varianten).
+    logicGP Python implementation (FLCW and RLCW variants).
 
-    Unterstuetzt zwei Trainer-Familien:
+    Supports two trainer families:
 
-    **FLCW** (Full Literals Computed Weights, Original-Variante):
+    **FLCW** (Full Literals Computed Weights, original variant):
       - ``trainer="flcw"``
-      - Alle nicht-trivialen Teilmengenliterale als Suchraum
-      - n_classes Pareto-Ziele (per-class Recall + Groesse)
+    - all non-trivial subset literals as search space
+    - n_classes Pareto objectives (per-class recall + size)
 
-    **RLCW** (Restricted Literals Computed Weights, effizientere Variante):
+    **RLCW** (Restricted Literals Computed Weights, more efficient variant):
       - ``trainer="rlcw"`` (Standard)
-      - Eingeschraenkter Suchraum via ``min_max_weight``
-      - 3 Pareto-Ziele (max-Recall, mean-other-Recall, Groesse)
-      - Class-bound Pareto-Dominanz (foerdert Klassenvielfalt)
-      - Optionale Populationsgroessen-Begrenzung mit Turnier-Selektion
+    - restricted search space via ``min_max_weight``
+    - 3 Pareto objectives (max-recall, mean-other-recall, size)
+    - class-bound Pareto dominance (encourages class diversity)
+    - optional population-size limit with tournament selection
 
     Parameters
     ----------
     trainer : str
-        Trainer-Variante: ``"rlcw"`` (Standard) oder ``"flcw"``.
+        Trainer variant: ``"rlcw"`` (default) or ``"flcw"``.
     f1_averaging : str
-        F1-Averaging fuer die Modellauswahl: ``"micro"`` (Standard)
-        oder ``"macro"``.
+        F1 averaging for model selection: ``"micro"`` (default)
+        or ``"macro"``.
     max_generations : int
-        Maximale Anzahl von GP-Generationen.
+        Maximum number of GP generations.
     stagnation_generations : int
-        Abbruch nach dieser Anzahl von Generationen ohne Verbesserung.
+        Stop after this many generations without improvement.
     n_bins : int
-        Anzahl Bins fuer Diskretisierung kontinuierlicher Features.
+        Number of bins for discretizing continuous features.
     min_max_weight : float
-        Literale herausfiltern, deren maximales Klassengewicht <= diesem Wert.
-        0.0 = kein Filter. Empfohlen fuer RLCW: 0.1–0.3.
+        Filter literals whose maximal class weight is <= this threshold.
+        0.0 = no filter. Recommended for RLCW: 0.1-0.3.
     min_improvement_pct : float
-        Mindestverbesserung in Prozent fuer Modellauswahl (Standard: 0.01 = 1 %).
+        Minimum improvement percentage for model selection (default: 0.01 = 1%).
     population_size : int or None
-        Maximale Populationsgroesse nach Selektion. Falls ``None``, wird die
-        vollstaendige Pareto-Front behalten (Standard: FLCW-Verhalten).
-        Bei RLCW empfohlen: 30–100.
+        Maximum population size after selection. If ``None``, keep the
+        full Pareto front (default FLCW behavior).
+        Recommended for RLCW: 30-100.
     n_adaptations_per_gen : int
-        Anzahl neuer Individuen pro Generation. Standardmaessig 6
-        (1 Crossover + 5 Mutationen). Fuer RLCW kann ein hoehere Wert
-        (z. B. 12–24) die Konvergenz verbessern.
+        Number of new individuals per generation. Default is 6
+        (1 crossover + 5 mutations). For RLCW, a higher value
+        (e.g. 12-24) can improve convergence.
     tournament_size : int
-        Turniergrösse fuer Turnier-Selektion (nur aktiv wenn
+        Tournament size for tournament selection (only active when
         ``population_size`` gesetzt und Pareto-Front > ``population_size``).
     max_model_size : int or None
-        Maximale Modellgroesse (Anzahl Literale). Falls gesetzt, werden
-        Individuen mit groesserer Modellgroesse ignoriert (Suchphase des
-        Zwei-Phasen-Modellauswahl-Algorithmus aus logicGP-RLCW).
+        Maximum model size (number of literals). If set, individuals
+        with larger model size are ignored (search phase of the
+        two-phase model selection algorithm from logicGP-RLCW).
     validation_fraction : float
-        Anteil der Trainingsdaten, der als Validierungsmenge fuer die
-        finale Modellauswahl reserviert wird.  Die Auswahl nutzt dann die
-        tatsaechliche F1 auf dem Val-Set (gemaess ``f1_averaging``).
-        ``0`` (Standard) deaktiviert den Split – die Modellauswahl erfolgt
-        dann anhand der Training-F1, die deutlich zuverlaessiger ist
-        als ``consolidated`` (mean recall) und keinen Datenverlust verursacht.
-        Werte > 0 sind nur fuer grosse Datensaetze empfohlen (n >= 200).
+        Fraction of training data reserved as validation set for final
+        model selection. Selection then uses actual F1 on the validation set
+        (according to ``f1_averaging``).
+        ``0`` (default) disables the split: selection is then based on
+        training F1, which is often more reliable than ``consolidated``
+        (mean recall) and avoids data loss.
+        Values > 0 are only recommended for large datasets (n >= 200).
     max_fit_seconds : float or None
-        Maximale Laufzeit fuer den GP-Loop in Sekunden. Falls gesetzt,
-        wird die Evolution nach Ablauf der Zeit sauber abgebrochen und
-        das bis dahin beste Modell zurueckgegeben. ``None`` (Standard)
-        deaktiviert das Zeitlimit. Empfohlen im Benchmark-Kontext:
-        ein Wert unter dem aeusseren Timeout (z. B. 240 bei 300s-Timeout).
+        Maximum runtime for the GP loop in seconds. If set, evolution is
+        stopped cleanly after timeout and the best model so far is returned.
+        ``None`` (default) disables the time limit. In benchmarks, use a value
+        below the outer timeout (e.g. 240 with a 300s timeout).
     random_state : int or None
     """
 
@@ -862,16 +861,16 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         class_to_idx = {label: idx for idx, label in enumerate(self.classes_)}
         y_idx = np.asarray([class_to_idx[v] for v in y_valid], dtype=int)
 
-        # Diskretisierung
+        # Discretization
         X_disc, self._binners_, self._cat_masks_ = _discretize_features(
             X_valid, n_bins=self.n_bins
         )
 
-        # ----- Validation-Split fuer bessere finale Modellauswahl -----
+        # ----- Validation split for improved final model selection -----
         use_val = (
             self.validation_fraction > 0
-            and X_disc.shape[0] >= 30          # zu wenig Samples -> kein Split
-            and len(np.unique(y_idx)) >= 2     # mindestens 2 Klassen
+            and X_disc.shape[0] >= 30          # too few samples -> no split
+            and len(np.unique(y_idx)) >= 2     # at least 2 classes
         )
         if use_val:
             try:
@@ -886,7 +885,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 X_disc_val = X_disc[val_idx]
                 y_idx_val = y_idx[val_idx]
             except ValueError:
-                # Stratifizierung fehlgeschlagen (zu wenig Samples pro Klasse)
+                # Stratification failed (too few samples per class).
                 use_val = False
 
         if not use_val:
@@ -904,25 +903,25 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             )
         if not all_literals:
             raise ValueError(
-                "Keine Literale generierbar. Bitte Features oder n_bins pruefen."
+                "No literals can be generated. Please check features or n_bins."
             )
 
-        # Initialpopulation: ein Individuum pro Literal + Seeds
+        # Initial population: one individual per literal + seeds.
         population = self._init_population(
             all_literals, n_classes, X_disc_train, y_idx_train
         )
 
-        # GP-Schleife (auf Train-Split)
+        # GP loop (on training split)
         best_poly = self._run_gp(
             population, all_literals, X_disc_train, y_idx_train, n_classes,
             X_val=X_disc_val, y_val=y_idx_val,
         )
 
-        # Gewichte auf GESAMTEN Daten neu berechnen
+        # Recompute weights on the full dataset.
         if use_val:
             _compute_weights(best_poly, X_disc, y_idx, n_classes)
 
-        # ScoredRuleSet erstellen
+        # Create scored ruleset.
         self.ruleset_ = self._poly_to_ruleset(best_poly, n_classes)
         self.ruleset_.validate()
         return self
@@ -932,7 +931,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         X_arr: np.ndarray = np.asarray(check_array(X, dtype=None))
         if X_arr.shape[1] != self.n_features_in_:
             raise ValueError(
-                f"X hat {X_arr.shape[1]} Features, erwartet {self.n_features_in_}."
+                f"X has {X_arr.shape[1]} features, expected {self.n_features_in_}."
             )
         X_disc, _, _ = _discretize_features(
             X_arr, fitted_binners=self._binners_, cat_masks=self._cat_masks_
@@ -944,7 +943,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         X_arr: np.ndarray = np.asarray(check_array(X, dtype=None))
         if X_arr.shape[1] != self.n_features_in_:
             raise ValueError(
-                f"X hat {X_arr.shape[1]} Features, erwartet {self.n_features_in_}."
+                f"X has {X_arr.shape[1]} features, expected {self.n_features_in_}."
             )
         X_disc, _, _ = _discretize_features(
             X_arr, fitted_binners=self._binners_, cat_masks=self._cat_masks_
@@ -1061,7 +1060,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         y_idx: np.ndarray,
         n_classes: int,
     ) -> list[_SetLiteral]:
-        """Filtert Literale heraus, deren maximales Klassengewicht zu gering ist."""
+        """Filter out literals whose maximal class weight is too small."""
         filtered = []
         for lit in literals:
             col = X_disc[:, lit.feature_idx]
@@ -1084,16 +1083,16 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         X_disc: np.ndarray | None = None,
         y_idx: np.ndarray | None = None,
     ) -> list[_Polynomial]:
-        """Erstellt Initialpopulation: ein Individuum pro Literal + Seeds.
+        """Create initial population: one individual per literal + seeds.
 
-        Zusaetzlich zu den Standard-Einzel-Literal-Individuen werden
-        klassen-diskriminative Seed-Individuen erzeugt:
-        1. Fuer jede Klasse: beste 2-Literal-Konjunktion (verschiedene Features)
-        2. Multi-Monom-Individuen: je ein Monom pro Klasse (fuer Mehrklassen)
-        Dies beschleunigt die Konvergenz besonders bei Mehrklassen-Problemen.
+        In addition to standard single-literal individuals, this creates
+        class-discriminative seed individuals:
+        1. For each class: best 2-literal conjunction (different features)
+        2. Multi-monomial individuals: one monomial per class (multi-class)
+        This can accelerate convergence, especially for multi-class problems.
         """
         population = []
-        # Standard: ein Individuum pro Literal
+        # Standard: one individual per literal.
         for lit in all_literals:
             mon = _Monomial(
                 literals=[lit],
@@ -1105,7 +1104,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             )
             population.append(poly)
 
-        # Klassen-diskriminatives Seeding (nur wenn X_disc/y_idx vorhanden)
+        # Class-discriminative seeding (only if X_disc/y_idx are available).
         if X_disc is not None and y_idx is not None and n_classes >= 2:
             population.extend(
                 self._seed_class_discriminative(
@@ -1121,18 +1120,18 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         X_disc: np.ndarray,
         y_idx: np.ndarray,
     ) -> list[_Polynomial]:
-        """Erzeugt klassen-diskriminative Seed-Individuen.
+        """Create class-discriminative seed individuals.
 
-        Fuer jede Klasse wird das Literal mit der besten Kombination aus
-        Purity (Anteil der Klasse unter den feuernden Samples) und Coverage
-        (Anteil der korrekt abgedeckten Klasseninstanzen) ermittelt.
-        Daraus werden Multi-Literal-Monome und Multi-Monom-Polynome erzeugt.
+        For each class, the literal with the best combination of
+        purity (class fraction among firing samples) and coverage
+        (fraction of correctly covered class instances) is determined.
+        This is used to build multi-literal monomials and multi-monomial polynomials.
         """
         seeds: list[_Polynomial] = []
         n_samples = X_disc.shape[0]
         unif = np.ones(n_classes, dtype=float) / n_classes
 
-        # Evaluiere Diskriminationskraft jedes Literals pro Klasse
+        # Evaluate discriminative strength of each literal per class.
         lit_fire_masks: list[np.ndarray] = []
         for lit in all_literals:
             col = X_disc[:, lit.feature_idx]
@@ -1140,7 +1139,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             mask = np.isin(col, cats)
             lit_fire_masks.append(mask)
 
-        # Finde bestes Literal pro Klasse (nach purity * coverage)
+        # Find best literal per class (by purity * coverage).
         best_per_class: list[list[tuple[int, float]]] = [[] for _ in range(n_classes)]
         for lit_idx, mask in enumerate(lit_fire_masks):
             n_fire = int(mask.sum())
@@ -1157,14 +1156,14 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 score = purity * coverage
                 best_per_class[c].append((lit_idx, score))
 
-        # Sortiere und behalte Top-5 pro Klasse
+        # Sort and keep top-5 per class.
         top_k = 5
         class_top_lits: list[list[int]] = []
         for c in range(n_classes):
             best_per_class[c].sort(key=lambda x: x[1], reverse=True)
             class_top_lits.append([idx for idx, _ in best_per_class[c][:top_k]])
 
-        # Seed 1: Fuer jede Klasse ein 2-Literal-Monom (verschiedene Features)
+        # Seed 1: for each class, one 2-literal monomial (different features).
         for c in range(n_classes):
             if len(class_top_lits[c]) < 2:
                 continue
@@ -1182,9 +1181,9 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                             default_weights=unif.copy(),
                         )
                         seeds.append(poly)
-                        break  # ein Seed pro Klasse reicht
+                        break  # one seed per class is enough
 
-        # Seed 2: Multi-Monom-Polynom – ein Monom pro Klasse
+        # Seed 2: multi-monomial polynomial - one monomial per class.
         if n_classes >= 2 and all(len(cl) > 0 for cl in class_top_lits):
             monomials = []
             for c in range(n_classes):
@@ -1228,20 +1227,20 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         y_val: np.ndarray | None = None,
     ) -> _Polynomial:
         """
-        Fuehrt den GP-Hauptloop aus und gibt das beste Polynom zurueck.
-        Unterstuetzt FLCW- und RLCW-Varianten basierend auf ``self.trainer``.
+        Run the main GP loop and return the best polynomial.
+        Supports FLCW and RLCW variants based on ``self.trainer``.
 
-        Die finale Modellauswahl bewertet Kandidaten anhand der
-        tatsaechlichen F1 (statt ``fit.consolidated`` = mean recall).
-        ``f1_averaging`` bestimmt Micro- oder Macro-Averaging.
-        Wenn ``X_val``/``y_val`` gegeben: F1 auf Validation-Set.
-        Sonst: F1 auf Trainingsdaten (kein Datenverlust, zuverlaessiger
-        fuer kleine Datensaetze).
+        Final model selection evaluates candidates based on
+        actual F1 (instead of ``fit.consolidated`` = mean recall).
+        ``f1_averaging`` determines micro or macro averaging.
+        If ``X_val``/``y_val`` are provided: F1 on validation set.
+        Otherwise: F1 on training data (no data loss, more reliable
+        for small datasets).
         """
         use_rlcw, f1_average = self._resolve_trainer_config()
         has_val = X_val is not None and y_val is not None
 
-        # Konfigurierbare Strategien aufloesen
+        # Resolve configurable strategies.
         resolved_fe = self._resolve_fitness_evaluator()
         if resolved_fe is not None:
             evaluate_fn = resolved_fe
@@ -1252,7 +1251,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         select_model_fn = self._resolve_model_selector()
 
         # ------------------------------------------------------------------
-        # Gewichte berechnen und Initialpopulation evaluieren
+        # Compute weights and evaluate initial population.
         # ------------------------------------------------------------------
         for poly in population:
             _compute_weights(poly, X_disc, y_idx, n_classes)
@@ -1263,7 +1262,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         ]
         evaluated = pareto_fn(evaluated)
 
-        # Populationsgroesse begrenzen (RLCW mit population_size)
+        # Limit population size (RLCW with population_size).
         if self.population_size is not None and len(evaluated) > self.population_size:
             evaluated = _tournament_trim(
                 evaluated, self.population_size, self.tournament_size, self._rng_
@@ -1276,9 +1275,8 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         ]
 
         # ------------------------------------------------------------------
-        # Elitismus: Verfolge das beste Individuum nach Macro-F1, um
-        # Regression zu verhindern.  Dies beschleunigt die Konvergenz
-        # besonders bei Mehrklassen-Problemen.
+        # Elitism: track the best individual by macro-F1 to prevent
+        # regression and speed up convergence, especially in multi-class tasks.
         # ------------------------------------------------------------------
         labels = list(range(n_classes))
         eval_X_elite = X_val if has_val else X_disc
@@ -1296,7 +1294,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 elite_poly = poly.clone()
                 elite_fit = fit
 
-        # Mutationsoperatoren als Liste fuer zyklisches Durchlaufen
+        # Mutation operators as a list for cyclic traversal.
         _MUT_OPS = [
             lambda p: _mut_insert_literal(p, all_literals, self._rng_),
             lambda p: _mut_delete_literal(p, self._rng_),
@@ -1306,40 +1304,40 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         ]
         n_adapt = max(1, self.n_adaptations_per_gen)
 
-        # Zeitbudget fuer fruehzeitigen Abbruch (max_fit_seconds)
+        # Time budget for early stopping (max_fit_seconds).
         _gp_start_time = time.monotonic()
-        _time_budget = self.max_fit_seconds  # None = kein Limit
+        _time_budget = self.max_fit_seconds  # None = no limit
 
         for _gen in range(self.max_generations):
-            # Zeitbudget pruefen
+            # Check time budget.
             if _time_budget is not None:
                 elapsed = time.monotonic() - _gp_start_time
                 if elapsed >= _time_budget:
                     break
 
             # ------------------------------------------------------------------
-            # Neue Individuen generieren (n_adaptations_per_gen Stueck)
+            # Generate new individuals (n_adaptations_per_gen items).
             # ------------------------------------------------------------------
             new_polys: list[_Polynomial] = []
 
             for i in range(n_adapt):
                 if i == 0 and len(evaluated) >= 2:
-                    # Crossover: erstes Kind ist Crossover-Kind
+                    # Crossover: first child is crossover offspring.
                     p_a, p_b = self._select_two_parents(evaluated)
                     new_polys.append(_crossover(p_a, p_b, self._rng_))
                 else:
-                    # Mutation: zyklisch durch alle 5 Operator-Typen
+                    # Mutation: cycle through all 5 operator types.
                     parent = self._select_parent(evaluated)
                     new_polys.append(_MUT_OPS[(i - 1) % 5](parent))
 
             # ------------------------------------------------------------------
-            # Fitness fuer neue Individuen
+            # Fitness for new individuals.
             # ------------------------------------------------------------------
             new_evaluated: list = []
             for poly in new_polys:
                 if not poly.monomials:
                     continue
-                # Groessenbeschraenkung (Suchphase RLCW)
+                # Size constraint (RLCW search phase).
                 if self.max_model_size is not None and poly.size > self.max_model_size:
                     continue
                 _compute_weights(poly, X_disc, y_idx, n_classes)
@@ -1347,7 +1345,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 new_evaluated.append((poly, fit))
 
             # ------------------------------------------------------------------
-            # Pareto-Selektion + optionale Populationsgroessen-Begrenzung
+            # Pareto selection + optional population-size cap.
             # ------------------------------------------------------------------
             combined = evaluated + new_evaluated
             evaluated = pareto_fn(combined)
@@ -1358,15 +1356,15 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 )
 
             # ------------------------------------------------------------------
-            # Elitismus: Elite-Individuum in Population sicherstellen
+            # Elitism: ensure elite individual stays in the population.
             # ------------------------------------------------------------------
             if elite_poly is not None and elite_fit is not None:
-                # Prüfe ob Elite noch in der Population ist
+                # Check whether elite is still in the population.
                 elite_ids = {id(p) for p, _ in evaluated}
                 if id(elite_poly) not in elite_ids:
                     evaluated.append((elite_poly, elite_fit))
 
-            # Elite-Update: prüfe ob ein neues bestes Individuum existiert
+            # Elite update: check whether a new best individual exists.
             for poly, fit in new_evaluated:
                 preds = poly.predict_classes(eval_X_elite)
                 f1 = float(_f1_score(eval_y_elite, preds, average=f1_average, labels=labels))
@@ -1376,7 +1374,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                     elite_fit = fit
 
             # ------------------------------------------------------------------
-            # Stagnations-Tracking (immer auf consolidated, da guenstig)
+            # Stagnation tracking (always on consolidated, for efficiency).
             # ------------------------------------------------------------------
             current_best = max(f.consolidated for _, f in evaluated)
             if current_best > best_consolidated + 1e-10:
@@ -1393,13 +1391,13 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 break
 
         # ------------------------------------------------------------------
-        # Finale Modellauswahl
+        # Final model selection
         # ------------------------------------------------------------------
-        # Bewerte Kandidaten anhand der tatsaechlichen Macro-F1 statt
+        # Evaluate candidates using actual macro-F1 instead of
         # ``consolidated`` (mean recall), da F1 besser mit der realen
-        # Vorhersagequalitaet korreliert.
-        # Bei aktivem Validation-Split: F1 auf Val-Set (Generalisierung).
-        # Ohne Split: F1 auf Trainingsdaten (kein Datenverlust).
+        # predictive quality correlates better.
+        # With active validation split: F1 on validation set (generalization).
+        # Without split: F1 on training data (no data loss).
         eval_X = X_val if has_val else X_disc
         eval_y = y_val if has_val else y_idx
         labels = list(range(n_classes))
@@ -1432,7 +1430,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         return select_model_fn(f1_candidates, self.min_improvement_pct)
 
     def _select_two_parents(self, evaluated: list) -> tuple[_Polynomial, _Polynomial]:
-        """Waehlt zwei Eltern per Domination-Turnier."""
+        """Select two parents via dominance tournament."""
         idx_a, idx_b = self._rng_.choice(len(evaluated), size=2, replace=False)
         poly_a, fit_a = evaluated[idx_a]
         poly_b, fit_b = evaluated[idx_b]
@@ -1443,12 +1441,12 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         return poly_a, poly_b
 
     def _select_parent(self, evaluated: list) -> _Polynomial:
-        """Zufaellige Elternauswahl aus der aktuellen Population."""
+        """Random parent selection from the current population."""
         idx = int(self._rng_.integers(0, len(evaluated)))
         return evaluated[idx][0]
 
     def _poly_to_ruleset(self, poly: _Polynomial, n_classes: int) -> ScoredRuleSet:
-        """Konvertiert ein _Polynomial in ein ScoredRuleSet (Gewichte bereits gesetzt)."""
+        """Convert a _Polynomial to a ScoredRuleSet (weights already computed)."""
         rules: list[Rule] = []
 
         rules.append(Rule(
@@ -1493,7 +1491,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         )
 
     def _monomial_to_atoms(self, mon: _Monomial) -> list[Atom]:
-        """Konvertiert Monomial-Literale in Atom-Liste fuer ScoredRuleSet."""
+        """Convert monomial literals to an atom list for ScoredRuleSet."""
         atoms: list[Atom] = []
         for lit in mon.literals:
             fname = (

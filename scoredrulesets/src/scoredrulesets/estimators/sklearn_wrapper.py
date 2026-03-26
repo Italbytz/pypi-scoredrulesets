@@ -127,7 +127,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         self.estimator_.fit(X_valid, y_valid)
         self.classes_ = np.asarray(getattr(self.estimator_, "classes_", np.unique(y_valid)))
 
-        # Wähle passende Transformation basierend auf Backend
+        # Select the appropriate transformation based on the backend.
         backend_lower = self.backend.lower()
         
         if backend_lower == "rulekit":
@@ -148,7 +148,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 feature_names=self.feature_names_in_,
             )
 
-            # Wende ExSTraCS Shrinking an (falls konfiguriert)
+            # Apply ExSTraCS shrinking (if configured).
             if self.exstracs_params:
                 self.ruleset_ = self._apply_exstracs_shrinking(
                     self.ruleset_,
@@ -156,13 +156,13 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     y_valid,
                 )
         elif backend_lower == "logicgp":
-            # logicGP verwaltet sein ScoredRuleSet intern – direkt uebernehmen.
+            # logicGP manages its ScoredRuleSet internally; use it directly.
             if hasattr(self.estimator_, "ruleset_"):
                 self.ruleset_ = self.estimator_.ruleset_
             else:
                 raise RuntimeError(
-                    "LogicGPClassifier hat kein 'ruleset_' nach fit(). "
-                    "Bitte logicgp.py auf Fehler pruefen."
+                    "LogicGPClassifier has no 'ruleset_' after fit(). "
+                    "Please check logicgp.py for errors."
                 )
         elif backend_lower == "rulelcs":
             if hasattr(self.estimator_, "ruleset_"):
@@ -207,23 +207,23 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 X_ref=X_valid,
             )
 
-        # Alle Backends: Prediction immer ueber ScoredRuleSet routen,
-        # damit der Benchmark das tatsaechliche ScoredRuleSet testet.
+        # Route predictions through the ScoredRuleSet for all backends,
+        # so benchmarks evaluate the actual transformed representation.
         self.is_ruleset_mode_ = True
         self.transformation_lossy_ = False
         return self
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:
-        """Wende ExSTraCS Shrinking-Parameter an"""
+        """Apply ExSTraCS shrinking parameters."""
         from .exstracs_shrinking import ExSTraCSPruningParams, exstracs_apply_all_shrinking
 
         sanitized = self._sanitize_exstracs_params(self.exstracs_params)
         params = ExSTraCSPruningParams(**sanitized)
 
-        # Für aggressive Pruning: Split Trainings-Daten
+        # For aggressive pruning: split training data.
         X_train_split = X
         y_train_split = y
-        # Default: nutze Trainingsdaten als Referenz fuer konservatives Pruning.
+        # Default: use training data as reference for conservative pruning.
         X_val_split = X
         y_val_split = y
 
@@ -241,7 +241,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     @staticmethod
     def _sanitize_exstracs_params(exstracs_params: dict[str, Any] | None) -> dict[str, Any]:
-        """Filtere unbekannte ExSTraCS-Keys weg und warne bei Tippfehlern."""
+        """Filter unknown ExSTraCS keys and warn about likely typos."""
         from .exstracs_shrinking import ExSTraCSPruningParams
 
         if not exstracs_params:
@@ -258,10 +258,10 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         return sanitized
 
     def _prepare_X_for_prediction(self, X_valid: np.ndarray) -> np.ndarray:
-        """Bereite X für die ScoredRuleSet-Prediction vor.
+        """Prepare X for ScoredRuleSet prediction.
         
-        LogicGP benötigt diskretisierte Daten, da die Atome im ScoredRuleSet
-        auf Bin-Indizes basieren, nicht auf Rohwerten.
+        LogicGP requires discretized data because atoms in the ScoredRuleSet
+        are defined over bin indices rather than raw values.
         """
         backend_lower = self.backend.lower()
         if backend_lower == "logicgp" and hasattr(self.estimator_, "_binners_"):

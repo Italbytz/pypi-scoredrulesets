@@ -1,10 +1,9 @@
 """
-Gemeinsame Gini-basierte Split-Funktionen fuer regelbasierte Schaetzer.
+Shared Gini-based split functions for rule-based estimators.
 
-Dieses Modul buendelt die Logik zum Finden von numerischen und
-kategorischen Splits (bester Schwellenwert, Intervall-Splits,
-Einzel-Kategorie-Splits und Gruppen-Splits).  Die Funktionen werden
-von ``RuleLCSClassifier`` (und ggf. weiteren Schätzern) genutzt.
+This module bundles logic for finding numeric and categorical splits
+(best threshold, interval splits, single-category splits, and group splits).
+The functions are used by ``RuleLCSClassifier`` and potentially other estimators.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 def gini(counts: np.ndarray) -> float:
-    """Gini-Impurity aus Klassen-Counts."""
+    """Compute Gini impurity from class counts."""
     total = float(np.sum(counts))
     if total <= 0.0:
         return 0.0
@@ -26,14 +25,14 @@ def gini(counts: np.ndarray) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Score-Berechnung
+# Score computation
 # ---------------------------------------------------------------------------
 
 def distribution_to_scores(counts: np.ndarray, aggregation: str) -> list[float]:
-    """Konvertiert Klassen-Counts in Score-Vektoren.
+    """Convert class counts to score vectors.
 
-    Bei ``aggregation="softmax_sum"`` werden Log-Wahrscheinlichkeiten
-    zurueckgegeben, sonst Wahrscheinlichkeiten.
+    With ``aggregation="softmax_sum"`` this returns log-probabilities,
+    otherwise probabilities.
     """
     probs = counts / max(float(np.sum(counts)), 1.0)
     if aggregation == "softmax_sum":
@@ -42,7 +41,7 @@ def distribution_to_scores(counts: np.ndarray, aggregation: str) -> list[float]:
 
 
 # ---------------------------------------------------------------------------
-# Bester numerischer Split
+# Best numeric split
 # ---------------------------------------------------------------------------
 
 def best_numeric_split(
@@ -52,13 +51,13 @@ def best_numeric_split(
     min_samples_leaf: int,
     max_thresholds_per_feature: int | None = None,
 ) -> tuple[float, float, np.ndarray, np.ndarray, int, int] | None:
-    """Findet den besten binaeren Gini-Split fuer ein numerisches Feature.
+    """Find the best binary Gini split for a numeric feature.
 
     Returns
     -------
     tuple or None
         ``(threshold, gain, left_counts, right_counts, left_coverage,
-        right_coverage)`` oder ``None`` wenn kein Split moeglich ist.
+        right_coverage)`` or ``None`` if no split is possible.
     """
     values = np.asarray(feature_values)
     if not np.issubdtype(values.dtype, np.number):
@@ -105,7 +104,7 @@ def best_numeric_split(
 
 
 # ---------------------------------------------------------------------------
-# Kategorische Einzel-Splits
+# Categorical single-value splits
 # ---------------------------------------------------------------------------
 
 def categorical_splits(
@@ -114,7 +113,7 @@ def categorical_splits(
     n_classes: int,
     min_samples_leaf: int,
 ) -> list[tuple[float, object, np.ndarray, int]]:
-    """Berechnet Gini-Gain fuer jeden einzelnen Kategoriewert.
+    """Compute Gini gain for each individual category value.
 
     Returns
     -------
@@ -147,7 +146,7 @@ def categorical_splits(
 
 
 # ---------------------------------------------------------------------------
-# Numerische Intervall-Splits
+# Numeric interval splits
 # ---------------------------------------------------------------------------
 
 def numeric_interval_splits(
@@ -158,12 +157,12 @@ def numeric_interval_splits(
     max_thresholds_per_feature: int | None = None,
     max_results: int = 2,
 ) -> list[tuple[float, float, float, np.ndarray, int]]:
-    """Findet die besten Intervall-Splits ``[low, high]`` fuer ein numerisches Feature.
+    """Find the best interval splits ``[low, high]`` for a numeric feature.
 
     Returns
     -------
     list of (gain, low, high, in_counts, coverage)
-        Sortiert nach absteigendem Gain, maximal *max_results* Eintraege.
+        Sorted by descending gain, with at most *max_results* entries.
     """
     values = np.asarray(feature_values)
     if not np.issubdtype(values.dtype, np.number):
@@ -205,7 +204,7 @@ def numeric_interval_splits(
 
 
 # ---------------------------------------------------------------------------
-# Kategorische Gruppen-Splits
+# Categorical group splits
 # ---------------------------------------------------------------------------
 
 def categorical_group_splits(
@@ -215,12 +214,12 @@ def categorical_group_splits(
     min_samples_leaf: int,
     max_results: int = 2,
 ) -> list[tuple[float, list[object], np.ndarray, int]]:
-    """Findet die besten Kategorie-Gruppen-Splits (2–3 Kategorien zusammen).
+    """Find the best category-group splits (2-3 categories together).
 
     Returns
     -------
     list of (gain, group_values, in_counts, coverage)
-        Sortiert nach absteigendem Gain, maximal *max_results* Eintraege.
+        Sorted by descending gain, with at most *max_results* entries.
     """
     values = np.asarray(feature_values, dtype=object)
     unique = np.unique(values)

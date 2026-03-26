@@ -1,14 +1,14 @@
 """
-ExSTraCS Rule-Shrinking und Filterung
+ExSTraCS rule shrinking and filtering.
 
-Dieser Modul bietet Algorithmen zur Reduktion von ExSTraCS Rule-Populationen:
+This module provides algorithms to reduce ExSTraCS rule populations:
 
-1. Conservative Rule Pruning: Nur sichere Atom-Entfernungen
-2. Aggressive Rule Pruning: Mit Validierungs-Daten, akzeptiert leichte F1-Verluste
-3. Rule Filtering: Entfernt schwache Regeln basierend auf Fitness/Score
-4. Rule Consolidation: Mergt ähnliche Regeln
-5. Lossy Rule Compaction (LRC): Interval-Merge + Conservative Pruning –
-   nicht-äquivalente Kompaktierung mit typischerweise geringem F1-Verlust
+1. Conservative rule pruning: only safe atom removals
+2. Aggressive rule pruning: uses validation data, accepts small F1 drops
+3. Rule filtering: removes weak rules based on fitness/score
+4. Rule consolidation: merges similar rules
+5. Lossy Rule Compaction (LRC): interval merge + conservative pruning,
+    a non-equivalent compaction that typically has low F1 loss
 """
 
 from __future__ import annotations
@@ -23,34 +23,34 @@ from ..schema import Rule, ScoredRuleSet
 
 @dataclass
 class ExSTraCSPruningParams:
-    """Parameter für ExSTraCS Rule-Shrinking"""
+    """Parameters for ExSTraCS rule shrinking."""
     
-    # Conservative Pruning (garantiert keine Verschlechterung)
+    # Conservative pruning (guarantees no degradation)
     conservative_prune: bool = False
     
-    # Aggressive Pruning (mit Validierungs-Daten)
+    # Aggressive pruning (with validation data)
     aggressive_prune: bool = False
-    max_f1_loss: float = 0.01  # Akzeptiere bis zu 1% F1-Verlust
+    max_f1_loss: float = 0.01  # Accept up to 1% F1 loss
     
     # Rule Filtering
     filter_weak_rules: bool = False
-    min_fitness_percentile: float = 0.2  # Behalte nur top 80%
+    min_fitness_percentile: float = 0.2  # Keep top 80% only
     
     # Rule Consolidation
     consolidate_similar: bool = False
-    similarity_threshold: float = 0.8  # Merge wenn > 80% ähnlich
+    similarity_threshold: float = 0.8  # Merge if > 80% similar
 
-    # Lossy Rule Compaction (LRC): Nicht-aequivalente Kompaktierung durch
-    # Zusammenfassung von Regeln mit ueberlappenden Feature-Intervallen und
-    # gleicher Klasse. Scores werden aufsummiert (fitness × numerosity),
-    # Intervalle vereinigt. Typischerweise 0–6 % F1-Verlust bei 29–98 %
-    # Reduktion der Regelanzahl.
+    # Lossy Rule Compaction (LRC): non-equivalent compaction by
+    # merging rules with overlapping feature intervals and
+    # the same class. Scores are summed (fitness x numerosity),
+    # intervals are unioned. Typically 0-6% F1 loss with 29-98%
+    # reduction in rule count.
     interval_merge: bool = False
-    interval_merge_iou_threshold: float = 0.3  # Minimale IoU fuer Merge (LRC)
+    interval_merge_iou_threshold: float = 0.3  # Minimum IoU for merge (LRC)
 
-    # Sicherheitslimits fuer grosse Populationen
-    max_pruning_seconds: float = 120.0  # Timeout fuer Pruning-Schleifen (Sekunden)
-    pre_filter_threshold: int = 100  # Auto-Filter wenn Regelzahl diesen Wert uebersteigt
+    # Safety limits for large populations
+    max_pruning_seconds: float = 120.0  # Timeout for pruning loops (seconds)
+    pre_filter_threshold: int = 100  # Auto-filter if rule count exceeds this value
 
 
 def exstracs_prune_conservative(
@@ -61,22 +61,21 @@ def exstracs_prune_conservative(
     max_seconds: float = 120.0,
 ) -> ScoredRuleSet:
     """
-    Conservative Atom-Pruning für ExSTraCS Regeln.
+    Conservative atom pruning for ExSTraCS rules.
     
-    Entfernt nur Atome, die garantiert keine Vorhersage-Änderung bringen
-    (ähnlich wie der Tree-basierte Algorithmus).
+    Removes only atoms that are guaranteed not to change predictions
+    (similar to the tree-based algorithm).
     
-    Sicherheitskriterien:
-    - Weniger Atome
-    - Scores bleiben positiv
-    - Keine komplette Auflösung
+    Safety criteria:
+    - Fewer atoms
+    - Scores remain positive
+    - No complete collapse
 
     Parameters
     ----------
     max_seconds : float
-        Maximale Laufzeit fuer die Pruning-Schleife (Sekunden).
-        Wird das Budget ueberschritten, werden die verbleibenden Regeln
-        unveraendert uebernommen.
+        Maximum runtime for the pruning loop (seconds).
+        If the budget is exceeded, remaining rules are kept unchanged.
     """
     from ..runtime import predict as predict_from_ruleset
 
@@ -91,25 +90,25 @@ def exstracs_prune_conservative(
     timed_out = False
     
     for rule_idx, rule in enumerate(ruleset.rules):
-        # Timeout-Pruefung (einmal pro Regel)
+        # Timeout check (once per rule)
         if time.monotonic() - t_start > max_seconds:
             timed_out = True
-            # Verbleibende Regeln unveraendert uebernehmen
+            # Keep remaining rules unchanged
             pruned_rules.extend(ruleset.rules[rule_idx:])
             break
 
-        if not rule.atoms:  # Überspringe Default-Regel
+        if not rule.atoms:  # Skip default rule
             pruned_rules.append(rule)
             continue
         
-        # Versuche Atome zu entfernen (rückwärts)
+        # Try removing atoms (reverse order)
         changed = True
         current_rule = rule
         
         while changed:
             changed = False
 
-            # Timeout auch in der inneren Schleife pruefen
+            # Also check timeout in the inner loop
             if time.monotonic() - t_start > max_seconds:
                 timed_out = True
                 break
@@ -117,8 +116,8 @@ def exstracs_prune_conservative(
             for atom_idx in range(len(current_rule.atoms) - 1, -1, -1):
                 candidate_atoms = current_rule.atoms[:atom_idx] + current_rule.atoms[atom_idx + 1:]
                 
-                # Überprüfe Sicherheitskriterien
-                # WICHTIG: Non-default Regeln dürfen nie zu atoms=[] werden.
+                # Check safety criteria
+                # IMPORTANT: non-default rules must never become atoms=[].
                 if not (len(candidate_atoms) < len(current_rule.atoms) and
                         any(s > 0 for s in current_rule.scores) and
                         len(candidate_atoms) > 0):
@@ -131,13 +130,13 @@ def exstracs_prune_conservative(
                     metadata=current_rule.metadata,
                 )
 
-                # Ohne Referenzdaten: strukturell konservativ, aber ohne F1-Garantie.
+                # Without reference data: structurally conservative, but no F1 guarantee.
                 if baseline_f1 is None:
                     current_rule = candidate_rule
                     changed = True
                     break
 
-                # Mit Referenzdaten: nur akzeptieren, wenn F1 nicht schlechter wird.
+                # With reference data: accept only if F1 does not get worse.
                 candidate_rules = pruned_rules + [candidate_rule] + ruleset.rules[len(pruned_rules) + 1:]
                 candidate_ruleset = _create_pruned_ruleset(ruleset, candidate_rules, "conservative_prune")
                 y_pred_candidate = predict_from_ruleset(candidate_ruleset, X_ref)
@@ -166,23 +165,23 @@ def exstracs_prune_aggressive(
     max_seconds: float = 120.0,
 ) -> ScoredRuleSet:
     """
-    Aggressive Atom-Pruning für ExSTraCS mit Validierungs-Daten.
+    Aggressive atom pruning for ExSTraCS using validation data.
     
-    Entfernt Atome iterativ, akzeptiert aber bis zu max_f1_loss F1-Verlust
-    auf Validierungs-Daten.
+    Removes atoms iteratively, while allowing up to max_f1_loss F1 drop
+    on validation data.
     
-    Prozess:
-    1. Baseline-F1 auf Validierungs-Daten
-    2. Iterativ Atome entfernen
-    3. Nach jeder Entfernung: F1 überprüfen
-    4. Akzeptieren wenn F1 nicht > max_f1_loss sinkt
+    Process:
+    1. Baseline F1 on validation data
+    2. Iteratively remove atoms
+    3. Check F1 after each removal
+    4. Accept if F1 does not drop more than max_f1_loss
 
     Parameters
     ----------
     max_seconds : float
-        Maximale Laufzeit fuer die Pruning-Schleife (Sekunden).
+        Maximum runtime for the pruning loop (seconds).
     """
-    # Importiere Runtime-Funktionen
+    # Import runtime functions
     from ..runtime import predict_proba as predict_proba_from_ruleset
     
     # Baseline F1
@@ -196,13 +195,13 @@ def exstracs_prune_aggressive(
     timed_out = False
     
     for rule_idx, rule in enumerate(ruleset.rules):
-        # Timeout-Pruefung
+        # Timeout check
         if time.monotonic() - t_start > max_seconds:
             timed_out = True
             pruned_rules.extend(ruleset.rules[rule_idx:])
             break
 
-        if not rule.atoms:  # Überspringe Default-Regel
+        if not rule.atoms:  # Skip default rule
             pruned_rules.append(rule)
             continue
         
@@ -219,14 +218,14 @@ def exstracs_prune_aggressive(
             for atom_idx in range(len(current_rule.atoms) - 1, -1, -1):
                 candidate_atoms = current_rule.atoms[:atom_idx] + current_rule.atoms[atom_idx + 1:]
                 
-                # Überprüfe grundsätzliche Sicherheit
-                # WICHTIG: Non-default Regeln dürfen nie zu atoms=[] werden.
+                # Check basic safety
+                # IMPORTANT: non-default rules must never become atoms=[].
                 if not (len(candidate_atoms) < len(current_rule.atoms) and
                         any(s > 0 for s in current_rule.scores) and
                         len(candidate_atoms) > 0):
                     continue
                 
-                # Erstelle Kandidaten-Ruleset
+                # Build candidate ruleset
                 candidate_rules = pruned_rules + [
                     Rule(
                         atoms=candidate_atoms,
@@ -238,11 +237,11 @@ def exstracs_prune_aggressive(
                 
                 candidate_ruleset = _create_pruned_ruleset(ruleset, candidate_rules, "aggressive_prune")
                 
-                # Überprüfe F1 auf Validierungs-Daten
+                # Check F1 on validation data
                 y_pred_candidate = np.argmax(predict_proba_from_ruleset(candidate_ruleset, X_val), axis=1)
                 f1_candidate = f1_score(y_val, y_pred_candidate, average='macro', zero_division=0)
                 
-                # Akzeptiere wenn F1-Verlust akzeptabel
+                # Accept if F1 loss is acceptable
                 if f1_baseline - f1_candidate <= max_f1_loss:
                     current_rule = Rule(
                         atoms=candidate_atoms,
@@ -267,30 +266,30 @@ def exstracs_filter_weak_rules(
     min_fitness_percentile: float = 0.2,
 ) -> ScoredRuleSet:
     """
-    Filtere schwache Regeln basierend auf Fitness-Wert.
+    Filter weak rules based on fitness value.
     
-    Behält nur Regeln, deren Score ≥ min_fitness_percentile der Verteilung liegt.
+    Keep only rules with score >= min_fitness_percentile of the score distribution.
     
-    min_fitness_percentile=0.2 → behalte nur top 80% der Regeln
+    min_fitness_percentile=0.2 -> keep top 80% of rules
     """
-    # Extrahiere max Score pro Regel (als Proxy für Fitness)
+    # Extract max score per rule (as fitness proxy)
     scores = []
     for rule in ruleset.rules:
-        if rule.atoms:  # Überspringe Default-Regel
+        if rule.atoms:  # Skip default rule
             max_score = max(rule.scores) if rule.scores else 0.0
             scores.append(max_score)
     
     if not scores:
         return ruleset
     
-    # Berechne Threshold
+    # Compute threshold
     scores_array = np.array(scores)
     threshold = np.percentile(scores_array, min_fitness_percentile * 100)
     
-    # Filtere Regeln
+    # Filter rules
     filtered_rules = []
     for rule in ruleset.rules:
-        if not rule.atoms:  # Behalte Default-Regel
+        if not rule.atoms:  # Keep default rule
             filtered_rules.append(rule)
         else:
             max_score = max(rule.scores) if rule.scores else 0.0
@@ -305,11 +304,11 @@ def exstracs_consolidate_similar_rules(
     similarity_threshold: float = 0.8,
 ) -> ScoredRuleSet:
     """
-    Merge ähnliche Regeln durch Durchschnitt ihrer Scores.
+    Merge similar rules by averaging their scores.
     
-    Ähnlichkeit = Anzahl gemeinsamer Atome / max(Atom-Anzahl)
+    Similarity = number of shared atoms / max(atom count)
     
-    Wenn ähnlich_keitsgrad ≥ threshold: Merge durch Durchschnitt der Scores
+    If similarity >= threshold: merge by score averaging
     """
     consolidated_rules = []
     merged = set()
@@ -319,21 +318,21 @@ def exstracs_consolidate_similar_rules(
             consolidated_rules.append(rule_i)
             continue
         
-        # Finde ähnliche Regeln
+        # Find similar rules
         similar_rules = [rule_i]
         
         for j, rule_j in enumerate(ruleset.rules[i + 1:], start=i + 1):
             if j in merged or not rule_j.atoms:
                 continue
             
-            # Berechne Ähnlichkeit
+            # Compute similarity
             similarity = _calculate_rule_similarity(rule_i, rule_j)
             
             if similarity >= similarity_threshold:
                 similar_rules.append(rule_j)
                 merged.add(j)
         
-        # Merge ähnliche Regeln
+        # Merge similar rules
         if len(similar_rules) > 1:
             merged_rule = _merge_rules(similar_rules, rule_i.rule_id)
             consolidated_rules.append(merged_rule)
@@ -350,15 +349,15 @@ def exstracs_apply_all_shrinking(
     params: ExSTraCSPruningParams | None = None,
 ) -> ScoredRuleSet:
     """
-    Wende mehrere Shrinking-Strategien nacheinander an.
+    Apply multiple shrinking strategies sequentially.
     
-    Reihenfolge:
-    0. Auto-Vorfilterung bei grossen Populationen (> pre_filter_threshold)
-    1. Filter schwache Regeln (falls explizit konfiguriert)
-    1b. Interval-Merge (falls konfiguriert) – vor Pruning, da es die Regelzahl
-        grob reduziert und die nachfolgenden Pruning-Schritte beschleunigt.
+    Order:
+    0. Auto pre-filter on large populations (> pre_filter_threshold)
+    1. Filter weak rules (if explicitly configured)
+    1b. Interval merge (if configured) before pruning, because it can
+        strongly reduce rule count and speed up subsequent pruning steps.
     2. Conservative Pruning
-    3. Aggressive Pruning (falls X_val vorhanden)
+    3. Aggressive Pruning (if X_val is available)
     4. Consolidation
     """
     if params is None:
@@ -366,7 +365,7 @@ def exstracs_apply_all_shrinking(
     
     current_ruleset = ruleset
 
-    # 0. Auto-Vorfilterung bei grossen Populationen
+    # 0. Auto pre-filter for large populations
     n_non_default = sum(1 for r in current_ruleset.rules if r.atoms)
     if n_non_default > params.pre_filter_threshold:
         current_ruleset = exstracs_filter_weak_rules(
@@ -374,14 +373,14 @@ def exstracs_apply_all_shrinking(
             min_fitness_percentile=params.min_fitness_percentile,
         )
     
-    # 1. Filter schwache Regeln (explizit)
+    # 1. Filter weak rules (explicit)
     if params.filter_weak_rules:
         current_ruleset = exstracs_filter_weak_rules(
             current_ruleset,
             min_fitness_percentile=params.min_fitness_percentile,
         )
 
-    # 1b. Interval-Merge
+    # 1b. Interval merge
     if params.interval_merge:
         current_ruleset = exstracs_merge_intervals(
             current_ruleset,
@@ -418,8 +417,8 @@ def exstracs_apply_all_shrinking(
 
 
 # ---------------------------------------------------------------------------
-# Lossy Rule Compaction (LRC): Nicht-aequivalente Kompaktierung durch
-# Zusammenfassung von Regeln mit ueberlappenden Feature-Intervallen
+# Lossy Rule Compaction (LRC): non-equivalent compaction by
+# merging rules with overlapping feature intervals
 # ---------------------------------------------------------------------------
 
 
@@ -427,32 +426,31 @@ def exstracs_merge_intervals(
     ruleset: ScoredRuleSet,
     iou_threshold: float = 0.3,
 ) -> ScoredRuleSet:
-    """Lossy Rule Compaction (LRC): Kompaktiere ExSTraCS-Regelmenge durch Zusammenfassung intervall-aehnlicher Regeln.
+    """Lossy Rule Compaction (LRC): compact ExSTraCS rule sets by merging interval-similar rules.
 
-    Kernidee:
-    1. Regeln werden nach *Klasse* (argmax der Scores) und *Feature-Schema*
-       (Menge der spezifizierten Features) gruppiert.
-    2. Innerhalb jeder Gruppe werden Regeln mit hoher Intervall-Ueberlappung
-       (IoU ≥ ``iou_threshold``) gierig zusammengefuehrt.
-    3. Beim Merge werden die Scores **aufsummiert** (bewahrt das Gesamtgewicht),
-       und die Intervalle zur **Vereinigung** (min/max der Grenzen) erweitert.
+    Core idea:
+    1. Group rules by *class* (argmax of scores) and *feature schema*
+       (set of specified features).
+    2. Within each group, greedily merge rules with strong interval overlap
+       (IoU >= ``iou_threshold``).
+    3. During merge, scores are **summed** (preserving total weight),
+       and intervals are expanded to their **union** (min/max bounds).
 
-    Dies ist eine *nicht-aequivalente* Transformation: Die resultierende Regelmenge
-    kann sich in der Vorhersage leicht unterscheiden, erzeugt aber massiv weniger
-    Regeln bei typischerweise sehr geringem F1-Verlust.
+    This is a *non-equivalent* transformation: predictions may differ slightly,
+    but it often produces far fewer rules with typically low F1 loss.
 
     Parameters
     ----------
     ruleset : ScoredRuleSet
-        Eingabe-Regelmenge (z.B. aus ``exstracs_to_scored_ruleset``).
+        Input rule set (e.g. from ``exstracs_to_scored_ruleset``).
     iou_threshold : float
-        Minimale durchschnittliche Feature-IoU, damit zwei Regeln zusammengefasst
-        werden (0 = alles mergen, 1 = nur identische Intervalle).
+        Minimum average feature IoU required to merge two rules
+        (0 = merge all, 1 = merge only identical intervals).
 
     Returns
     -------
     ScoredRuleSet
-        Kompaktierte Regelmenge.
+        Compacted rule set.
     """
     default_rules = [r for r in ruleset.rules if not r.atoms]
     non_default_rules = [r for r in ruleset.rules if r.atoms]
@@ -460,7 +458,7 @@ def exstracs_merge_intervals(
     if len(non_default_rules) <= 1:
         return ruleset
 
-    # 1. Gruppiere nach (vorhergesagte Klasse, Feature-Schema)
+    # 1. Group by (predicted class, feature schema)
     groups: dict[tuple[int, frozenset[str]], list[Rule]] = {}
     for rule in non_default_rules:
         class_idx = int(np.argmax(rule.scores))
@@ -468,7 +466,7 @@ def exstracs_merge_intervals(
         key = (class_idx, schema)
         groups.setdefault(key, []).append(rule)
 
-    # 2. Greedy Interval-Merge innerhalb jeder Gruppe
+    # 2. Greedy interval merge within each group
     merged_rules: list[Rule] = []
     merge_counter = 0
     total_merged_from = 0
@@ -494,17 +492,17 @@ def exstracs_merge_intervals(
 
 
 def _rule_feature_schema(rule: Rule) -> frozenset[str]:
-    """Extrahiere die Menge der spezifizierten Feature-Namen einer Regel."""
+    """Extract the set of specified feature names from a rule."""
     return frozenset(str(a.feature) for a in rule.atoms)
 
 
 def _extract_feature_intervals(rule: Rule) -> dict[str, tuple[float, float]]:
-    """Extrahiere pro Feature das effektive Intervall [lower, upper] aus den Atomen.
+    """Extract effective [lower, upper] interval per feature from atoms.
 
-    - ``>`` / ``>=`` Atome liefern die Untergrenze.
-    - ``<`` / ``<=`` Atome liefern die Obergrenze.
-    - ``==`` Atome liefern ``(value, value)`` als degeneriertes Intervall.
-    - Falls mehrere Grenzen pro Feature existieren, wird das engste Intervall genommen.
+    - ``>`` / ``>=`` atoms define lower bound.
+    - ``<`` / ``<=`` atoms define upper bound.
+    - ``==`` atoms define ``(value, value)`` as degenerate interval.
+    - If multiple bounds exist per feature, keep the tightest interval.
     """
     lowers: dict[str, float] = {}
     uppers: dict[str, float] = {}
@@ -536,10 +534,10 @@ def _extract_feature_intervals(rule: Rule) -> dict[str, tuple[float, float]]:
 
 
 def _interval_iou(a: tuple[float, float], b: tuple[float, float]) -> float:
-    """Berechne Intersection-over-Union zweier 1D-Intervalle.
+    """Compute intersection-over-union for two 1D intervals.
 
-    Unbeschraenkte Intervalle (±inf) werden fuer den IoU-Nenner auf einen
-    grossen aber endlichen Bereich geklemmt, damit der Wert sinnvoll bleibt.
+    Unbounded intervals (+/-inf) are clipped to a large finite range for
+    denominator stability.
     """
     a_lo, a_hi = a
     b_lo, b_hi = b
@@ -548,7 +546,7 @@ def _interval_iou(a: tuple[float, float], b: tuple[float, float]) -> float:
     inter_hi = min(a_hi, b_hi)
     intersection = max(0.0, inter_hi - inter_lo)
 
-    # Klemme unendliche Grenzen fuer die Berechnung der Union-Laenge
+    # Clip infinite bounds for union-length computation
     _CLIP = 1e6
     al = max(a_lo, -_CLIP)
     ah = min(a_hi, _CLIP)
@@ -560,7 +558,7 @@ def _interval_iou(a: tuple[float, float], b: tuple[float, float]) -> float:
     union = len_a + len_b - intersection
 
     if union <= 0.0:
-        # Beide Intervalle sind Punkte am gleichen Ort oder leer
+        # Both intervals are identical points or empty
         return 1.0 if intersection >= 0.0 and a_lo == b_lo else 0.0
     return intersection / union
 
@@ -569,7 +567,7 @@ def _mean_feature_iou(
     intervals_a: dict[str, tuple[float, float]],
     intervals_b: dict[str, tuple[float, float]],
 ) -> float:
-    """Mittlere IoU ueber alle gemeinsamen Features zweier Regeln."""
+    """Mean IoU across all shared features of two rules."""
     common_features = set(intervals_a.keys()) & set(intervals_b.keys())
     if not common_features:
         return 0.0
@@ -583,8 +581,8 @@ def _greedy_interval_cluster(
     rules: list[Rule],
     iou_threshold: float,
 ) -> list[list[Rule]]:
-    """Greedy Clustering: Weise jede Regel dem ersten Cluster zu, dessen
-    Repraesentant ausreichend IoU-Ueberlappung hat.  O(n × k) mit k = Anzahl Cluster."""
+    """Greedy clustering: assign each rule to the first cluster whose
+    representative has sufficient IoU overlap. O(n x k), k = number of clusters."""
     if not rules:
         return []
 
@@ -597,7 +595,7 @@ def _greedy_interval_cluster(
         for ci, rep_ivs in enumerate(cluster_representatives):
             if _mean_feature_iou(ivs, rep_ivs) >= iou_threshold:
                 clusters[ci].append(idx)
-                # Aktualisiere Repraesentant auf Union-Intervall
+                # Update representative to interval union
                 cluster_representatives[ci] = _union_intervals(rep_ivs, ivs)
                 assigned = True
                 break
@@ -612,7 +610,7 @@ def _union_intervals(
     a: dict[str, tuple[float, float]],
     b: dict[str, tuple[float, float]],
 ) -> dict[str, tuple[float, float]]:
-    """Vereinige zwei Feature-Intervall-Dicts zu ihren Union-Intervallen."""
+    """Union two feature-interval dicts into combined intervals."""
     result: dict[str, tuple[float, float]] = {}
     for f in set(a.keys()) | set(b.keys()):
         a_iv = a.get(f, (np.inf, -np.inf))
@@ -627,34 +625,34 @@ def _merge_interval_cluster(
     cluster: list[Rule],
     cluster_id: int,
 ) -> Rule:
-    """Fasse einen Cluster von Regeln zu einer einzigen Regel zusammen.
+    """Merge one cluster of rules into a single rule.
 
-    - Scores werden **aufsummiert** (bewahrt Gesamtgewicht).
-    - Intervalle werden zur **Vereinigung** (min lower, max upper) erweitert.
+    - Scores are **summed** (preserving total weight).
+    - Intervals are expanded to their **union** (min lower, max upper).
     """
     if len(cluster) == 1:
         return cluster[0]
 
-    # Scores aufsummieren
+    # Sum scores
     n_scores = len(cluster[0].scores)
     summed_scores = [0.0] * n_scores
     for r in cluster:
         for i, s in enumerate(r.scores):
             summed_scores[i] += s
 
-    # Union-Intervalle berechnen
+    # Compute union intervals
     union_ivs: dict[str, tuple[float, float]] = {}
     for r in cluster:
         r_ivs = _extract_feature_intervals(r)
         union_ivs = _union_intervals(union_ivs, r_ivs) if union_ivs else dict(r_ivs)
 
-    # Atome aus Union-Intervallen aufbauen
+    # Build atoms from union intervals
     from ..schema import Atom
     atoms: list[Atom] = []
     for fname in sorted(union_ivs.keys()):
         lo, hi = union_ivs[fname]
         if lo == hi:
-            # Degeneriertes Intervall (==)
+            # Degenerate interval (==)
             atoms.append(Atom(feature=fname, op="==", value=lo))
         else:
             if np.isfinite(lo):
@@ -662,7 +660,7 @@ def _merge_interval_cluster(
             if np.isfinite(hi):
                 atoms.append(Atom(feature=fname, op="<", value=hi))
 
-    # Sammle originale Metadaten
+    # Collect original metadata
     orig_ids = [r.rule_id or "?" for r in cluster]
     total_numerosity = sum(
         float(r.metadata.get("numerosity", 1)) for r in cluster
@@ -675,7 +673,7 @@ def _merge_interval_cluster(
         metadata={
             "source": "interval_merge",
             "merged_count": len(cluster),
-            "merged_ids": orig_ids[:10],  # Begrenze Groesse
+            "merged_ids": orig_ids[:10],  # Limit size
             "total_numerosity": total_numerosity,
         },
     )
@@ -683,18 +681,18 @@ def _merge_interval_cluster(
 
 def _calculate_rule_similarity(rule1: Rule, rule2: Rule) -> float:
     """
-    Berechne Ähnlichkeit zwischen zwei Regeln.
+    Compute similarity between two rules.
     
-    Ähnlichkeit = |gemeinsame Atome| / max(|Atome1|, |Atome2|)
+    Similarity = |shared atoms| / max(|atoms1|, |atoms2|)
     """
     if not rule1.atoms or not rule2.atoms:
         return 0.0
     
-    # Konvertiere Atome zu Strings für Vergleich
+    # Convert atoms to strings for comparison
     atoms1 = set((a.feature, a.op, str(a.value)) for a in rule1.atoms)
     atoms2 = set((a.feature, a.op, str(a.value)) for a in rule2.atoms)
     
-    # Berechne Jaccard-Ähnlichkeit
+    # Compute Jaccard similarity
     intersection = len(atoms1 & atoms2)
     union = len(atoms1 | atoms2)
     
@@ -706,15 +704,15 @@ def _calculate_rule_similarity(rule1: Rule, rule2: Rule) -> float:
 
 def _merge_rules(rules: list[Rule], rule_id: str) -> Rule:
     """
-    Merge mehrere ähnliche Regeln durch Durchschnitt der Scores.
+    Merge multiple similar rules by averaging scores.
     """
-    # Behalte erste Regel's Atome (sie sind ähnlich)
+    # Keep first rule's atoms (they are similar)
     merged_atoms = rules[0].atoms
     
-    # Durchschnittliche Scores
+    # Average scores
     merged_scores = np.mean([np.array(r.scores) for r in rules], axis=0).tolist()
     
-    # Kombiniere Metadaten
+    # Combine metadata
     merged_metadata = {"source": "consolidated", "merged_count": len(rules)}
     
     return Rule(
@@ -731,11 +729,11 @@ def _create_pruned_ruleset(
     method: str,
 ) -> ScoredRuleSet:
     """
-    Erstelle neues Ruleset mit pruned rules.
+    Create a new ruleset with pruned rules.
     """
-    # Stelle sicher, dass maximal eine Default-Regel vorhanden ist.
-    # Falls mehrere leere Regeln existieren, werden deren Scores aufsummiert
-    # und als eine einzige Fallback-Regel genutzt.
+    # Ensure at most one default rule exists.
+    # If multiple empty rules exist, sum their scores
+    # and use a single fallback rule.
     default_rules = [r for r in pruned_rules if not r.atoms]
     non_default_rules = [r for r in pruned_rules if r.atoms]
     if len(default_rules) > 1:

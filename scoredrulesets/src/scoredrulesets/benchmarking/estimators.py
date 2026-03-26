@@ -198,7 +198,7 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
             ),
         ),
         # ------------------------------------------------------------------
-        # Multiplexer-optimierte Varianten (Ziel: F1=1.0 auf vollem Datensatz)
+        # Multiplexer-optimized variants (goal: F1=1.0 on full dataset)
         # ------------------------------------------------------------------
         "wrapper_logicgp_mux": EstimatorSpec(
             name="wrapper_logicgp_mux",

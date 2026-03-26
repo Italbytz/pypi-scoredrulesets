@@ -14,7 +14,7 @@ def test_hs_backend_fit_if_available():
     try:
         clf.fit(X, y)
     except ImportError as exc:
-        pytest.skip(f"HS-Klasse in imodels nicht verfuegbar: {exc}")
+        pytest.skip(f"HS class in imodels not available: {exc}")
 
     pred = clf.predict(X[:5])
     assert pred.shape == (5,)

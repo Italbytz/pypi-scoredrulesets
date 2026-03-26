@@ -1,16 +1,16 @@
 """
-Beispiel: Neural Logic Network (NLN) Backend fuer Scored Rule Sets.
+Example: Neural Logic Network (NLN) backend for Scored Rule Sets.
 
-Dieses Beispiel zeigt, wie das NLN-Backend verwendet wird, das auf den Ideen
-von Payani & Fekri ("Learning Algorithms via Neural Logic Networks") basiert.
+This example shows how to use the NLN backend, inspired by
+Payani & Fekri ("Learning Algorithms via Neural Logic Networks").
 
-Das NLN-Backend:
-  - Diskretisiert Features in binaere Propositionen (Quantil-Schwellen)
-  - Lernt Konjunktionsregeln via differenzierbarer Logik (Gradientenabstieg)
-  - Extrahiert interpretierbare Regeln als ScoredRuleSet
-  - Benötigt nur NumPy (kein PyTorch/TensorFlow)
+The NLN backend:
+  - Discretizes features into binary propositions (quantile thresholds)
+  - Learns conjunction rules via differentiable logic (gradient descent)
+  - Extracts interpretable rules as a ScoredRuleSet
+  - Requires only NumPy (no PyTorch/TensorFlow)
 
-Aufruf:
+Run:
     python examples/estimators/example_rulenln_backend.py
 """
 
@@ -24,13 +24,13 @@ from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
 
 def print_ruleset(rs, title="Rule Set"):
-    """Schöne Darstellung eines ScoredRuleSets."""
+    """Pretty-print a ScoredRuleSet."""
     print(f"\n{'=' * 70}")
     print(f"  {title}")
     print(f"{'=' * 70}")
-    print(f"  Klassen:  {rs.class_labels}")
+    print(f"  Classes:  {rs.class_labels}")
     print(f"  Features: {rs.feature_names}")
-    print(f"  Regeln:   {len(rs.rules)}")
+    print(f"  Rules:    {len(rs.rules)}")
     print()
 
     for i, rule in enumerate(rs.rules):
@@ -48,9 +48,9 @@ def print_ruleset(rs, title="Rule Set"):
 
 
 def demo_native_iris():
-    """NLN direkt auf Iris anwenden."""
+    """Apply NLN directly to Iris."""
     print("\n" + "=" * 70)
-    print("  Demo 1: NLN nativ auf Iris (3-Klassen)")
+    print("  Demo 1: native NLN on Iris (3 classes)")
     print("=" * 70)
 
     X, y = load_iris(return_X_y=True)
@@ -81,9 +81,9 @@ def demo_native_iris():
 
 
 def demo_wrapper_breast_cancer():
-    """NLN über den ScoredRuleSetClassifier-Wrapper auf Breast Cancer."""
+    """Apply NLN via ScoredRuleSetClassifier wrapper on Breast Cancer."""
     print("\n" + "=" * 70)
-    print("  Demo 2: NLN-Wrapper auf Breast Cancer (binär)")
+    print("  Demo 2: NLN wrapper on Breast Cancer (binary)")
     print("=" * 70)
 
     X, y = load_breast_cancer(return_X_y=True)
@@ -117,9 +117,9 @@ def demo_wrapper_breast_cancer():
 
 
 def demo_sparsity_control():
-    """Zeigt den Effekt der L1-Regularisierung auf die Regelkomplexität."""
+    """Show the effect of L1 regularization on rule complexity."""
     print("\n" + "=" * 70)
-    print("  Demo 3: L1-Regularisierung und Sparsity")
+    print("  Demo 3: L1 regularization and sparsity")
     print("=" * 70)
 
     X, y = load_iris(return_X_y=True)
@@ -128,9 +128,9 @@ def demo_sparsity_control():
     )
 
     configs = [
-        ("Schwach (l1=0.0005)", 0.0005, 0.0002),
-        ("Mittel (l1=0.005)",   0.005,  0.002),
-        ("Stark (l1=0.05)",     0.05,   0.02),
+        ("Low (l1=0.0005)", 0.0005, 0.0002),
+        ("Medium (l1=0.005)",   0.005,  0.002),
+        ("High (l1=0.05)",     0.05,   0.02),
     ]
 
     for label, l1_c, l1_s in configs:
@@ -147,7 +147,7 @@ def demo_sparsity_control():
         n_atoms = sum(len(r.atoms) for r in rs.rules)
         f1 = f1_score(y_test, y_pred, average="macro")
 
-        print(f"  {label:30s}  → {n_rules:2d} Regeln, {n_atoms:3d} Atome, F1={f1:.4f}")
+        print(f"  {label:30s}  -> {n_rules:2d} rules, {n_atoms:3d} atoms, F1={f1:.4f}")
 
 
 if __name__ == "__main__":

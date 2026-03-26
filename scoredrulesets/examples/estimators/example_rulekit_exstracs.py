@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Beispiel: RuleKit und ExSTraCS als Backends
+Example: RuleKit and ExSTraCS as backends
 
-Dieses Skript demonstriert:
-1. RuleKit Integration (mit Java-Validierung)
-2. ExSTraCS Integration (skExSTraCS)
-3. Vergleich aller Backends
-4. Fehlerbehandlung
+This script demonstrates:
+1. RuleKit integration (with Java validation)
+2. ExSTraCS integration (skExSTraCS)
+3. Comparison across backends
+4. Error handling
 """
 
 from sklearn.datasets import load_iris, load_wine
@@ -21,7 +21,7 @@ from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
 
 def test_backend(name, backend, dataset_name, X_train, y_train, X_test, y_test):
-    """Test ein Backend"""
+    """Test one backend."""
     print(f"\n  {name:20}", end=" ", flush=True)
     
     try:
@@ -31,14 +31,14 @@ def test_backend(name, backend, dataset_name, X_train, y_train, X_test, y_test):
             random_state=42,
         )
         
-        # Trainiere
+        # Train
         clf.fit(X_train, y_train)
         
-        # Vorhersage
+        # Predict
         y_pred = clf.predict(X_test)
         f1 = f1_score(y_test, y_pred, average='macro', zero_division=0)
         
-        # Ruleset Statistiken
+        # Ruleset statistics
         ruleset = clf.to_ruleset()
         n_rules = len(ruleset.rules)
         n_atoms = sum(len(r.atoms) for r in ruleset.rules)
@@ -56,10 +56,10 @@ def test_backend(name, backend, dataset_name, X_train, y_train, X_test, y_test):
 
 def main():
     print("=" * 80)
-    print("Test: RuleKit und ExSTraCS als Backends")
+    print("Test: RuleKit and ExSTraCS as backends")
     print("=" * 80)
     
-    # Lade Datensätze
+    # Load datasets
     iris = load_iris()
     wine = load_wine()
     
@@ -68,7 +68,7 @@ def main():
         ("Wine", wine.data, wine.target),
     ]
     
-    # Test Backends
+    # Test backends
     backends = [
         ("CART (Tree)", "cart"),
         ("HS (Optimized Tree)", "hs"),
@@ -90,21 +90,21 @@ def main():
             ok = test_backend(name, backend, dataset_name, X_train, y_train, X_test, y_test)
             results.append((name, ok))
         
-        # Zusammenfassung
+        # Summary
         print(f"\n{'-'*80}")
-        print("Zusammenfassung:")
+        print("Summary:")
         for name, ok in results:
             status = "✓" if ok else "✗"
             print(f"  {status} {name}")
     
     print(f"\n{'='*80}")
-    print("Test abgeschlossen!")
+    print("Test completed!")
     print(f"{'='*80}\n")
     
-    print("Hinweise:")
-    print("- RuleKit benötigt Java (JDK 11+) und 'pip install rulekit'")
-    print("- ExSTraCS benötigt 'pip install scikit-exstracs'")
-    print("- CART und HS sollten immer verfügbar sein (sklearn)")
+    print("Notes:")
+    print("- RuleKit requires Java (JDK 11+) and 'pip install rulekit'")
+    print("- ExSTraCS requires 'pip install scikit-exstracs'")
+    print("- CART and HS should always be available (scikit-learn)")
 
 
 if __name__ == "__main__":

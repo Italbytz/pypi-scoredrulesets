@@ -8,7 +8,7 @@ from ..schema import ScoredRuleSet
 
 
 class BaseRuleSetEstimator(ClassifierMixin, BaseEstimator, ABC):
-    """Erweiterungspunkt fuer kuenftige native Scored-Rule-Set-Schaetzer."""
+    """Extension point for future native scored rule set estimators."""
 
     @abstractmethod
     def to_ruleset(self) -> ScoredRuleSet:

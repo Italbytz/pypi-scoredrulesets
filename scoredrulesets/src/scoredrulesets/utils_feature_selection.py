@@ -1,15 +1,15 @@
 """
-Utility-Funktionen für Feature-Selektion vor regelbasierten Schätzern.
+Utility functions for feature selection before rule-based estimators.
 
-Beispielnutzung:
+Example usage:
 
 from scoredrulesets.utils.feature_selection import select_features
 X_new, feature_names = select_features(X, y, method="kbest", k=20)
 
-Unterstützte Methoden:
-- kbest: SelectKBest (z. B. mutual_info_classif)
+Supported methods:
+- kbest: SelectKBest (e.g. mutual_info_classif)
 - rfe: Recursive Feature Elimination
-- boruta: BorutaPy (falls installiert)
+- boruta: BorutaPy (if installed)
 
 """
 
@@ -28,8 +28,8 @@ def select_features(
     **kwargs,
 ) -> Tuple[np.ndarray, List[str]]:
     """
-    Selektiert die wichtigsten Features mit dem angegebenen Verfahren.
-    Gibt die transformierten Daten und die Namen der selektierten Features zurück.
+    Select the most relevant features using the chosen method.
+    Returns transformed data and selected feature names.
     """
     if feature_names is None:
         feature_names = [f"f{i}" for i in range(X.shape[1])]
@@ -59,7 +59,7 @@ def select_features(
         try:
             from boruta import BorutaPy
         except ImportError:
-            raise ImportError("BorutaPy ist nicht installiert. Installiere mit: pip install boruta")
+            raise ImportError("BorutaPy is not installed. Install with: pip install boruta")
         if estimator is None:
             from sklearn.ensemble import RandomForestClassifier
             estimator = RandomForestClassifier(n_estimators=100, n_jobs=-1)
@@ -71,5 +71,5 @@ def select_features(
         return X_new, selected_names
 
     else:
-        raise ValueError(f"Unbekannte Feature-Selection-Methode: {method}")
+        raise ValueError(f"Unknown feature selection method: {method}")
 

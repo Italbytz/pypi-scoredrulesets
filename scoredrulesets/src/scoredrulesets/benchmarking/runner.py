@@ -34,8 +34,8 @@ class BenchmarkConfig:
     repeats: int = 1
     random_state: int = 0
     show_progress: bool = False
-    timeout_seconds: float | None = 300.0  # max Sekunden pro Einzellauf (None = kein Limit)
-    checkpoint_path: str | Path | None = None  # JSONL-Datei fuer Checkpoint/Resume (None = deaktiviert)
+    timeout_seconds: float | None = 300.0  # max seconds per single run (None = no limit)
+    checkpoint_path: str | Path | None = None  # JSONL file for checkpoint/resume (None = disabled)
 
 
 @dataclass
@@ -101,7 +101,7 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
 
     total_repeats = max(1, int(config.repeats))
 
-    # -- Checkpoint laden (Resume) -------------------------------------------
+    # -- Load checkpoint (resume) --------------------------------------------
     checkpoint_path: Path | None = None
     if config.checkpoint_path is not None:
         checkpoint_path = Path(config.checkpoint_path)
@@ -112,8 +112,8 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
         existing_results, done_keys = load_checkpoint_results(checkpoint_path)
         if done_keys:
             print(
-                f"[checkpoint] {len(done_keys)} fertige Laeufe aus {checkpoint_path} geladen, "
-                f"ueberspringe diese.",
+                f"[checkpoint] {len(done_keys)} completed runs loaded from {checkpoint_path}, "
+                f"loaded, skipping these.",
                 flush=True,
             )
 
@@ -153,7 +153,7 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
                 run_key = (dataset_name, estimator_name, repeat)
                 run_number = completed_runs + skipped_runs + 1
 
-                # -- Resume: Lauf ueberspringen wenn schon im Checkpoint ----
+                # -- Resume: skip run if already in checkpoint ---------------
                 if run_key in done_keys:
                     skipped_runs += 1
                     if config.show_progress:
@@ -211,8 +211,8 @@ def run_benchmarks(config: BenchmarkConfig) -> list[BenchmarkResult]:
 
     if skipped_runs > 0:
         print(
-            f"[checkpoint] {skipped_runs} Laeufe uebersprungen, "
-            f"{completed_runs} neue Laeufe durchgefuehrt.",
+            f"[checkpoint] {skipped_runs} runs skipped, "
+            f"{completed_runs} new runs executed.",
             flush=True,
         )
 
@@ -229,14 +229,14 @@ _CHECKPOINT_VERSION = 1
 def load_checkpoint_results(
     path: str | Path,
 ) -> tuple[list[BenchmarkResult], set[tuple[str, str, int]]]:
-    """Laedt Ergebnisse aus einer JSONL-Checkpoint-Datei.
+    """Load results from a JSONL checkpoint file.
 
     Returns
     -------
     results : list[BenchmarkResult]
-        Alle geladenen Ergebnisse.
+        All loaded results.
     done_keys : set[tuple[str, str, int]]
-        Set der fertigen ``(dataset, estimator, repeat)``-Schluessel.
+        Set of completed ``(dataset, estimator, repeat)`` keys.
     """
     path = Path(path)
     results: list[BenchmarkResult] = []
@@ -253,29 +253,29 @@ def load_checkpoint_results(
                 continue
             try:
                 d = _json.loads(line)
-                # Metadaten-Felder entfernen, die nicht zum Dataclass gehoeren
+                # Remove metadata fields not part of the dataclass.
                 d.pop("_checkpoint_version", None)
                 d.pop("_checkpoint_ts", None)
-                # Unbekannte Felder entfernen (Vorwaertskompatibilitaet)
+                # Remove unknown fields (forward compatibility).
                 filtered = {k: v for k, v in d.items() if k in valid_fields}
                 result = BenchmarkResult(**filtered)
                 results.append(result)
                 done_keys.add((result.dataset, result.estimator, result.repeat))
             except Exception as exc:
                 warnings.warn(
-                    f"[checkpoint] Zeile {line_no} in {path} uebersprungen "
-                    f"(moeglicherweise korrupt): {exc}",
+                    f"[checkpoint] Skipped line {line_no} in {path} "
+                    f"(possibly corrupted): {exc}",
                     stacklevel=2,
                 )
     return results, done_keys
 
 
 def _append_checkpoint(path: Path, result: BenchmarkResult) -> None:
-    """Haengt ein einzelnes BenchmarkResult als JSON-Zeile an die Checkpoint-Datei an."""
+    """Append a single BenchmarkResult as one JSON line to the checkpoint file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     d = asdict(result)
     d["_checkpoint_version"] = _CHECKPOINT_VERSION
-    d["_checkpoint_ts"] = perf_counter()  # monotoner Zeitstempel fuer Sortierung
+    d["_checkpoint_ts"] = perf_counter()  # monotonic timestamp for ordering
     with path.open("a", encoding="utf-8") as f:
         f.write(_json.dumps(d, default=str) + "\n")
         f.flush()
@@ -438,7 +438,7 @@ def build_pareto_per_dataset(
     }
 
 
-# -- Backends, die validation_fraction als Constructor-Parameter akzeptieren --
+# -- Backends that accept validation_fraction as constructor parameter --
 _BACKENDS_WITH_VALIDATION_FRACTION = frozenset(
     {"rulelcs", "rulegp", "rulenln", "rulekit_native", "logicgp"}
 )
@@ -480,10 +480,10 @@ def _run_single(
     timeout_seconds: float | None = None,
     is_no_split: bool = False,
 ) -> BenchmarkResult:
-    """Fuehrt einen einzelnen Benchmark-Lauf aus.
+    """Run a single benchmark execution.
 
-    Faengt **alle** Fehler ab (Timeout, RuntimeError, ImportError, etc.) und
-    gibt immer ein BenchmarkResult zurueck – der aeussere Loop crasht nie.
+    Catches **all** errors (timeout, RuntimeError, ImportError, etc.) and
+    always returns a BenchmarkResult so the outer loop never crashes.
     """
     # -- Timeout-Setup (nur UNIX/macOS, Signal-basiert) -----------------------
     _alarm_was_set = False
@@ -491,8 +491,8 @@ def _run_single(
 
     def _timeout_handler(signum, frame):
         raise _RunTimeoutError(
-            f"Timeout nach {timeout_seconds:.0f}s fuer '{estimator_name}' "
-            f"auf '{dataset_name}'"
+            f"Timeout after {timeout_seconds:.0f}s for '{estimator_name}' "
+            f"on '{dataset_name}'"
         )
 
     if timeout_seconds is not None and timeout_seconds > 0:
@@ -501,7 +501,7 @@ def _run_single(
             signal.alarm(int(timeout_seconds))
             _alarm_was_set = True
         except (AttributeError, OSError):
-            # Windows oder kein SIGALRM verfuegbar → kein Timeout
+            # Windows or no SIGALRM available -> no timeout handling.
             pass
 
     try:
@@ -535,8 +535,8 @@ def _run_single(
             n_test=len(y_test),
         )
     except Exception as exc:
-        # Generischer Fang: ImportError, RuntimeError, ValueError, ...
-        # → Lauf als "error" markieren, aber weiter zum naechsten Lauf.
+        # Generic catch: ImportError, RuntimeError, ValueError, ...
+        # Mark run as "error", but continue with the next run.
         error_msg = f"{type(exc).__name__}: {exc}"
         print(f"[ERROR] {estimator_name} | {dataset_name} | {error_msg}", flush=True)
         return BenchmarkResult(
@@ -557,7 +557,7 @@ def _run_single(
         )
     finally:
         if _alarm_was_set:
-            signal.alarm(0)  # Alarm aufheben
+            signal.alarm(0)  # clear alarm
             if _old_handler is not None:
                 signal.signal(signal.SIGALRM, _old_handler)
 
@@ -577,11 +577,11 @@ def _run_single_inner(
         estimator = estimator_factory()
     except Exception as exc:
         raise RuntimeError(
-            f"Schätzer '{estimator_name}' konnte nicht initialisiert werden: {exc}"
+            f"Estimator '{estimator_name}' could not be initialized: {exc}"
         ) from exc
 
-    # -- no_split-Datensätze: validation_fraction auf 0.0 setzen, damit
-    #    Estimatoren 100 % der Daten zum Training nutzen (X_train == X_test).
+    # -- no_split datasets: set validation_fraction to 0.0 so estimators
+    #    use 100% of data for training (X_train == X_test).
     if is_no_split:
         _disable_validation_fraction(estimator)
 
@@ -590,7 +590,7 @@ def _run_single_inner(
         estimator.fit(X_train, y_train)
         fit_seconds = perf_counter() - fit_start
 
-        # Nach dem Training: F1-Score des nativen Modells (vor Transformation), falls möglich
+        # After training: F1 score of the native model (before transformation), if available.
         f1_native = None
         try:
             native_model = getattr(estimator, 'estimator_', None)
@@ -609,17 +609,17 @@ def _run_single_inner(
         n_rules, n_atoms, ruleset_json_bytes = model_size_metrics(ruleset)
         n_classes = int(len(np.unique(np.concatenate([y_train, y_test]))))
 
-        # Kompakte Konsolenausgabe
+        # Compact console output
         native_info = f" (nativ={f1_native:.4f})" if f1_native is not None else ""
         print(
             f"[BENCHMARK] {estimator_name} | {dataset_name} | "
             f"F1={f1_macro:.4f}{native_info} | "
-            f"Klassen={n_classes} | Regeln={n_rules} | Atome={n_atoms} | "
+            f"classes={n_classes} | rules={n_rules} | atoms={n_atoms} | "
             f"fit={fit_seconds:.2f}s",
             flush=True,
         )
 
-        # F1-Validierung: staged policy (warn vs abort) fuer Transformationen
+        # F1 validation: staged policy (warn vs abort) for transformations.
         is_lossy = getattr(estimator, "transformation_lossy_", False)
         validation_action, validation_message = _evaluate_transformation_gap(
             estimator_name=estimator_name,
@@ -655,14 +655,14 @@ def _run_single_inner(
         )
     except ImportError as exc:
         raise RuntimeError(
-            f"Fehlende Abhängigkeit für '{estimator_name}': {exc}. "
-            f"Tipp: pip install 'scoredrulesets[all]' installiert alle optionalen Backends."
+            f"Missing dependency for '{estimator_name}': {exc}. "
+            f"Tip: pip install 'scoredrulesets[all]' installs all optional backends."
         ) from exc
     except RuntimeError:
-        raise  # F1-Validierung und Init-Fehler durchlassen
+        raise  # Bubble up F1-validation and initialization errors.
     except Exception as exc:
         raise RuntimeError(
-            f"Fehler bei '{estimator_name}' auf '{dataset_name}': {exc}"
+            f"Error in '{estimator_name}' on '{dataset_name}': {exc}"
         ) from exc
 
 
@@ -725,9 +725,9 @@ def _evaluate_transformation_gap(
 
     rel_drop = f1_drop / float(f1_native)
     base_message = (
-        f"F1-Validierung für '{estimator_name}' auf '{dataset_name}': "
-        f"F1 nativ={f1_native:.4f} → transformiert={f1_transformed:.4f} "
-        f"(Verlust={f1_drop:.4f}, {rel_drop*100:.1f}%)."
+        f"F1 validation for '{estimator_name}' on '{dataset_name}': "
+        f"F1 native={f1_native:.4f} -> transformed={f1_transformed:.4f} "
+        f"(drop={f1_drop:.4f}, {rel_drop*100:.1f}%)."
     )
 
     # ExSTraCS shrinking/pruning: moderate degradation => warning, only large degradation => abort.
@@ -739,16 +739,16 @@ def _evaluate_transformation_gap(
         abort_abs_drop = 0.25
         abort_rel_drop = 0.40
         if f1_drop > abort_abs_drop and rel_drop > abort_rel_drop:
-            return "abort", base_message + " Die Shrinking-Transformation hat die Vorhersagequalität stark zerstört."
+            return "abort", base_message + " The shrinking transformation severely degraded predictive quality."
         if f1_drop > warn_abs_drop and rel_drop > warn_rel_drop:
-            return "warn", base_message + " Deutliche Warnung: ExSTraCS-Shrinking weicht merklich vom nativen Modell ab."
+            return "warn", base_message + " Strong warning: ExSTraCS shrinking differs noticeably from the native model."
         return "ok", None
 
     # Standard policy for non-lossy transformations.
     max_abs_drop = 0.10
     max_rel_drop = 0.20
     if f1_drop > max_abs_drop and rel_drop > max_rel_drop:
-        return "abort", base_message + " Die Transformation hat die Vorhersagequalität zerstört."
+        return "abort", base_message + " The transformation degraded predictive quality beyond tolerance."
 
     return "ok", None
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-ExSTraCS Rule-Shrinking Beispiel
+ExSTraCS rule-shrinking example
 
-Demonstriert verschiedene Strategien zur Reduktion großer ExSTraCS-Regelmengen:
-1. Conservative Pruning - garantiert keine Verschlechterung
-2. Aggressive Pruning - mit Validierungs-Daten, akzeptiert bis zu 1% F1-Verlust
-3. Weak Rule Filtering - entfernt schwache Regeln
-4. Rule Consolidation - mergt ähnliche Regeln
-5. All - kombiniert alle Strategien
+Demonstrates different strategies to reduce large ExSTraCS rule sets:
+1. Conservative pruning - guarantees no degradation
+2. Aggressive pruning - uses validation data, accepts up to 1% F1 loss
+3. Weak rule filtering - removes weak rules
+4. Rule consolidation - merges similar rules
+5. All - combines all strategies
 """
 
 from sklearn.datasets import load_iris, load_wine, load_breast_cancer
@@ -22,7 +22,7 @@ from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
 
 def benchmark_exstracs_shrinking():
-    """Vergleiche ExSTraCS mit verschiedenen Shrinking-Strategien"""
+    """Compare ExSTraCS with different shrinking strategies."""
     
     print("=" * 80)
     print("ExSTraCS Rule-Shrinking Benchmark")
@@ -35,7 +35,7 @@ def benchmark_exstracs_shrinking():
     ]
     
     shrinking_variants = [
-        ("exstracs_baseline", None, "Baseline (keine Shrinking)"),
+        ("exstracs_baseline", None, "Baseline (no shrinking)"),
         ("exstracs_conservative", {"conservative_prune": True}, "Conservative Pruning"),
         ("exstracs_filter", {"filter_weak_rules": True, "min_fitness_percentile": 0.2}, "Filter Weak Rules"),
         ("exstracs_aggressive", {"aggressive_prune": True, "max_f1_loss": 0.01}, "Aggressive Pruning (1% loss)"),
@@ -51,7 +51,7 @@ def benchmark_exstracs_shrinking():
     for dataset_name, dataset, train_size in datasets:
         X, y = dataset.data, dataset.target
 
-        # Stratified Split: Stelle sicher, dass alle Klassen im Training vertreten sind
+        # Stratified split: ensure all classes are represented in training
         if train_size < len(X):
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, train_size=train_size, stratify=y, random_state=42
@@ -61,7 +61,7 @@ def benchmark_exstracs_shrinking():
             X_test, y_test = np.empty((0, X.shape[1])), np.empty((0,))
 
         if len(X_test) == 0 or len(y_test) == 0:
-            print(f"[WARN] Zu wenig Testdaten für {dataset_name}, überspringe.")
+            print(f"[WARN] Too few test samples for {dataset_name}, skipping.")
             continue
 
         print(f"\n{'='*80}")
@@ -81,15 +81,15 @@ def benchmark_exstracs_shrinking():
                     exstracs_params=shrinking_params,
                     random_state=42,
                 )
-                # Trainiere
+                # Train
                 clf.fit(X_train, y_train)
 
-                # F1 mit nativem ExSTraCS-Modell (vor Transformation)
+                # F1 with native ExSTraCS model (before transformation)
                 estimator = getattr(clf, "estimator_", None)
                 if estimator is not None and hasattr(estimator, "predict"):
                     try:
                         y_pred_native = estimator.predict(X_test)
-                        # Debug-Ausgaben, wenn F1=0.0 oder Fehler
+                        # Debug output when F1=0.0 or an error occurs
                         import numpy as np
                         debug_native = False
                         try:
@@ -110,9 +110,9 @@ def benchmark_exstracs_shrinking():
                     except Exception as e:
                         print(f"  [F1 native ExSTraCS: Error: {e}]", end=" ")
 
-                # Vorhersage mit ScoredRuleSet
+                # Prediction with ScoredRuleSet
                 y_pred = clf.predict(X_test)
-                # Debug-Ausgaben, wenn F1=0.0 oder Fehler
+                # Debug output when F1=0.0 or an error occurs
                 import numpy as np
                 debug_scored = False
                 try:
@@ -129,16 +129,16 @@ def benchmark_exstracs_shrinking():
                     print("  [DEBUG scoredruleset] y_test type:", type(y_test), "len:", len(y_test), "unique:", np.unique(y_test))
                     print("  [DEBUG scoredruleset] y_pred type:", type(y_pred), "len:", len(y_pred), "unique:", np.unique(y_pred))
 
-                # Ruleset Statistiken
+                # Ruleset statistics
                 ruleset = clf.to_ruleset()
                 n_rules = len(ruleset.rules)
                 n_atoms = sum(len(r.atoms) for r in ruleset.rules)
                 avg_atoms = n_atoms / max(n_rules, 1)
 
-                # Debug: Zähle Regeln mit atoms=0 und mit atoms>0
+                # Debug: count rules with atoms=0 and with atoms>0
                 n_default = sum(1 for r in ruleset.rules if len(r.atoms) == 0)
                 n_nondefault = sum(1 for r in ruleset.rules if len(r.atoms) > 0)
-                print(f"  [DEBUG] Default-Regeln: {n_default}, Nicht-Default-Regeln: {n_nondefault}")
+                print(f"  [DEBUG] Default rules: {n_default}, non-default rules: {n_nondefault}")
 
                 print(f"✓ F1 scoredruleset={f1:.4f} | Rules={n_rules:3d} | Atoms={n_atoms:4d} | AvgAtoms={avg_atoms:.1f}")
 
@@ -153,17 +153,17 @@ def benchmark_exstracs_shrinking():
             except Exception as e:
                 print(f"✗ Error: {str(e)[:50]}...")
         
-        # Zusammenfassung
+        # Summary
         if results:
             print(f"\n{'-'*80}")
-            print("Zusammenfassung:")
+            print("Summary:")
             
-            # Vergleich zur Baseline
+            # Comparison against baseline
             baseline = results[0]
-            print(f"\nBaseline (keine Shrinking):")
+            print(f"\nBaseline (no shrinking):")
             print(f"  F1={baseline['f1']:.4f}, Rules={baseline['n_rules']}, Atoms={baseline['n_atoms']}")
             
-            print(f"\nReduktionen:")
+            print(f"\nReductions:")
             for result in results[1:]:
                 atom_reduction = (1 - result['n_atoms'] / baseline['n_atoms']) * 100 if baseline['n_atoms'] > 0 else 0
                 f1_diff = result['f1'] - baseline['f1']
@@ -171,7 +171,7 @@ def benchmark_exstracs_shrinking():
 
 
 def test_individual_strategy():
-    """Teste einzelne Strategie mit Details"""
+    """Test a single strategy with details."""
     
     print("\n" + "=" * 80)
     print("Test: Aggressive Pruning Details")
@@ -182,7 +182,7 @@ def test_individual_strategy():
     X, y = iris.data, iris.target
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
     
-    print("\nBaseline (keine Shrinking):")
+    print("\nBaseline (no shrinking):")
     clf_baseline = ScoredRuleSetClassifier(backend="exstracs", random_state=42)
     clf_baseline.fit(X_train, y_train)
     ruleset_baseline = clf_baseline.to_ruleset()
@@ -207,7 +207,7 @@ def test_individual_strategy():
     if f1_baseline is not None:
         print(f"  F1: {f1_baseline:.4f}")
     
-    print("\nMit Aggressive Pruning (max_f1_loss=1%):")
+    print("\nWith aggressive pruning (max_f1_loss=1%):")
     clf_aggressive = ScoredRuleSetClassifier(
         backend="exstracs",
         exstracs_params={
@@ -242,28 +242,28 @@ def test_individual_strategy():
                      sum(len(r.atoms) for r in ruleset_baseline.rules)) * 100
     f1_diff = f1_aggressive - f1_baseline
     
-    print(f"\nEinsparungen:")
+    print(f"\nSavings:")
     print(f"  Atoms: {atom_reduction:.1f}% Reduktion")
     print(f"  F1: {f1_diff:+.4f} (Ziel war max -0.01)")
 
 
 if __name__ == "__main__":
-    print("\n🔍 ExSTraCS Rule-Shrinking Beispiele\n")
+    print("\nExSTraCS rule-shrinking examples\n")
     
-    # Benchmark durchführen
+    # Run benchmark
     try:
         benchmark_exstracs_shrinking()
     except Exception as e:
-        print(f"\n⚠️  Benchmark-Fehler: {e}")
-        print("Stelle sicher, dass skExSTraCS installiert ist: pip install scikit-exstracs")
+        print(f"\n[WARN] Benchmark error: {e}")
+        print("Ensure skExSTraCS is installed: pip install scikit-exstracs")
     
-    # Individuellen Test durchführen
+    # Run individual test
     try:
         test_individual_strategy()
     except Exception as e:
-        print(f"\n⚠️  Test-Fehler: {e}")
+        print(f"\n[WARN] Test error: {e}")
     
     print("\n" + "=" * 80)
-    print("Beispiel abgeschlossen!")
+    print("Example completed!")
     print("=" * 80 + "\n")
 

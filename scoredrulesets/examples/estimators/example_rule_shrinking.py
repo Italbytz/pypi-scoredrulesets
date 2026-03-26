@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Beispiel: Rule-Shrinking-Algorithmus für CART und HS Modelle
+Example: rule-shrinking algorithm for CART and HS models
 
-Dieses Skript demonstriert, wie der Atom-Pruning-Algorithmus verwendet wird,
-um die Modellgröße zu reduzieren bei gleichzeitiger Erhaltung der Vorhersage-Qualität.
+This script demonstrates how atom pruning can reduce model size
+while preserving predictive quality.
 """
 
 from sklearn.datasets import load_iris, load_wine, load_breast_cancer
@@ -14,7 +14,7 @@ from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
 
 def benchmark_pruning_on_dataset(name, X, y):
-    """Benchmark Atom-Pruning auf einem Datensatz"""
+    """Benchmark atom pruning on a dataset."""
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.3, random_state=42
     )
@@ -27,8 +27,8 @@ def benchmark_pruning_on_dataset(name, X, y):
     print(f"  n_samples={n_samples}, n_features={n_features}, n_classes={n_classes}")
     print(f"{'='*70}")
     
-    # Baseline: Ohne Pruning
-    print("\n1. BASELINE: Ohne Atom-Pruning (λ=None)")
+    # Baseline: without pruning
+    print("\n1. BASELINE: without atom pruning (lambda=None)")
     print("-" * 70)
     clf_baseline = ScoredRuleSetClassifier(
         backend="cart",
@@ -46,10 +46,10 @@ def benchmark_pruning_on_dataset(name, X, y):
     print(f"  Total Atoms:  {n_atoms_baseline}")
     print(f"  F1 (macro):   {f1_baseline:.4f}")
     
-    # Pruning mit verschiedenen Lambda-Werten
+    # Pruning with different lambda values
     results = []
     for prune_lambda in [1.5, 2.0, 3.0]:
-        print(f"\n2. Mit Atom-Pruning (λ={prune_lambda})")
+        print(f"\n2. With atom pruning (lambda={prune_lambda})")
         print("-" * 70)
         
         clf_pruned = ScoredRuleSetClassifier(
@@ -75,8 +75,8 @@ def benchmark_pruning_on_dataset(name, X, y):
             f1_delta = f1_pruned - f1_baseline
             
             print(f"  Rules:        {n_rules_pruned}")
-            print(f"  Total Atoms:  {n_atoms_pruned} (↓ {atoms_removed}, -{pct_removed:.1f}%)")
-            print(f"  F1 (macro):   {f1_pruned:.4f} (Δ {f1_delta:+.4f})")
+            print(f"  Total Atoms:  {n_atoms_pruned} (-{atoms_removed}, -{pct_removed:.1f}%)")
+            print(f"  F1 (macro):   {f1_pruned:.4f} (delta {f1_delta:+.4f})")
             
             results.append({
                 'lambda': prune_lambda,
@@ -90,9 +90,9 @@ def benchmark_pruning_on_dataset(name, X, y):
         except Exception as e:
             print(f"  ERROR: {e}")
     
-    # Zusammenfassung
+    # Summary
     print(f"\n{'='*70}")
-    print("ZUSAMMENFASSUNG")
+    print("SUMMARY")
     print(f"{'='*70}")
     print(f"  Baseline: {n_atoms_baseline} atoms, F1={f1_baseline:.4f}")
     for r in results:
@@ -101,7 +101,7 @@ def benchmark_pruning_on_dataset(name, X, y):
 
 
 def main():
-    # Lade mehrere Datensätze
+    # Load multiple datasets
     datasets = [
         ("Iris", *load_iris(return_X_y=True)),
         ("Wine", *load_wine(return_X_y=True)),
@@ -112,7 +112,7 @@ def main():
         benchmark_pruning_on_dataset(name, X, y)
     
     print(f"\n{'='*70}")
-    print("Benchmark abgeschlossen!")
+    print("Benchmark completed!")
     print(f"{'='*70}\n")
 
 

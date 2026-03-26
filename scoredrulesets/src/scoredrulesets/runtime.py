@@ -31,11 +31,11 @@ def _atom_matches(value: Any, atom: Atom) -> bool:
     if op == ">=":
         return value >= ref
     if op == "in":
-        # ExSTraCS liefert Intervalle als Dict mit 'lower' und 'upper'
+        # ExSTraCS may provide intervals as dicts with 'lower' and 'upper'.
         if isinstance(ref, dict) and "lower" in ref and "upper" in ref:
             lower = ref["lower"]
             upper = ref["upper"]
-            # Reihenfolge absichern (falls lower > upper)
+            # Ensure correct ordering in case lower > upper.
             if lower > upper:
                 lower, upper = upper, lower
             return lower <= value <= upper
@@ -63,7 +63,7 @@ def decision_function(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False
     scores = np.zeros((X.shape[0], n_classes), dtype=float)
     feature_names = ruleset.feature_names or [f"f{i}" for i in range(X.shape[1])]
 
-    # Identifiziere Default-Regel(n) (Regeln ohne Bedingungen)
+    # Identify default rule(s) (rules without conditions).
     default_scores = np.zeros(n_classes, dtype=float)
     has_default = False
     non_default_rules = []
@@ -76,14 +76,14 @@ def decision_function(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False
 
     for i, row in enumerate(X):
         fired_rules = []
-        # Prüfe, ob mindestens eine Nicht-Default-Regel feuert
+        # Check whether at least one non-default rule fires.
         non_default_fired = []
         for rule in non_default_rules:
             if _rule_fires(row, rule, feature_names):
                 scores[i] += np.asarray(rule.scores, dtype=float)
                 fired_rules.append(rule)
                 non_default_fired.append(rule)
-        # Falls keine Nicht-Default-Regel feuert, nutze den Default-Mechanismus (falls vorhanden)
+        # If no non-default rule fires, apply default scores if available.
         if not non_default_fired and has_default:
             scores[i] += default_scores
             fired_rules.append(("default_combined", default_scores.tolist()))
@@ -127,17 +127,17 @@ def predict(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False) -> np.nd
 
 def consolidate_default_rules(ruleset: ScoredRuleSet) -> ScoredRuleSet:
     """
-    Sorgt dafür, dass im Ruleset maximal eine Default-Regel (atoms=[]) enthalten ist.
-    Falls mehrere vorhanden sind, werden deren Scores aufsummiert und zu einer Regel zusammengefasst.
-    Alle anderen Regeln bleiben unverändert.
+    Ensure that the ruleset contains at most one default rule (atoms=[]).
+    If multiple defaults exist, their scores are summed into a single rule.
+    All non-default rules remain unchanged.
     """
     default_rules = [r for r in ruleset.rules if not getattr(r, 'atoms', None)]
     non_default_rules = [r for r in ruleset.rules if getattr(r, 'atoms', None)]
     if not default_rules:
         return ruleset
-    # Scores aufsummieren
+    # Sum scores of all default rules.
     summed_scores = np.sum([np.asarray(r.scores, dtype=float) for r in default_rules], axis=0)
-    # Metadaten zusammenfassen
+    # Merge metadata.
     merged_metadata = {"merged_default_rules": len(default_rules)}
     merged_metadata.update(getattr(default_rules[0], 'metadata', {}))
     merged_default_rule = Rule(

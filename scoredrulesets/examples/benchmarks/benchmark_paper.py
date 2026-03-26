@@ -1,10 +1,10 @@
-"""Paper-Benchmark: 8 Regellernen-Methoden auf 10 ausgewaehlten Datensaetzen.
+"""Paper-Benchmark: 8 rule-learning-Methoden auf 10 selected datasets.
 
-Ziel dieses Benchmarks ist ein direkter Vergleich der Methoden fuer eine
-Veroeffentlichung. Die Schaetzer tauchen unter kurzen Bezeichnungen auf,
-die sich in einer Paper-Tabelle oder Abbildung direkt verwenden lassen.
+The goal of this benchmark is a direct method comparison for publication.
+Estimators are shown with concise display names so they can be used directly
+in paper tables and figures.
 
-Schaetzer (Kurzname -> interner Wrapper):
+Estimators (short name -> internal wrapper):
     HS              <- wrapper_hs_pruned
     RuleKit         <- wrapper_rulekit_native
     ExSTraCS        <- wrapper_exstracs
@@ -14,21 +14,21 @@ Schaetzer (Kurzname -> interner Wrapper):
     ruleNLN         <- wrapper_rulenln_strong
     ruleLCS         <- wrapper_rulelcs_strong
 
-Datensaetze (10):
+Datasets (10):
   Real-World (4): sklearn_breast_cancer, sklearn_wine, uci_car_evaluation,
                   uci_heart_disease
-  Synthetisch (6): synth_dnf_3x2, synth_overlap_4rules, synth_monk3,
+  synthetic (6): synth_dnf_3x2, synth_overlap_4rules, synth_monk3,
                    synth_xor_3bit, synth_imbalanced_10pct, synth_checkerboard_4x4
 
-Begruendung der Datensatz-Auswahl:
-  - Real-World-Datensaetze geben Lesern Referenzpunkte zu bekannten Benchmarks.
-  - synth_dnf_3x2 / synth_overlap_4rules / synth_monk3: Konzept-Lernen, bei dem
-    Regellernen semantische Vorteile hat.
-  - synth_xor_3bit: Nicht-linear, differenziert GP/LCS von linearen Methoden.
-  - synth_imbalanced_10pct: Robustheit gegenueber Klassenimbalance.
-  - synth_checkerboard_4x4: Geometrisch komplex, keine einfachen Regeln.
+Rationale for dataset selection:
+  - Real-World-Datasets provide readers with reference points from well-known benchmarks.
+  - synth_dnf_3x2 / synth_overlap_4rules / synth_monk3: concept learning, bei dem
+    rule-learning semantische Vorteile hat.
+  - synth_xor_3bit: nonlinear, separates GP/LCS von linearen Methoden.
+  - synth_imbalanced_10pct: Robustheit against classimbalance.
+  - synth_checkerboard_4x4: geometrically komplex, no simple rules.
 
-Aufruf:
+Usage:
     python examples/benchmarks/benchmark_paper.py
     python examples/benchmarks/benchmark_paper.py --repeats 5
     python examples/benchmarks/benchmark_paper.py --timeout 300
@@ -74,10 +74,10 @@ from scoredrulesets.benchmarking.runner import results_as_dicts
 from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
 # ---------------------------------------------------------------------------
-# Paper-Schaetzer: Kurznamen + identische Hyperparameter wie die Wrapper
+# Paper-Estimators: short names + identical Hyperparameter as die Wrapper
 # ---------------------------------------------------------------------------
-# Die Factories sind 1:1 aus default_estimator_specs() uebernommen.
-# spec.name bestimmt den Anzeigenamen in allen Reports, Plots und Tabellen.
+# Die Factories sind 1:1 from default_estimator_specs() imported.
+# spec.name defines the display name in alln Reports, Plots and Tabellen.
 
 _PAPER_SPECS: dict[str, EstimatorSpec] = {
     "paper_HS": EstimatorSpec(
@@ -151,7 +151,7 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
                 "max_rules": 12,
                 "max_atoms_per_rule": 5,
                 "tournament_size": 4,
-                "early_stopping_rounds": 30,
+                "early_stopping_roands": 30,
                 "enable_compaction": True,
             },
             random_state=0,
@@ -168,7 +168,7 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
                 "l1_conj": 0.0003,
                 "l1_score": 0.00015,
                 "epochs": 600,
-                "early_stopping_rounds": 50,
+                "early_stopping_roands": 50,
                 "atom_threshold": 0.06,
             },
             random_state=0,
@@ -194,32 +194,32 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
     ),
 }
 
-# Registriere Paper-Schaetzer global, damit run_benchmarks() sie findet
+# Register paper estimators globally so run_benchmarks() can find them
 ESTIMATOR_SPECS.update(_PAPER_SPECS)
 
 PAPER_ESTIMATOR_NAMES: list[str] = list(_PAPER_SPECS.keys())
 
 # ---------------------------------------------------------------------------
-# Datensatz-Auswahl
+# Dataset-selection
 # ---------------------------------------------------------------------------
 PAPER_DATASETS: list[str] = [
-    # Real-World (4) - bekannte Referenz-Benchmarks
-    "sklearn_breast_cancer",    # Binaer, 569 x 30, medizinisch
-    "sklearn_wine",             # 3-klassig, 178 x 13, chemisch
-    "uci_car_evaluation",       # 4-klassig, 1728 x 6, kategorial
-    "uci_heart_disease",        # Binaer, 303 x 13, medizinisch
-    # Synthetisch - Konzept-Lernen mit klaren Regelstrukturen
-    "synth_dnf_3x2",            # DNF-Konzept (Spread 0.604), Regellernen sollte dominieren
-    "synth_overlap_4rules",     # Ueberlappende Regeln (Spread 0.479), Konfliktloesungstest
-    "synth_monk3",              # MONK-3 + Rauschen (Spread 0.512), klassischer ML-Benchmark
-    # Synthetisch - herausfordernd
-    "synth_xor_3bit",           # Nicht-linear / Paritaet (Spread 0.588), differenziert GP/LCS
-    "synth_imbalanced_10pct",   # 10 % Minoritaetsklasse (Spread 0.408), Imbalance-Robustheit
-    "synth_checkerboard_4x4",   # Geometrisch komplex (Spread 0.491), keine einfachen Regeln
+    # Real-world (4) - known reference benchmarks
+    "sklearn_breast_cancer",    # binary, 569 x 30, medical
+    "sklearn_wine",             # 3-class, 178 x 13, chemical
+    "uci_car_evaluation",       # 4-class, 1728 x 6, categorical
+    "uci_heart_disease",        # binary, 303 x 13, medical
+    # Synthetic - concept learning with clear rule structures
+    "synth_dnf_3x2",            # DNF concept (spread 0.604), rule learning should dominate
+    "synth_overlap_4rules",     # Overlapping rules (Spread 0.479), conflict-resolution stress test
+    "synth_monk3",              # MONK-3 + noise (spread 0.512), classic ML benchmark
+    # Synthetic - challenging
+    "synth_xor_3bit",           # nonlinear / parity (Spread 0.588), separates GP/LCS
+    "synth_imbalanced_10pct",   # 10% minority class (spread 0.408), imbalance robustness
+    "synth_checkerboard_4x4",   # geometrically complex (spread 0.491), no simple rules
 ]
 
 # ---------------------------------------------------------------------------
-# Hilfsfunktionen
+# Helpers
 # ---------------------------------------------------------------------------
 
 class _TeeStream:
@@ -272,7 +272,7 @@ def _csv_string(rows):
 
 
 # ---------------------------------------------------------------------------
-# Hauptfunktion
+# Main function
 # ---------------------------------------------------------------------------
 
 def main(
@@ -284,33 +284,33 @@ def main(
     timeout_seconds: float | None = 300.0,
     checkpoint_path: str | Path | None = "benchmarks/checkpoint_paper.jsonl",
     output_dir: str | Path = "benchmarks/paper",
-    console_title: str = "PAPER BENCHMARK: 8 Methoden, 10 Datensaetze",
+    console_title: str = "PAPER BENCHMARK: 8 methods, 10 datasets",
     report_title: str = "ScoredRuleSets Paper Benchmark - Rule-Based Classifiers Comparison",
 ):
-    """Fuehrt den Paper-Benchmark aus und erzeugt alle Reports."""
+    """Run the paper benchmark and generate all reports."""
 
     ds_names = dataset_names or PAPER_DATASETS
     est_names = estimator_names or PAPER_ESTIMATOR_NAMES
 
-    # Display-Namen (spec.name) fuer die Auflistung in der Ausgabe
+    # Display names (spec.name) for the estimator list in output
     registry = default_estimator_specs()
     display_names = [registry[e].name for e in est_names if e in registry]
 
     dn_display = ", ".join(ds_names)
     en_display = ", ".join(display_names)
-    timeout_display = f"{timeout_seconds:.0f}s" if timeout_seconds else "deaktiviert"
-    ckpt_display = str(checkpoint_path) if checkpoint_path else "deaktiviert"
+    timeout_display = f"{timeout_seconds:.0f}s" if timeout_seconds else "disabled"
+    ckpt_display = str(checkpoint_path) if checkpoint_path else "disabled"
     total_runs = len(ds_names) * len(est_names) * repeats
 
     print("=" * 70)
     print(console_title)
     print("=" * 70)
-    print(f"  Datensaetze ({len(ds_names):2d}): {dn_display}")
-    print(f"  Schaetzer   ({len(est_names):2d}): {en_display}")
-    print(f"  Wiederholungen:    {repeats}")
-    print(f"  Timeout pro Lauf:  {timeout_display}")
+    print(f"  Datasets ({len(ds_names):2d}): {dn_display}")
+    print(f"  Estimators   ({len(est_names):2d}): {en_display}")
+    print(f"  Repeats:    {repeats}")
+    print(f"  Timeout per run:  {timeout_display}")
     print(f"  Checkpoint:        {ckpt_display}")
-    print(f"  Gesamt-Laeufe:     {total_runs}")
+    print(f"  Total runs:     {total_runs}")
     print("=" * 70)
 
     out_dir = Path(output_dir)
@@ -331,15 +331,15 @@ def main(
         checkpoint_path=checkpoint_path,
     )
 
-    # ------- Phase 1: Benchmarks ausfuehren -------
-    print("\n[1/3] Fuehre Benchmarks aus...")
+    # ------- Phase 1: Run benchmarks -------
+    print("\n[1/3] Running benchmarks...")
     t0 = time.time()
     results = run_benchmarks(config)
     t1 = time.time()
-    print(f"Benchmarks abgeschlossen in {t1 - t0:.1f} Sekunden ({total_runs} Laeufe).")
+    print(f"Benchmarks completed in {t1 - t0:.1f} seconds ({total_runs} runs).")
 
-    # ------- Phase 2: Aggregieren und Reports -------
-    print("\n[2/3] Aggregiere und erstelle Reports...")
+    # ------- Phase 2: Aggregate and generate reports -------
+    print("\n[2/3] Aggregate and generate reports...")
     payload = results_as_dicts(results)
     aggregated = aggregate_benchmark_results(results, error_bar="std")
     leaderboard = build_benchmark_leaderboard(aggregated)
@@ -496,15 +496,15 @@ def main(
     )
     (out_dir / "benchmark_report.html").write_text(html_report, encoding="utf-8")
 
-    # ------- Phase 3: Zusammenfassung -------
-    print(f"\n[3/3] Fertig! Ergebnisse in: {out_dir}/")
-    print("Wichtige Dateien:")
-    print(f"  {out_dir}/benchmark_results.csv / .json          (Rohdaten)")
-    print(f"  {out_dir}/benchmark_results_aggregated.csv / .json (Aggregiert)")
+    # ------- Phase 3: Summary -------
+    print(f"\n[3/3] Done! Results in: {out_dir}/")
+    print("Key files:")
+    print(f"  {out_dir}/benchmark_results.csv / .json          (Raw data)")
+    print(f"  {out_dir}/benchmark_results_aggregated.csv / .json (Aggregated)")
     print(f"  {out_dir}/benchmark_report.md / .html            (Report)")
     print(f"  {out_dir}/benchmark_results.png / .pdf           (Plots)")
     print(f"  {out_dir}/benchmark_results_heatmap*.png / .pdf  (Heatmaps)")
-    print(f"  {out_dir}/benchmark_results_pareto.png / .pdf    (Pareto-Front)")
+    print(f"  {out_dir}/benchmark_results_pareto.png / .pdf    (Pareto front)")
     print(f"  {out_dir}/benchmark_results_cd.png / .pdf        (Critical Difference Diagram)")
     print(f"  {out_dir}/benchmark_results_wtl.png / .pdf       (Win/Tie/Loss Matrix)")
     print(f"  {out_dir}/benchmark_results_wtl_size.png / .pdf  (Win/Tie/Loss Matrix: model size)")
@@ -527,48 +527,48 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Paper-Benchmark: 8 rule-based classifiers on 10 selected datasets.",
         epilog=(
-            "Schaetzer: HS, RuleKit, ExSTraCS, ExSTraCS (LRC), logicGP, ruleGP, ruleNLN, ruleLCS. "
+            "Estimators: HS, RuleKit, ExSTraCS, ExSTraCS (LRC), logicGP, ruleGP, ruleNLN, ruleLCS. "
             "10 Datasets: 4 real-world (sklearn/UCI) + 6 synthetic."
         ),
     )
     parser.add_argument(
         "--log-file", type=Path, default=None,
-        help="Console-Log-Datei (default: auto-generiert unter benchmarks/logs/).",
+        help="Console log file (default: auto-generated under benchmarks/logs/).",
     )
     parser.add_argument(
         "--no-log", action="store_true",
-        help="Kein Log-File schreiben.",
+        help="Do not write a log file.",
     )
     parser.add_argument(
         "--datasets", type=str, default="",
-        help="Kommaseparierte Dataset-Liste (default: PAPER_DATASETS).",
+        help="Comma-separated Dataset list (default: PAPER_DATASETS).",
     )
     parser.add_argument(
         "--estimators", type=str, default="",
         help=(
-            "Kommaseparierte interne Schaetzer-Schluessel (default: alle Paper-Schaetzer). "
-            "Verfuegbar: " + ", ".join(_PAPER_SPECS.keys())
+            "Comma-separated internal estimator keys (default: all paper estimators). "
+            "Available: " + ", ".join(_PAPER_SPECS.keys())
         ),
     )
     parser.add_argument(
         "--repeats", type=int, default=3,
-        help="Wiederholungen pro Kombination (default: 3).",
+        help="Repeats per combination (default: 3).",
     )
     parser.add_argument(
         "--timeout", type=float, default=300.0,
-        help="Timeout pro Einzellauf in Sekunden (default: 300). 0 = kein Timeout.",
+        help="Timeout per single run in seconds (default: 300). 0 = no timeout.",
     )
     parser.add_argument(
         "--checkpoint", type=str, default="benchmarks/checkpoint_paper.jsonl",
-        help="Checkpoint-Datei fuer Resume (default: benchmarks/checkpoint_paper.jsonl).",
+        help="Checkpoint file for resume (default: benchmarks/checkpoint_paper.jsonl).",
     )
     parser.add_argument(
         "--output-dir", type=str, default="benchmarks/paper",
-        help="Ausgabeverzeichnis (default: benchmarks/paper).",
+        help="output directory (default: benchmarks/paper).",
     )
     parser.add_argument(
         "--no-checkpoint", action="store_true",
-        help="Checkpoint/Resume deaktivieren.",
+        help="Disable checkpoint/resume.",
     )
     args = parser.parse_args()
 

@@ -23,7 +23,7 @@ def _format_scores(ruleset: ScoredRuleSet, rule_index: int) -> str:
 
 
 def format_ruleset_table(ruleset: ScoredRuleSet, max_condition_len: int = 80) -> str:
-    """Formatiert ein ScoredRuleSet als ASCII-Tabelle fuer die Konsole."""
+    """Format a ScoredRuleSet as an ASCII table for terminal output."""
     rows: list[list[str]] = []
     for idx, rule in enumerate(ruleset.rules):
         condition = _format_condition(ruleset, idx)

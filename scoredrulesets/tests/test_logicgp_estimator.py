@@ -1,5 +1,5 @@
 """
-Tests fuer LogicGPClassifier (FLCW und RLCW Varianten).
+Tests for LogicGPClassifier (FLCW and RLCW variants).
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from sklearn.datasets import load_iris
 
 
 def _make_simple_data():
-    """Kleines, schnell trainierbares Dataset."""
+    """Small, quickly trainable dataset."""
     rng = np.random.default_rng(42)
     X = rng.integers(0, 3, size=(60, 4)).astype(object)
     y = np.array([0] * 20 + [1] * 20 + [2] * 20)
@@ -17,7 +17,7 @@ def _make_simple_data():
 
 
 # ---------------------------------------------------------------------------
-# Basis-Tests (FLCW)
+# Basic tests (FLCW)
 # ---------------------------------------------------------------------------
 
 def test_logicgp_flcw_fit_predict():
@@ -83,7 +83,7 @@ def test_logicgp_flcw_metadata_fields():
 
 
 # ---------------------------------------------------------------------------
-# RLCW-spezifische Tests
+# RLCW-specific tests
 # ---------------------------------------------------------------------------
 
 def test_logicgp_rlcw_macro_fit_predict():
@@ -166,7 +166,7 @@ def test_logicgp_rlcw_max_model_size_constraint():
     ruleset = clf.to_ruleset()
     meta = ruleset.metadata
     assert meta["max_model_size"] == 2
-    # Modellgroesse muss <= max_model_size sein
+    # Model size must be <= max_model_size
     assert meta["model_size"] <= 2
 
 
@@ -185,7 +185,7 @@ def test_logicgp_rlcw_population_size_limits_growth():
         random_state=6,
     )
     clf.fit(X, y)
-    # Sollte keine Exception werfen
+    # Should not raise an exception
     assert clf.to_ruleset() is not None
 
 
@@ -271,7 +271,7 @@ def test_sklearn_wrapper_logicgp_rlcw_backend():
 
 
 # ---------------------------------------------------------------------------
-# Benchmarking-Estimatoren fuer logicGP
+# Benchmark estimators for logicGP
 # ---------------------------------------------------------------------------
 
 def test_benchmarking_estimator_specs_include_logicgp():

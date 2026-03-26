@@ -85,7 +85,7 @@ def test_runtime_combines_multiple_default_rules_on_fallback():
 
 
 def _make_binary_ruleset(rules: list[Rule]) -> ScoredRuleSet:
-    """Hilfsfunktion: Binary-Ruleset mit Default-Regel."""
+    """Helper function: binary ruleset with default rule."""
     return ScoredRuleSet(
         class_labels=[0, 1],
         feature_names=["f0", "f1", "f2"],
@@ -169,7 +169,7 @@ class TestRuleFeatureSchema:
 
 class TestIntervalMerge:
     def test_same_class_same_schema_merges(self):
-        """Zwei Regeln gleicher Klasse + gleichem Schema → merged zu einer."""
+        """Two rules with same class and schema merge into one."""
         rules = [
             Rule(
                 atoms=[
@@ -196,25 +196,25 @@ class TestIntervalMerge:
         non_default = [r for r in merged.rules if r.atoms]
         assert len(non_default) == 1, f"Expected 1 merged rule, got {len(non_default)}"
 
-        # Scores wurden aufsummiert
+        # Scores are summed
         m = non_default[0]
         assert m.scores[0] == 0.0
         assert m.scores[1] == 5.0  # 2 + 3
 
-        # Intervall ist die Vereinigung [1, 4]
+        # Interval is the union [1, 4]
         ivs = _extract_feature_intervals(m)
-        assert ivs["f0"][0] == 1.0  # min der Untergrenzen
-        assert ivs["f0"][1] == 4.0  # max der Obergrenzen
+        assert ivs["f0"][0] == 1.0  # min lower bound
+        assert ivs["f0"][1] == 4.0  # max upper bound
 
     def test_different_class_not_merged(self):
-        """Regeln verschiedener Klassen werden nicht zusammengefasst."""
+        """Rules from different classes are not merged."""
         rules = [
             Rule(
                 atoms=[
                     Atom(feature="f0", op=">", value=1.0),
                     Atom(feature="f0", op="<", value=3.0),
                 ],
-                scores=[2.0, 0.0],  # Klasse 0
+                scores=[2.0, 0.0],  # class 0
                 rule_id="r0",
             ),
             Rule(
@@ -222,7 +222,7 @@ class TestIntervalMerge:
                     Atom(feature="f0", op=">", value=1.5),
                     Atom(feature="f0", op="<", value=3.5),
                 ],
-                scores=[0.0, 3.0],  # Klasse 1
+                scores=[0.0, 3.0],  # class 1
                 rule_id="r1",
             ),
         ]
@@ -233,7 +233,7 @@ class TestIntervalMerge:
         assert len(non_default) == 2, "Different classes should not be merged"
 
     def test_different_schema_not_merged(self):
-        """Regeln mit verschiedenem Feature-Set werden nicht zusammengefasst."""
+        """Rules with different feature sets are not merged."""
         rules = [
             Rule(
                 atoms=[
@@ -259,7 +259,7 @@ class TestIntervalMerge:
         assert len(non_default) == 2, "Different feature schemas should not be merged"
 
     def test_disjoint_intervals_high_threshold_not_merged(self):
-        """Disjunkte Intervalle + hoher Threshold → kein Merge."""
+        """Disjoint intervals + high threshold -> no merge."""
         rules = [
             Rule(
                 atoms=[
@@ -285,7 +285,7 @@ class TestIntervalMerge:
         assert len(non_default) == 2, "Disjoint intervals with high IoU threshold should not be merged"
 
     def test_preserves_default_rule(self):
-        """Default-Regel bleibt erhalten."""
+        """Default rule is preserved."""
         rules = [
             Rule(
                 atoms=[
@@ -304,7 +304,7 @@ class TestIntervalMerge:
         assert defaults[0].scores == [0.1, 0.1]
 
     def test_discrete_atoms_same_value_merged(self):
-        """Diskrete Atome (==) mit gleichem Wert werden zusammengefasst."""
+        """Discrete atoms (==) with the same value are merged."""
         rules = [
             Rule(
                 atoms=[Atom(feature="f0", op="==", value=1.0)],
@@ -327,7 +327,7 @@ class TestIntervalMerge:
         assert non_default[0].scores[1] == 6.0  # 2 + 4
 
     def test_metadata_contains_merged_count(self):
-        """Merge-Metadaten enthalten merged_count und total_numerosity."""
+        """Merge metadata contains merged_count and total_numerosity."""
         rules = [
             Rule(
                 atoms=[Atom(feature="f0", op=">", value=1.0), Atom(feature="f0", op="<", value=5.0)],
@@ -352,7 +352,7 @@ class TestIntervalMerge:
         assert m.metadata["total_numerosity"] == 10.0
 
     def test_massive_reduction(self):
-        """Simuliere typisches ExSTraCS-Szenario: Viele aehnliche Regeln → wenige."""
+        """Simulate a typical ExSTraCS scenario: many similar rules -> few."""
         rng = np.random.default_rng(42)
         many_rules = []
         for i in range(100):
@@ -381,7 +381,7 @@ class TestIntervalMerge:
         assert reduction > 0.5, f"Expected >50% reduction, got {reduction:.0%}"
 
     def test_score_sum_preserves_total_weight(self):
-        """Die Summe aller Scores bleibt nach dem Merge erhalten."""
+        """The sum of all scores is preserved after merge."""
         rules = [
             Rule(
                 atoms=[Atom(feature="f0", op=">", value=i * 0.1), Atom(feature="f0", op="<", value=i * 0.1 + 2.0)],

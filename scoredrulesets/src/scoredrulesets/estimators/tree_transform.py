@@ -8,7 +8,7 @@ import numpy as np
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
 
 
-# Standard-Kandidaten fuer die automatische Lambda-Suche beim Atom-Pruning.
+# Default candidates for automatic lambda search during atom pruning.
 _DEFAULT_LAMBDA_CANDIDATES: list[float] = [1.1, 1.5, 2.0, 3.0, 5.0, 10.0]
 
 
@@ -18,8 +18,8 @@ class TreeTransformParams:
     include_default_rule: bool = False
     default_rule_strength: float = 0.0
     aggressive_prune: bool = False
-    prune_atoms: bool = False  # Aktiviert Atom-Pruning mit Äquivalenzvalidierung
-    prune_lambda: float | None = None  # (veraltet) einzelner Lambda-Wert; bei None wird auto-search genutzt
+    prune_atoms: bool = False  # Enable atom pruning with equivalence validation.
+    prune_lambda: float | None = None  # Deprecated single-lambda value; None uses auto-search.
     prune_lambda_candidates: list[float] = field(default_factory=lambda: list(_DEFAULT_LAMBDA_CANDIDATES))
 
 
@@ -32,14 +32,14 @@ def estimator_to_scored_ruleset(
 ) -> ScoredRuleSet:
     tree_estimator = _unwrap_tree_estimator(estimator)
     if not hasattr(tree_estimator, "tree_"):
-        raise TypeError("Estimator kann nicht in tree_ aufgeloest werden")
+        raise TypeError("Estimator could not be resolved to an object with tree_")
 
     if params.prune_atoms:
         return _build_best_pruned_ruleset(
             tree_estimator, class_labels, feature_names, params, X_ref,
         )
 
-    # Kein Pruning – einmalig bauen
+    # No pruning: build once.
     rules = _build_tree_rules(tree_estimator, class_labels, feature_names, params.depth_decay_lambda)
 
     if params.include_default_rule:
@@ -58,7 +58,7 @@ def _build_tree_rules(
     feature_names: list[str],
     depth_decay_lambda: float,
 ) -> list[Rule]:
-    """Extrahiere Regeln aus einem sklearn-Tree mit gegebenem depth_decay_lambda."""
+    """Extract rules from an sklearn tree with the given depth_decay_lambda."""
     tree = tree_estimator.tree_
     children_left = tree.children_left
     children_right = tree.children_right
@@ -128,10 +128,10 @@ def _build_best_pruned_ruleset(
     params: TreeTransformParams,
     X_ref: np.ndarray | None,
 ) -> ScoredRuleSet:
-    """Probiere mehrere depth_decay_lambda-Werte, prune jeweils, waehle kleinstes Ergebnis."""
-    # Kandidaten bestimmen
+    """Try multiple depth_decay_lambda values, prune each, keep the smallest result."""
+    # Determine candidate lambda values.
     if params.prune_lambda is not None:
-        # Expliziter einzelner Lambda (Rueckwaertskompatibilitaet)
+        # Explicit single lambda (backward compatibility).
         candidates = [params.prune_lambda]
     else:
         candidates = list(params.prune_lambda_candidates)
@@ -204,18 +204,18 @@ def _aggressive_atom_pruning(
     X_ref: np.ndarray | None = None,
 ) -> list[Rule]:
     """
-    Atom-Pruning-Algorithmus mit Vorhersage-Äquivalenzprüfung.
+    Atom pruning algorithm with prediction-equivalence validation.
 
-    Entfernt iterativ Atome, sofern die argmax-Vorhersagen auf *X_ref*
-    identisch bleiben.  Ohne *X_ref* wird nur die strukturelle
-    Sicherheitsprüfung verwendet (riskant – kann Vorhersagen verändern).
+    Iteratively removes atoms as long as argmax predictions on *X_ref*
+    remain identical. Without *X_ref*, only structural safety checks
+    are applied (risky - may change predictions).
     """
     from ..runtime import predict as _predict_from_ruleset
 
     if prune_lambda <= 1.0:
-        raise ValueError(f"prune_lambda muss > 1 sein, erhalten: {prune_lambda}")
+        raise ValueError(f"prune_lambda must be > 1, got: {prune_lambda}")
 
-    # Erstelle Kopie zum Modifizieren
+    # Create a mutable copy.
     working_rules = [
         Rule(
             atoms=list(rule.atoms),
@@ -226,7 +226,7 @@ def _aggressive_atom_pruning(
         for rule in rules
     ]
 
-    # Baseline-Vorhersagen berechnen (falls Referenzdaten vorhanden)
+    # Compute baseline predictions if reference data is available.
     baseline_preds: np.ndarray | None = None
     if X_ref is not None and class_labels is not None and feature_names is not None:
         baseline_ruleset = ScoredRuleSet(
@@ -253,7 +253,7 @@ def _aggressive_atom_pruning(
             for atom_idx in range(len(rule.atoms) - 1, -1, -1):
                 candidate_atoms = rule.atoms[:atom_idx] + rule.atoms[atom_idx + 1:]
 
-                # Strukturelle Sicherheit: nicht leer werden, Scores positiv
+                # Structural safety: rule cannot become empty, scores must remain meaningful.
                 if not candidate_atoms:
                     continue
                 if all(s == 0.0 for s in rule.scores):
@@ -266,7 +266,7 @@ def _aggressive_atom_pruning(
                     metadata=rule.metadata,
                 )
 
-                # Mit Referenzdaten: Vorhersage-Äquivalenz prüfen
+                # With reference data: verify prediction equivalence.
                 if baseline_preds is not None:
                     saved = working_rules[rule_idx]
                     working_rules[rule_idx] = candidate_rule
@@ -279,16 +279,16 @@ def _aggressive_atom_pruning(
                     )
                     candidate_preds = _predict_from_ruleset(candidate_ruleset, X_ref)
                     if np.array_equal(candidate_preds, baseline_preds):
-                        # Äquivalenz bestätigt – Atom dauerhaft entfernen
+                        # Equivalence confirmed: remove atom permanently.
                         atoms_removed_total += 1
                         changed = True
                         break
                     else:
-                        # Vorhersage geändert – Atom zurücksetzen
+                        # Prediction changed: restore previous atom.
                         working_rules[rule_idx] = saved
                         continue
                 else:
-                    # Ohne Referenzdaten: rein strukturell (Fallback)
+                    # Without reference data: structural fallback only.
                     working_rules[rule_idx] = candidate_rule
                     atoms_removed_total += 1
                     changed = True
