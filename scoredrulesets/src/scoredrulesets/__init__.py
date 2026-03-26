@@ -27,6 +27,7 @@ from .estimators.logicgp import LogicGPClassifier
 from .estimators.rulenln import RuleNLNClassifier
 from .estimators.rulelcs import RuleLCSClassifier
 from .estimators.rulegp import RuleGPClassifier
+from .estimators.rulegp2 import RuleGP2Classifier
 from .estimators.rulekit_native import RuleKitNativeClassifier
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
 from .formatting import format_ruleset_table
@@ -48,6 +49,7 @@ __all__ = [
     "RuleNLNClassifier",
     "RuleLCSClassifier",
     "RuleGPClassifier",
+    "RuleGP2Classifier",
     "RuleKitNativeClassifier",
     "ScoredRuleSetClassifier",
     "aggregate_benchmark_results",

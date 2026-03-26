@@ -4,6 +4,7 @@ from .logicgp import LogicGPClassifier
 from .rulenln import RuleNLNClassifier
 from .rulelcs import RuleLCSClassifier
 from .rulegp import RuleGPClassifier
+from .rulegp2 import RuleGP2Classifier
 from .sklearn_wrapper import ScoredRuleSetClassifier
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
 	"RuleNLNClassifier",
 	"RuleLCSClassifier",
 	"RuleGPClassifier",
+	"RuleGP2Classifier",
 	"ScoredRuleSetClassifier",
 ]
 

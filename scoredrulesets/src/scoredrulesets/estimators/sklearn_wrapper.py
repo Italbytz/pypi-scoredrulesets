@@ -26,7 +26,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     ----------
     backend : str
         Backend estimator to use (e.g. 'cart', 'hs', 'rulekit', 'exstracs',
-        'logicgp', 'rulelcs', 'rulenln').
+        'logicgp', 'rulelcs', 'rulenln', 'rulegp', 'rulegp2').
     backend_params : dict, optional
         Parameters forwarded to the backend estimator constructor.
     transform_params : dict, optional
@@ -50,7 +50,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     """
 
     # Backends whose estimator exposes `max_thresholds_per_feature` attribute
-    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "rulelcs", "rulenln", "logicgp", "rulegp"})
+    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "rulelcs", "rulenln", "logicgp", "rulegp", "rulegp2"})
 
     def __init__(
         self,
@@ -195,6 +195,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 raise RuntimeError(
                     "RuleGPClassifier has no 'ruleset_' after fit(). "
                     "Please check rulegp.py for errors."
+                )
+        elif backend_lower == "rulegp2":
+            if hasattr(self.estimator_, "ruleset_"):
+                self.ruleset_ = self.estimator_.ruleset_
+            else:
+                raise RuntimeError(
+                    "RuleGP2Classifier has no 'ruleset_' after fit(). "
+                    "Please check rulegp2.py for errors."
                 )
         else:
             # Tree-basierte Transformation (CART, HS)
