@@ -28,6 +28,7 @@ from .plotting import (
 	plot_pareto_front,
 	plot_win_tie_loss_pareto_matrix,
 	plot_win_tie_loss_size_matrix,
+	plot_win_tie_loss_triangular_matrix,
 	plot_win_tie_loss_matrix,
 )
 from .runner import (
@@ -78,6 +79,7 @@ __all__ = [
 	"plot_pareto_front",
 	"plot_win_tie_loss_pareto_matrix",
 	"plot_win_tie_loss_size_matrix",
+	"plot_win_tie_loss_triangular_matrix",
 	"plot_win_tie_loss_matrix",
 	"run_benchmarks",
 ]

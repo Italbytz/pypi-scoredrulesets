@@ -61,6 +61,7 @@ from scoredrulesets.benchmarking import (
     plot_pareto_front,
     plot_win_tie_loss_pareto_matrix,
     plot_win_tie_loss_size_matrix,
+    plot_win_tie_loss_triangular_matrix,
     plot_win_tie_loss_matrix,
     run_benchmarks,
 )
@@ -387,6 +388,9 @@ def main(
     wtl_pareto_png, wtl_pareto_pdf = plot_win_tie_loss_pareto_matrix(
         results, output_base=out_dir / "benchmark_results_wtl_pareto"
     )
+    wtl_tri_png, wtl_tri_pdf = plot_win_tie_loss_triangular_matrix(
+        results, output_base=out_dir / "benchmark_results_wtl_triangular"
+    )
     eff_png, eff_pdf = plot_efficiency_summary(
         results, output_base=out_dir / "benchmark_results_efficiency"
     )
@@ -430,6 +434,8 @@ def main(
             "wtl_size_pdf": str(wtl_size_pdf.name),
             "wtl_pareto_png": str(wtl_pareto_png.name),
             "wtl_pareto_pdf": str(wtl_pareto_pdf.name),
+            "wtl_triangular_png": str(wtl_tri_png.name),
+            "wtl_triangular_pdf": str(wtl_tri_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
         },
@@ -478,6 +484,8 @@ def main(
             "wtl_size_pdf": str(wtl_size_pdf.name),
             "wtl_pareto_png": str(wtl_pareto_png.name),
             "wtl_pareto_pdf": str(wtl_pareto_pdf.name),
+            "wtl_triangular_png": str(wtl_tri_png.name),
+            "wtl_triangular_pdf": str(wtl_tri_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
         },
@@ -501,6 +509,7 @@ def main(
     print(f"  {out_dir}/benchmark_results_wtl.png / .pdf       (Win/Tie/Loss Matrix)")
     print(f"  {out_dir}/benchmark_results_wtl_size.png / .pdf  (Win/Tie/Loss Matrix: model size)")
     print(f"  {out_dir}/benchmark_results_wtl_pareto.png / .pdf (Pareto Win/Tie/Loss Matrix)")
+    print(f"  {out_dir}/benchmark_results_wtl_triangular.png / .pdf (Triangular W/T/L Matrix)")
     print(f"  {out_dir}/benchmark_results_efficiency.png / .pdf (Executive Efficiency Summary)")
 
     print("\nLeaderboard (Top 10):")

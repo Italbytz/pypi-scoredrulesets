@@ -40,6 +40,7 @@ from scoredrulesets.benchmarking import (
     plot_pareto_front,
     plot_win_tie_loss_pareto_matrix,
     plot_win_tie_loss_size_matrix,
+    plot_win_tie_loss_triangular_matrix,
     plot_win_tie_loss_matrix,
 )
 from scoredrulesets.benchmarking.runner import BenchmarkResult
@@ -150,6 +151,9 @@ def generate_reports(
     wtl_pareto_png, wtl_pareto_pdf = plot_win_tie_loss_pareto_matrix(
         raw_data, output_base=output_dir / "benchmark_results_wtl_pareto"
     )
+    wtl_tri_png, wtl_tri_pdf = plot_win_tie_loss_triangular_matrix(
+        raw_data, output_base=output_dir / "benchmark_results_wtl_triangular"
+    )
     eff_png, eff_pdf = plot_efficiency_summary(
         raw_data, output_base=output_dir / "benchmark_results_efficiency"
     )
@@ -191,6 +195,8 @@ def generate_reports(
             "wtl_size_pdf": str(wtl_size_pdf.name),
             "wtl_pareto_png": str(wtl_pareto_png.name),
             "wtl_pareto_pdf": str(wtl_pareto_pdf.name),
+            "wtl_triangular_png": str(wtl_tri_png.name),
+            "wtl_triangular_pdf": str(wtl_tri_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
             "dual_cd_png": str(dual_cd_png.name),
@@ -236,6 +242,8 @@ def generate_reports(
             "wtl_size_pdf": str(wtl_size_pdf.name),
             "wtl_pareto_png": str(wtl_pareto_png.name),
             "wtl_pareto_pdf": str(wtl_pareto_pdf.name),
+            "wtl_triangular_png": str(wtl_tri_png.name),
+            "wtl_triangular_pdf": str(wtl_tri_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
             "dual_cd_png": str(dual_cd_png.name),
@@ -263,6 +271,7 @@ def generate_reports(
     print(f"  benchmark_results_wtl.png / .pdf (Win/Tie/Loss Matrix)")
     print(f"  benchmark_results_wtl_size.png / .pdf (Win/Tie/Loss Matrix: model size)")
     print(f"  benchmark_results_wtl_pareto.png / .pdf (Pareto Win/Tie/Loss Matrix)")
+    print(f"  benchmark_results_wtl_triangular.png / .pdf (Triangular W/T/L Matrix)")
     print(f"  benchmark_results_efficiency.png / .pdf (Executive Efficiency Summary)")
     print(f"  benchmark_results_dual_cd.png / .pdf (Dual CD Diagram: F1 + Complexity)")
     print(f"  benchmark_results_rank2d.png / .pdf (2D Rank Plot: Quality vs. Complexity)")

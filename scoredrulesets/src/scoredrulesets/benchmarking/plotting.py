@@ -850,6 +850,98 @@ def plot_win_tie_loss_pareto_matrix(
     )
 
 
+def plot_win_tie_loss_triangular_matrix(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+    tie_tolerance: float = 1e-6,
+) -> tuple[Path, Path]:
+    """Plot one matrix with upper triangle=F1 W/T/L and lower triangle=size W/T/L."""
+    raw_results = list(results)
+    ok_results = [result for result in raw_results if result.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for triangular W/T/L matrix")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for triangular W/T/L matrix")
+
+    _, estimator_names, f1_matrix = _build_dataset_estimator_f1_matrix(aggregated)
+    _, _, atoms_matrix = _build_dataset_estimator_atoms_matrix(aggregated)
+    n_est = len(estimator_names)
+    if n_est == 0:
+        raise ValueError("No estimators found for triangular W/T/L matrix")
+
+    f1_score = np.zeros((n_est, n_est), dtype=float)
+    f1_text = np.empty((n_est, n_est), dtype=object)
+    size_score = np.zeros((n_est, n_est), dtype=float)
+    size_text = np.empty((n_est, n_est), dtype=object)
+
+    for i in range(n_est):
+        for j in range(n_est):
+            if i == j:
+                f1_text[i, j] = "-"
+                size_text[i, j] = "-"
+                f1_score[i, j] = 0.0
+                size_score[i, j] = 0.0
+                continue
+
+            f1_wins = f1_ties = f1_losses = 0
+            for row_idx in range(f1_matrix.shape[0]):
+                vi = f1_matrix[row_idx, i]
+                vj = f1_matrix[row_idx, j]
+                if not (np.isfinite(vi) and np.isfinite(vj)):
+                    continue
+                if vi > vj + tie_tolerance:
+                    f1_wins += 1
+                elif vj > vi + tie_tolerance:
+                    f1_losses += 1
+                else:
+                    f1_ties += 1
+            f1_total = f1_wins + f1_ties + f1_losses
+            f1_score[i, j] = 0.0 if f1_total == 0 else (f1_wins - f1_losses) / f1_total
+            f1_text[i, j] = f"{f1_wins}/{f1_ties}/{f1_losses}"
+
+            size_wins = size_ties = size_losses = 0
+            for row_idx in range(atoms_matrix.shape[0]):
+                vi = atoms_matrix[row_idx, i]
+                vj = atoms_matrix[row_idx, j]
+                if not (np.isfinite(vi) and np.isfinite(vj)):
+                    continue
+                if vi + tie_tolerance < vj:
+                    size_wins += 1
+                elif vj + tie_tolerance < vi:
+                    size_losses += 1
+                else:
+                    size_ties += 1
+            size_total = size_wins + size_ties + size_losses
+            size_score[i, j] = 0.0 if size_total == 0 else (size_wins - size_losses) / size_total
+            size_text[i, j] = f"{size_wins}/{size_ties}/{size_losses}"
+
+    tri_score = np.zeros((n_est, n_est), dtype=float)
+    tri_text = np.empty((n_est, n_est), dtype=object)
+    for i in range(n_est):
+        for j in range(n_est):
+            if i == j:
+                tri_score[i, j] = 0.0
+                tri_text[i, j] = "-"
+            elif i < j:
+                tri_score[i, j] = f1_score[i, j]
+                tri_text[i, j] = f"F:{f1_text[i, j]}"
+            else:
+                tri_score[i, j] = size_score[i, j]
+                tri_text[i, j] = f"S:{size_text[i, j]}"
+
+    return _render_wtl_matrix(
+        estimator_names=estimator_names,
+        score_matrix=tri_score,
+        text_matrix=tri_text,
+        title="Triangular W/T/L Matrix (upper: F1, lower: n_atoms)",
+        colorbar_label="Upper triangle: F1 margin | Lower triangle: size margin",
+        output_base=output_base,
+    )
+
+
 def plot_efficiency_summary(
     results: Iterable[BenchmarkResult],
     output_base: str | Path,

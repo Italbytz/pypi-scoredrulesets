@@ -43,6 +43,7 @@ from scoredrulesets.benchmarking import (
     plot_pareto_front,
     plot_win_tie_loss_pareto_matrix,
     plot_win_tie_loss_size_matrix,
+    plot_win_tie_loss_triangular_matrix,
     plot_win_tie_loss_matrix,
 )
 from scoredrulesets.benchmarking.runner import results_as_dicts
@@ -168,6 +169,7 @@ def main(
     wtl_png, wtl_pdf = plot_win_tie_loss_matrix(results, output_base=Path("benchmark_results_wtl"))
     wtl_size_png, wtl_size_pdf = plot_win_tie_loss_size_matrix(results, output_base=Path("benchmark_results_wtl_size"))
     wtl_pareto_png, wtl_pareto_pdf = plot_win_tie_loss_pareto_matrix(results, output_base=Path("benchmark_results_wtl_pareto"))
+    wtl_tri_png, wtl_tri_pdf = plot_win_tie_loss_triangular_matrix(results, output_base=Path("benchmark_results_wtl_triangular"))
     eff_png, eff_pdf = plot_efficiency_summary(results, output_base=Path("benchmark_results_efficiency"))
     md_report = format_benchmark_report_markdown(
         leaderboard,
@@ -201,6 +203,8 @@ def main(
             "wtl_size_pdf": str(wtl_size_pdf),
             "wtl_pareto_png": str(wtl_pareto_png),
             "wtl_pareto_pdf": str(wtl_pareto_pdf),
+            "wtl_triangular_png": str(wtl_tri_png),
+            "wtl_triangular_pdf": str(wtl_tri_pdf),
             "efficiency_png": str(eff_png),
             "efficiency_pdf": str(eff_pdf),
         },
@@ -245,6 +249,8 @@ def main(
             "wtl_size_pdf": str(wtl_size_pdf),
             "wtl_pareto_png": str(wtl_pareto_png),
             "wtl_pareto_pdf": str(wtl_pareto_pdf),
+            "wtl_triangular_png": str(wtl_tri_png),
+            "wtl_triangular_pdf": str(wtl_tri_pdf),
             "efficiency_png": str(eff_png),
             "efficiency_pdf": str(eff_pdf),
         },
@@ -272,6 +278,7 @@ def main(
     print("- benchmark_results_wtl.png / .pdf (Win/Tie/Loss Matrix)")
     print("- benchmark_results_wtl_size.png / .pdf (Win/Tie/Loss Matrix: model size)")
     print("- benchmark_results_wtl_pareto.png / .pdf (Pareto Win/Tie/Loss Matrix)")
+    print("- benchmark_results_wtl_triangular.png / .pdf (Triangular W/T/L Matrix)")
     print("- benchmark_results_efficiency.png / .pdf (Executive Efficiency Summary)")
 
     print("\nLeaderboard (Top 10):")
