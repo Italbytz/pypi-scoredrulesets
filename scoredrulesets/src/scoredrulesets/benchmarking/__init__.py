@@ -20,8 +20,11 @@ from .plotting import (
 	plot_benchmark_heatmap,
 	plot_benchmark_heatmap_combined,
 	plot_benchmark_results,
+	plot_critical_difference_diagram,
 	plot_combined_dot,
+	plot_efficiency_summary,
 	plot_pareto_front,
+	plot_win_tie_loss_matrix,
 )
 from .runner import (
 	AggregatedBenchmarkResult,
@@ -63,8 +66,11 @@ __all__ = [
 	"plot_benchmark_heatmap",
 	"plot_benchmark_heatmap_combined",
 	"plot_benchmark_results",
+	"plot_critical_difference_diagram",
 	"plot_combined_dot",
+	"plot_efficiency_summary",
 	"plot_pareto_front",
+	"plot_win_tie_loss_matrix",
 	"run_benchmarks",
 ]
 

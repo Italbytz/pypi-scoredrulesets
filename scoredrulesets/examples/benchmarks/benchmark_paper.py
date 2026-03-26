@@ -55,8 +55,11 @@ from scoredrulesets.benchmarking import (
     plot_benchmark_heatmap,
     plot_benchmark_heatmap_combined,
     plot_benchmark_results,
+    plot_critical_difference_diagram,
     plot_combined_dot,
+    plot_efficiency_summary,
     plot_pareto_front,
+    plot_win_tie_loss_matrix,
     run_benchmarks,
 )
 from scoredrulesets.benchmarking.estimators import (
@@ -370,6 +373,15 @@ def main(
     pareto_png, pareto_pdf = plot_pareto_front(
         results, output_base=out_dir / "benchmark_results_pareto"
     )
+    cd_png, cd_pdf = plot_critical_difference_diagram(
+        results, output_base=out_dir / "benchmark_results_cd"
+    )
+    wtl_png, wtl_pdf = plot_win_tie_loss_matrix(
+        results, output_base=out_dir / "benchmark_results_wtl"
+    )
+    eff_png, eff_pdf = plot_efficiency_summary(
+        results, output_base=out_dir / "benchmark_results_efficiency"
+    )
 
     # Markdown-Report
     md_report = format_benchmark_report_markdown(
@@ -402,6 +414,12 @@ def main(
             "combined_dot_pdf": str(dot_pdf.name),
             "pareto_png": str(pareto_png.name),
             "pareto_pdf": str(pareto_pdf.name),
+            "cd_png": str(cd_png.name),
+            "cd_pdf": str(cd_pdf.name),
+            "wtl_png": str(wtl_png.name),
+            "wtl_pdf": str(wtl_pdf.name),
+            "efficiency_png": str(eff_png.name),
+            "efficiency_pdf": str(eff_pdf.name),
         },
         notes=[
             "Paper Benchmark: 8 rule-based classifiers on 10 selected datasets.",
@@ -440,6 +458,12 @@ def main(
             "combined_dot_pdf": str(dot_pdf.name),
             "pareto_png": str(pareto_png.name),
             "pareto_pdf": str(pareto_pdf.name),
+            "cd_png": str(cd_png.name),
+            "cd_pdf": str(cd_pdf.name),
+            "wtl_png": str(wtl_png.name),
+            "wtl_pdf": str(wtl_pdf.name),
+            "efficiency_png": str(eff_png.name),
+            "efficiency_pdf": str(eff_pdf.name),
         },
         notes=[
             "Paper Benchmark: 8 rule-based classifiers on 10 selected datasets.",
@@ -457,6 +481,9 @@ def main(
     print(f"  {out_dir}/benchmark_results.png / .pdf           (Plots)")
     print(f"  {out_dir}/benchmark_results_heatmap*.png / .pdf  (Heatmaps)")
     print(f"  {out_dir}/benchmark_results_pareto.png / .pdf    (Pareto-Front)")
+    print(f"  {out_dir}/benchmark_results_cd.png / .pdf        (Critical Difference Diagram)")
+    print(f"  {out_dir}/benchmark_results_wtl.png / .pdf       (Win/Tie/Loss Matrix)")
+    print(f"  {out_dir}/benchmark_results_efficiency.png / .pdf (Executive Efficiency Summary)")
 
     print("\nLeaderboard (Top 10):")
     print(format_benchmark_leaderboard_table(leaderboard)[:3000])

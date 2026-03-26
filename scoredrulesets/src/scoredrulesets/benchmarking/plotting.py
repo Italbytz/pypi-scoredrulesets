@@ -377,6 +377,308 @@ def _fmt_metric(value: float | None) -> str:
     return f"{float(value):.2f}"
 
 
+def _build_dataset_estimator_f1_matrix(
+    aggregated: list[AggregatedBenchmarkResult],
+) -> tuple[list[str], list[str], np.ndarray]:
+    dataset_names = sorted({result.dataset for result in aggregated})
+    estimator_names = _sort_estimators_for_heatmap(aggregated)
+    matrix = np.full((len(dataset_names), len(estimator_names)), np.nan)
+
+    dataset_index = {name: idx for idx, name in enumerate(dataset_names)}
+    estimator_index = {name: idx for idx, name in enumerate(estimator_names)}
+    for result in aggregated:
+        if result.f1_macro_mean is None:
+            continue
+        matrix[dataset_index[result.dataset], estimator_index[result.estimator]] = float(result.f1_macro_mean)
+
+    return dataset_names, estimator_names, matrix
+
+
+def _average_ranks_desc(values: np.ndarray) -> np.ndarray:
+    """Return average ranks (1=best) with tie handling for descending metric values."""
+    ranks = np.full(values.shape, np.nan, dtype=float)
+    valid = np.isfinite(values)
+    if not valid.any():
+        return ranks
+
+    valid_idx = np.where(valid)[0]
+    order = valid_idx[np.argsort(-values[valid_idx], kind="mergesort")]
+    pos = 1
+    i = 0
+    while i < len(order):
+        j = i + 1
+        while j < len(order) and values[order[j]] == values[order[i]]:
+            j += 1
+        block = j - i
+        avg_rank = (2 * pos + block - 1) / 2.0
+        for idx in order[i:j]:
+            ranks[idx] = avg_rank
+        pos += block
+        i = j
+    return ranks
+
+
+def _nemenyi_q_alpha_05(k: int) -> float:
+    # Critical values for two-sided Nemenyi test (alpha=0.05, large sample approximation).
+    table = {
+        2: 1.960,
+        3: 2.343,
+        4: 2.569,
+        5: 2.728,
+        6: 2.850,
+        7: 2.949,
+        8: 3.031,
+        9: 3.102,
+        10: 3.164,
+        11: 3.219,
+        12: 3.268,
+        13: 3.313,
+        14: 3.354,
+        15: 3.391,
+        16: 3.426,
+        17: 3.458,
+        18: 3.489,
+        19: 3.517,
+        20: 3.544,
+    }
+    if k in table:
+        return table[k]
+    return table[20]
+
+
+def plot_critical_difference_diagram(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+) -> tuple[Path, Path]:
+    """Plot mean rank per estimator and Nemenyi critical difference bar (F1 over datasets)."""
+    raw_results = list(results)
+    ok_results = [result for result in raw_results if result.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for CD diagram")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for CD diagram")
+
+    dataset_names, estimator_names, f1_matrix = _build_dataset_estimator_f1_matrix(aggregated)
+    if len(estimator_names) < 2:
+        raise ValueError("CD diagram needs at least two estimators")
+
+    rank_rows = np.full_like(f1_matrix, np.nan, dtype=float)
+    valid_dataset_count = 0
+    for row_idx in range(f1_matrix.shape[0]):
+        row = f1_matrix[row_idx]
+        finite_count = int(np.isfinite(row).sum())
+        if finite_count < 2:
+            continue
+        rank_rows[row_idx] = _average_ranks_desc(row)
+        valid_dataset_count += 1
+
+    if valid_dataset_count == 0:
+        raise ValueError("CD diagram needs at least one dataset with two estimators")
+
+    mean_ranks = np.nanmean(rank_rows, axis=0)
+    order = np.argsort(mean_ranks)
+    sorted_names = [estimator_names[idx] for idx in order]
+    sorted_ranks = mean_ranks[order]
+
+    k = len(estimator_names)
+    q_alpha = _nemenyi_q_alpha_05(k)
+    cd = q_alpha * math.sqrt(k * (k + 1) / (6.0 * valid_dataset_count))
+
+    estimator_colors = _estimator_color_map(sorted_names)
+
+    fig_h = max(3.8, 0.48 * k + 1.8)
+    fig, ax = plt.subplots(figsize=(10.5, fig_h))
+    y_positions = np.arange(k)
+
+    for yi, (name, rank) in enumerate(zip(sorted_names, sorted_ranks)):
+        ax.scatter(rank, yi, s=85, color=estimator_colors[name], edgecolors="black", linewidths=0.8, zorder=3)
+        ax.text(rank + 0.03, yi, name, va="center", ha="left", fontsize=8)
+
+    for yi in y_positions:
+        ax.axhline(yi, color="#f1f5f9", linewidth=0.8, zorder=0)
+
+    # Draw adjacency bars for non-significant neighboring estimators (|delta rank| <= CD).
+    bar_y = -0.9
+    for i in range(k - 1):
+        if sorted_ranks[i + 1] - sorted_ranks[i] <= cd:
+            ax.plot(
+                [sorted_ranks[i], sorted_ranks[i + 1]],
+                [bar_y, bar_y],
+                color="black",
+                linewidth=2.6,
+                solid_capstyle="round",
+                zorder=2,
+            )
+
+    # Critical difference reference bar.
+    cd_x0 = max(1.0, k - cd)
+    cd_y = k - 0.35
+    ax.plot([cd_x0, cd_x0 + cd], [cd_y, cd_y], color="black", linewidth=2.2)
+    ax.plot([cd_x0, cd_x0], [cd_y - 0.15, cd_y + 0.15], color="black", linewidth=1.6)
+    ax.plot([cd_x0 + cd, cd_x0 + cd], [cd_y - 0.15, cd_y + 0.15], color="black", linewidth=1.6)
+    ax.text(cd_x0 + cd / 2.0, cd_y + 0.2, f"CD (Nemenyi, alpha=0.05) = {cd:.2f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xlim(1.0, float(k) + 0.9)
+    ax.set_ylim(-1.3, max(y_positions) + 0.8)
+    ax.set_xlabel("Average rank (1 = best)")
+    ax.set_yticks([])
+    ax.set_xticks(range(1, k + 1))
+    ax.set_title(f"Critical Difference Diagram (F1 ranks across {valid_dataset_count} datasets)")
+    ax.grid(axis="x", alpha=0.3)
+
+    base = Path(output_base)
+    png_path = base.with_suffix(".png")
+    pdf_path = base.with_suffix(".pdf")
+    fig.savefig(png_path, dpi=190, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    return png_path, pdf_path
+
+
+def plot_win_tie_loss_matrix(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+    tie_tolerance: float = 1e-6,
+) -> tuple[Path, Path]:
+    """Plot pairwise win/tie/loss matrix over datasets based on aggregated F1."""
+    raw_results = list(results)
+    ok_results = [result for result in raw_results if result.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for W/T/L matrix")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for W/T/L matrix")
+
+    _, estimator_names, f1_matrix = _build_dataset_estimator_f1_matrix(aggregated)
+    n_est = len(estimator_names)
+    if n_est == 0:
+        raise ValueError("No estimators found for W/T/L matrix")
+
+    score_matrix = np.zeros((n_est, n_est), dtype=float)
+    text_matrix = np.empty((n_est, n_est), dtype=object)
+
+    for i in range(n_est):
+        for j in range(n_est):
+            if i == j:
+                text_matrix[i, j] = "-"
+                score_matrix[i, j] = 0.0
+                continue
+            wins = ties = losses = 0
+            for row_idx in range(f1_matrix.shape[0]):
+                vi = f1_matrix[row_idx, i]
+                vj = f1_matrix[row_idx, j]
+                if not (np.isfinite(vi) and np.isfinite(vj)):
+                    continue
+                if vi > vj + tie_tolerance:
+                    wins += 1
+                elif vj > vi + tie_tolerance:
+                    losses += 1
+                else:
+                    ties += 1
+            total = wins + ties + losses
+            score_matrix[i, j] = 0.0 if total == 0 else (wins - losses) / total
+            text_matrix[i, j] = f"{wins}/{ties}/{losses}"
+
+    fig_w = max(6.8, 0.62 * n_est + 3.2)
+    fig_h = max(6.2, 0.62 * n_est + 2.4)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    im = ax.imshow(score_matrix, cmap="RdBu_r", vmin=-1.0, vmax=1.0, aspect="auto")
+    ax.set_title("Win/Tie/Loss Matrix (pairwise over datasets, metric: F1)")
+    ax.set_xticks(range(n_est), estimator_names, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(range(n_est), estimator_names, fontsize=8)
+    ax.set_xlabel("Compared against")
+    ax.set_ylabel("Estimator")
+
+    for i in range(n_est):
+        for j in range(n_est):
+            color = "white" if abs(score_matrix[i, j]) > 0.45 else "black"
+            ax.text(j, i, text_matrix[i, j], ha="center", va="center", fontsize=7, color=color)
+
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("Normalized win margin: (wins-losses)/total")
+    fig.subplots_adjust(left=0.26, right=0.94, bottom=0.28, top=0.90)
+
+    base = Path(output_base)
+    png_path = base.with_suffix(".png")
+    pdf_path = base.with_suffix(".pdf")
+    fig.savefig(png_path, dpi=190, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    return png_path, pdf_path
+
+
+def plot_efficiency_summary(
+    results: Iterable[BenchmarkResult],
+    output_base: str | Path,
+    error_bar: str = "std",
+) -> tuple[Path, Path]:
+    """Plot one point per estimator: median F1 vs median atom count across datasets."""
+    raw_results = list(results)
+    ok_results = [result for result in raw_results if result.status == "ok"]
+    if not ok_results:
+        raise ValueError("No successful benchmark results for efficiency summary")
+
+    aggregated = aggregate_benchmark_results(ok_results, error_bar=error_bar)
+    if not aggregated:
+        raise ValueError("No aggregated results for efficiency summary")
+
+    grouped: dict[str, list[AggregatedBenchmarkResult]] = {}
+    for result in aggregated:
+        grouped.setdefault(result.estimator, []).append(result)
+
+    estimator_names = _estimator_display_order(grouped.keys())
+    estimator_colors = _estimator_color_map(estimator_names)
+
+    points: list[tuple[str, float, float]] = []
+    for estimator in estimator_names:
+        rows = grouped.get(estimator, [])
+        f1_vals = [float(r.f1_macro_mean) for r in rows if r.f1_macro_mean is not None]
+        atom_vals = [float(r.n_atoms_mean) for r in rows if r.n_atoms_mean is not None]
+        if not f1_vals or not atom_vals:
+            continue
+        points.append((estimator, float(np.median(atom_vals)), float(np.median(f1_vals))))
+
+    if not points:
+        raise ValueError("No finite estimator medians for efficiency summary")
+
+    fig, ax = plt.subplots(figsize=(9.2, 5.8))
+    for estimator, atom_median, f1_median in points:
+        ax.scatter(
+            atom_median,
+            f1_median,
+            s=120,
+            color=estimator_colors[estimator],
+            edgecolors="black",
+            linewidths=0.8,
+            zorder=3,
+        )
+        ax.text(atom_median, f1_median, f" {estimator}", fontsize=8, va="center", ha="left")
+
+    atom_max = max(p[1] for p in points)
+    ax.set_xscale("symlog", linthresh=1.0, linscale=1.0)
+    ax.set_xlim(left=0.0, right=max(1.0, atom_max * 1.12))
+    ax.set_ylim(-0.02, 1.02)
+    ax.set_xlabel("Median atoms across datasets")
+    ax.set_ylabel("Median F1-macro across datasets")
+    ax.set_title("Executive Summary: median quality vs median model size")
+    ax.grid(True, alpha=0.3)
+    ax.set_axisbelow(True)
+
+    base = Path(output_base)
+    png_path = base.with_suffix(".png")
+    pdf_path = base.with_suffix(".pdf")
+    fig.savefig(png_path, dpi=190, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    return png_path, pdf_path
+
+
 # ---------------------------------------------------------------------------
 # Combined multi-metric heatmap
 # ---------------------------------------------------------------------------
@@ -881,6 +1183,8 @@ def plot_pareto_front(
     )
 
     dataset_names = sorted({r.dataset for r in aggregated})
+    estimator_names = _estimator_display_order({r.estimator for r in aggregated})
+    estimator_colors = _estimator_color_map(estimator_names)
     fig, axes = _build_dataset_axes(len(dataset_names))
     fig.suptitle("Pareto front: F1 vs model size per dataset", fontsize=13)
 
@@ -893,7 +1197,7 @@ def plot_pareto_front(
         size_col = f"{size_metric}_mean"
         size_err_col = f"{size_metric}_error"
 
-        x_all, y_all, labels_all = [], [], []
+        x_all, y_all, labels_all, est_all = [], [], [], []
         x_pareto, y_pareto, labels_pareto = [], [], []
 
         for r in ds_results:
@@ -904,20 +1208,42 @@ def plot_pareto_front(
             x_all.append(float(sz))
             y_all.append(float(f1))
             labels_all.append(r.estimator)
+            est_all.append(r.estimator)
             if r.estimator in pareto_set:
                 x_pareto.append(float(sz))
                 y_pareto.append(float(f1))
                 labels_pareto.append(r.estimator)
 
-        # All estimators (grey)
-        ax.scatter(x_all, y_all, s=50, c="lightgray", edgecolors="gray", alpha=0.75, zorder=2)
+        # Alle Punkte farbcodiert nach Schaetzer
+        for estimator in estimator_names:
+            est_x = [x for x, e in zip(x_all, est_all) if e == estimator and e not in pareto_set]
+            est_y = [y for y, e in zip(y_all, est_all) if e == estimator and e not in pareto_set]
+            if not est_x:
+                continue
+            ax.scatter(
+                est_x,
+                est_y,
+                s=42,
+                c=[estimator_colors[estimator]],
+                alpha=0.35,
+                edgecolors="none",
+                zorder=2,
+            )
 
-        # Pareto-optimal (red, larger)
-        ax.scatter(x_pareto, y_pareto, s=120, c="tomato", edgecolors="darkred", zorder=3, label="Pareto-optimal")
-        for xv, yv, lbl in zip(x_pareto, y_pareto, labels_pareto):
-            ax.annotate(
-                lbl, (xv, yv), textcoords="offset points", xytext=(5, 5),
-                fontsize=7, fontweight="bold", color="darkred",
+        # Pareto-optimal: gleiche Farbe, aber groesser + schwarze Kontur
+        for estimator in estimator_names:
+            est_x = [x for x, e in zip(x_pareto, labels_pareto) if e == estimator]
+            est_y = [y for y, e in zip(y_pareto, labels_pareto) if e == estimator]
+            if not est_x:
+                continue
+            ax.scatter(
+                est_x,
+                est_y,
+                s=120,
+                c=[estimator_colors[estimator]],
+                edgecolors="black",
+                linewidths=1.0,
+                zorder=4,
             )
 
         # Step line connecting Pareto front
@@ -928,7 +1254,7 @@ def plot_pareto_front(
                 [y_pareto[i] for i in order],
                 where="post",
                 linestyle="--",
-                color="tomato",
+                color="black",
                 linewidth=1.2,
                 alpha=0.7,
                 zorder=1,
@@ -957,7 +1283,66 @@ def plot_pareto_front(
     for ax in axes[len(dataset_names):]:
         ax.set_visible(False)
 
-    fig.subplots_adjust(top=0.88, wspace=0.30, hspace=0.40)
+    style_handles = [
+        Line2D(
+            [0], [0],
+            marker="o",
+            color="none",
+            markerfacecolor="#9ca3af",
+            markeredgecolor="none",
+            alpha=0.35,
+            markersize=6,
+            label="Non-Pareto",
+        ),
+        Line2D(
+            [0], [0],
+            marker="o",
+            color="none",
+            markerfacecolor="#9ca3af",
+            markeredgecolor="black",
+            markeredgewidth=1.0,
+            markersize=8,
+            label="Pareto-optimal",
+        ),
+    ]
+
+    estimator_handles = [
+        Line2D(
+            [0], [0],
+            marker="o",
+            color="none",
+            markerfacecolor=estimator_colors[est],
+            markeredgecolor="black",
+            markeredgewidth=0.7,
+            markersize=7,
+            label=est,
+        )
+        for est in estimator_names
+    ]
+
+    if style_handles:
+        fig.legend(
+            handles=style_handles,
+            loc="upper left",
+            bbox_to_anchor=(0.86, 0.86),
+            frameon=False,
+            title="Pareto Styling",
+            fontsize=8,
+            title_fontsize=9,
+        )
+
+    if estimator_handles:
+        fig.legend(
+            handles=estimator_handles,
+            loc="center left",
+            bbox_to_anchor=(0.86, 0.5),
+            frameon=False,
+            title="Estimator",
+            fontsize=8,
+            title_fontsize=9,
+        )
+
+    fig.subplots_adjust(top=0.88, right=0.83, wspace=0.30, hspace=0.40)
 
     base = Path(output_base)
     png_path = base.with_suffix(".png")

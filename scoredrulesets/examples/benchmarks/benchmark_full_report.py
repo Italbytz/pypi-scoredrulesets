@@ -37,8 +37,11 @@ from scoredrulesets.benchmarking import (
     plot_benchmark_results,
     plot_benchmark_heatmap,
     plot_benchmark_heatmap_combined,
+    plot_critical_difference_diagram,
     plot_combined_dot,
+    plot_efficiency_summary,
     plot_pareto_front,
+    plot_win_tie_loss_matrix,
 )
 from scoredrulesets.benchmarking.runner import results_as_dicts
 
@@ -159,6 +162,9 @@ def main(
     combined_png, combined_pdf = plot_benchmark_heatmap_combined(results, output_base=Path("benchmark_results_heatmap_combined"))
     dot_png, dot_pdf = plot_combined_dot(results, output_base=Path("benchmark_results_combined_dot"))
     pareto_png, pareto_pdf = plot_pareto_front(results, output_base=Path("benchmark_results_pareto"))
+    cd_png, cd_pdf = plot_critical_difference_diagram(results, output_base=Path("benchmark_results_cd"))
+    wtl_png, wtl_pdf = plot_win_tie_loss_matrix(results, output_base=Path("benchmark_results_wtl"))
+    eff_png, eff_pdf = plot_efficiency_summary(results, output_base=Path("benchmark_results_efficiency"))
     md_report = format_benchmark_report_markdown(
         leaderboard,
         title="ScoredRuleSets Benchmark Report",
@@ -183,6 +189,12 @@ def main(
             "combined_dot_pdf": str(dot_pdf),
             "pareto_png": str(pareto_png),
             "pareto_pdf": str(pareto_pdf),
+            "cd_png": str(cd_png),
+            "cd_pdf": str(cd_pdf),
+            "wtl_png": str(wtl_png),
+            "wtl_pdf": str(wtl_pdf),
+            "efficiency_png": str(eff_png),
+            "efficiency_pdf": str(eff_pdf),
         },
         notes=[
             "Alle Schaetzer und Datensaetze (sklearn, Paper-UCI, synthetisch: "
@@ -217,6 +229,12 @@ def main(
             "combined_dot_pdf": str(dot_pdf),
             "pareto_png": str(pareto_png),
             "pareto_pdf": str(pareto_pdf),
+            "cd_png": str(cd_png),
+            "cd_pdf": str(cd_pdf),
+            "wtl_png": str(wtl_png),
+            "wtl_pdf": str(wtl_pdf),
+            "efficiency_png": str(eff_png),
+            "efficiency_pdf": str(eff_pdf),
         },
         notes=[
             "Alle Schaetzer und Datensaetze (sklearn, Paper-UCI, synthetisch: "
@@ -238,6 +256,9 @@ def main(
     print("- benchmark_results_heatmap_combined.png / .pdf (Combined multi-metric heatmap)")
     print("- benchmark_results_combined_dot.png / .pdf (Combined dot plot: F1 + model size)")
     print("- benchmark_results_pareto.png / .pdf (Pareto front: F1 vs model size)")
+    print("- benchmark_results_cd.png / .pdf (Critical Difference Diagram)")
+    print("- benchmark_results_wtl.png / .pdf (Win/Tie/Loss Matrix)")
+    print("- benchmark_results_efficiency.png / .pdf (Executive Efficiency Summary)")
 
     print("\nLeaderboard (Top 10):")
     print(format_benchmark_leaderboard_table(leaderboard)[:2000])

@@ -32,8 +32,11 @@ from scoredrulesets.benchmarking import (
     plot_benchmark_heatmap,
     plot_benchmark_heatmap_combined,
     plot_benchmark_results,
+    plot_critical_difference_diagram,
     plot_combined_dot,
+    plot_efficiency_summary,
     plot_pareto_front,
+    plot_win_tie_loss_matrix,
 )
 from scoredrulesets.benchmarking.runner import BenchmarkResult
 
@@ -131,6 +134,15 @@ def generate_reports(
     pareto_png, pareto_pdf = plot_pareto_front(
         raw_data, output_base=output_dir / "benchmark_results_pareto"
     )
+    cd_png, cd_pdf = plot_critical_difference_diagram(
+        raw_data, output_base=output_dir / "benchmark_results_cd"
+    )
+    wtl_png, wtl_pdf = plot_win_tie_loss_matrix(
+        raw_data, output_base=output_dir / "benchmark_results_wtl"
+    )
+    eff_png, eff_pdf = plot_efficiency_summary(
+        raw_data, output_base=output_dir / "benchmark_results_efficiency"
+    )
     
     # Markdown-Report
     print(f"      Schreibe Markdown-Report...")
@@ -155,6 +167,12 @@ def generate_reports(
             "combined_dot_pdf": str(dot_pdf.name),
             "pareto_png": str(pareto_png.name),
             "pareto_pdf": str(pareto_pdf.name),
+            "cd_png": str(cd_png.name),
+            "cd_pdf": str(cd_pdf.name),
+            "wtl_png": str(wtl_png.name),
+            "wtl_pdf": str(wtl_pdf.name),
+            "efficiency_png": str(eff_png.name),
+            "efficiency_pdf": str(eff_pdf.name),
         },
         notes=[
             f"Reports regeneriert von vorhandenen Benchmark-Ergebnissen.",
@@ -186,6 +204,12 @@ def generate_reports(
             "combined_dot_pdf": str(dot_pdf.name),
             "pareto_png": str(pareto_png.name),
             "pareto_pdf": str(pareto_pdf.name),
+            "cd_png": str(cd_png.name),
+            "cd_pdf": str(cd_pdf.name),
+            "wtl_png": str(wtl_png.name),
+            "wtl_pdf": str(wtl_pdf.name),
+            "efficiency_png": str(eff_png.name),
+            "efficiency_pdf": str(eff_pdf.name),
         },
     )
     (output_dir / "benchmark_report.html").write_text(html_report, encoding="utf-8")
@@ -203,6 +227,9 @@ def generate_reports(
     print(f"  benchmark_results_heatmap*.png / .pdf (Heatmaps)")
     print(f"  benchmark_results_combined_dot.png / .pdf (Dot-Plot Vergleich)")
     print(f"  benchmark_results_pareto.png / .pdf (Pareto-Front)")
+    print(f"  benchmark_results_cd.png / .pdf (Critical Difference Diagram)")
+    print(f"  benchmark_results_wtl.png / .pdf (Win/Tie/Loss Matrix)")
+    print(f"  benchmark_results_efficiency.png / .pdf (Executive Efficiency Summary)")
     
     print(f"\nLeaderboard (Top 15):")
     print(format_benchmark_leaderboard_table(leaderboard)[:3000])
