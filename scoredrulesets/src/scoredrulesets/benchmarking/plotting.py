@@ -1158,7 +1158,7 @@ def plot_2d_rank_plot(
         if not (np.isfinite(xr) and np.isfinite(yr)):
             continue
         ax.scatter(xr, yr, s=110, color=estimator_colors[name], edgecolors="black", linewidths=0.8, zorder=3)
-        ax.text(xr + 0.07, yr, name, va="center", ha="left", fontsize=8)
+        ax.text(xr + 0.14, yr, name, va="center", ha="left", fontsize=8)
 
     # CD reference rectangle — upper-right corner of data space
     rect_x0 = k - cd_f1 - 0.05
