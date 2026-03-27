@@ -78,6 +78,22 @@ class _Individual:
         return True
 
 
+def _matches_mask(ind: _Individual, X: np.ndarray) -> np.ndarray:
+    """Return boolean mask of instances matched by *ind* (vectorised)."""
+    mask = np.ones(X.shape[0], dtype=bool)
+    for p in ind.predicates:
+        col = X[:, p.feature_idx]
+        if p.is_numeric:
+            mask &= (col >= p.lo) & (col <= p.hi)
+        else:
+            rounded = np.rint(col).astype(np.intp)
+            allowed_arr = np.array(sorted(p.allowed), dtype=np.intp)
+            mask &= np.isin(rounded, allowed_arr)
+        if not mask.any():
+            break
+    return mask
+
+
 # ---------------------------------------------------------------------------
 # BioHEL GA core
 # ---------------------------------------------------------------------------
@@ -170,18 +186,11 @@ def _evaluate(
     use_mdl: bool,
 ) -> None:
     """Compute MDL-based fitness for one individual."""
-    n = len(y)
-    tp = 0
-    fp = 0
     total_positive = int(np.sum(y == ind.class_value))
-
-    for i in range(n):
-        if ind.matches(X[i]):
-            if y[i] == ind.class_value:
-                tp += 1
-            else:
-                fp += 1
-
+    match_mask = _matches_mask(ind, X)
+    matched_y = y[match_mask]
+    tp = int(np.sum(matched_y == ind.class_value))
+    fp = int(match_mask.sum()) - tp
     matched = tp + fp
     # Precision
     if matched > 0:
@@ -412,30 +421,29 @@ def _is_majority_rule(
     coverage_break: float,
 ) -> bool:
     """Check BioHEL's majority condition for a rule."""
-    matched_classes: dict[int, int] = {}
-    for i in range(len(y)):
-        if ind.matches(X[i]):
-            c = int(y[i])
-            matched_classes[c] = matched_classes.get(c, 0) + 1
-
-    if not matched_classes:
+    match_mask = _matches_mask(ind, X)
+    matched_y = y[match_mask]
+    if len(matched_y) == 0:
         return False
 
-    total_matched = sum(matched_classes.values())
-    best_class = max(matched_classes, key=matched_classes.get)  # type: ignore[arg-type]
+    classes, counts_arr = np.unique(matched_y, return_counts=True)
+    best_pos = int(np.argmax(counts_arr))
+    best_class = int(classes[best_pos])
     if best_class != ind.class_value:
         return False
 
     # Check no tie
-    counts = sorted(matched_classes.values(), reverse=True)
-    if len(counts) > 1 and counts[0] == counts[1]:
-        return False
+    if len(counts_arr) > 1:
+        sorted_c = np.sort(counts_arr)[::-1]
+        if sorted_c[0] == sorted_c[1]:
+            return False
 
     # Coverage check
     total_positive = int(np.sum(y == ind.class_value))
     if total_positive == 0:
         return False
-    recall = matched_classes.get(ind.class_value, 0) / total_positive
+    tp = int(counts_arr[best_pos]) if best_class == ind.class_value else 0
+    recall = tp / total_positive
     return recall >= coverage_break / 3.0
 
 
@@ -786,11 +794,12 @@ class RuleLCS2Classifier(BaseRuleSetEstimator):
             if _is_majority_rule(best_rule, X_rem, y_rem, cb):
                 rules.append(best_rule)
                 fail_count = 0
-                # Remove matched instances of the rule's class
+                # Remove matched instances of the rule's class (vectorised)
                 idx_remaining = np.where(remaining_mask)[0]
-                for i, global_i in enumerate(idx_remaining):
-                    if best_rule.matches(X[global_i]) and y[global_i] == best_rule.class_value:
-                        remaining_mask[global_i] = False
+                sub_match = _matches_mask(best_rule, X[idx_remaining])
+                class_match = y[idx_remaining] == best_rule.class_value
+                to_remove = idx_remaining[sub_match & class_match]
+                remaining_mask[to_remove] = False
             else:
                 fail_count += 1
                 if fail_count >= self.max_consecutive_fails:
@@ -887,7 +896,7 @@ class RuleLCS2Classifier(BaseRuleSetEstimator):
                         atoms.append(Atom(
                             feature=fname,
                             op="in",
-                            value=sorted(p.allowed),
+                            value=[int(v) for v in sorted(p.allowed)],
                         ))
 
             # Scores: high for the predicted class
@@ -913,7 +922,7 @@ class RuleLCS2Classifier(BaseRuleSetEstimator):
             ))
 
         return ScoredRuleSet(
-            class_labels=list(self.classes_),
+            class_labels=[int(c) for c in self.classes_],
             rules=scored_rules,
             feature_names=list(self.feature_names_in_),
             aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
