@@ -186,9 +186,21 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         # --- initialise weights ----------------------------------------------
         # W_conj: (n_rules, n_props) – gate logits for each proposition.
         # gate = sigmoid(scale * W_conj).
-        # Initialise most gates near 0 (don't care) by using negative W_conj.
-        # With scale=5, W=-0.5 → gate=sigmoid(-2.5)≈0.08 (nearly off).
-        W_conj = np.full((self.n_rules, n_props), -0.5, dtype=float)
+        # Adaptive baseline: the product conjunction computes
+        #   conj = prod_d match[d],  match[d] = gate*P + (1-gate).
+        # For non-active gates (gate>0) and false propositions (P=0),
+        # match = 1-gate < 1.  The product over many such terms collapses
+        # toward zero, killing gradients.  We choose w_base so that
+        #   (1 - gate)^(n_props/2) >= 1e-3,
+        # i.e. the conjunction doesn't vanish for a typical sample
+        # (roughly half the binary propositions are false).
+        # For small n_props (<=~150) the default -0.5 already satisfies this.
+        _PRODUCT_FLOOR = 1e-3
+        n_false_est = max(n_props / 2.0, 1.0)
+        max_gate = 1.0 - _PRODUCT_FLOOR ** (1.0 / n_false_est)
+        w_target = np.log(max_gate / (1.0 - max_gate)) / self._GATE_SCALE
+        w_base = min(-0.5, w_target)
+        W_conj = np.full((self.n_rules, n_props), w_base, dtype=float)
         W_conj += rng.normal(0.0, 0.02, size=W_conj.shape)
 
         # Build a mapping: feature_index → list of proposition indices.
@@ -261,7 +273,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
 
                 # --- backward -------------------------------------------------
                 dW_conj, db_conj, dW_score, db_score = self._backward(
-                    P_b, Y_b, proba, W_conj, b_conj, W_score, cache
+                    P_b, Y_b, proba, W_conj, b_conj, W_score, cache,
                 )
 
                 # L1 gradients (proximal: only on conjunction and score weights)
