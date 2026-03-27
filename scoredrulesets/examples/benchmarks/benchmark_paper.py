@@ -305,6 +305,23 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
             random_state=0,
         ),
     ),
+    "paper_ruleLCS2": EstimatorSpec(
+        name="ruleLCS2",
+        factory=lambda: ScoredRuleSetClassifier(
+            backend="rulelcs2",
+            backend_params={
+                "population_size": 200,
+                "n_iterations": 50,
+                "n_repetitions": 2,
+                "tournament_size": 4,
+                "crossover_prob": 0.6,
+                "mutation_prob": 0.6,
+                "max_rules": 15,
+                "default_class_policy": "major",
+            },
+            random_state=0,
+        ),
+    ),
 }
 
 # Register paper estimators globally so run_benchmarks() can find them
