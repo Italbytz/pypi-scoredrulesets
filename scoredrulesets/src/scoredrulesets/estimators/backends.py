@@ -207,10 +207,10 @@ def build_backend_estimator(
         return logicgp_cls(**params)
 
     if backend_key == "rulelcs":
-        rulelcs_cls = _resolve_rulelcs_class()
-        if random_state is not None and _supports_kwarg(rulelcs_cls, "random_state"):
+        from .rulelcs import RuleLCSClassifier
+        if random_state is not None:
             params.setdefault("random_state", random_state)
-        return rulelcs_cls(**params)
+        return RuleLCSClassifier(**params)
 
 
     if backend_key == "rulekit_native":
@@ -238,16 +238,10 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return RuleGP2Classifier(**params)
 
-    if backend_key == "rulelcs2":
-        from .rulelcs2 import RuleLCS2Classifier
-        if random_state is not None:
-            params.setdefault("random_state", random_state)
-        return RuleLCS2Classifier(**params)
-
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: "
         f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', "
-        f"'rulelcs', 'rulelcs2', 'rulenln', 'rulegp', 'rulegp2'."
+        f"'rulelcs', 'rulenln', 'rulegp', 'rulegp2'."
     )
 
 
@@ -384,16 +378,7 @@ def _resolve_logicgp_class():
         ) from e
 
 
-def _resolve_rulelcs_class():
-    try:
-        from .rulelcs import RuleLCSClassifier
 
-        return RuleLCSClassifier
-    except ImportError as e:
-        raise ImportError(
-            "backend='rulelcs' could not load RuleLCSClassifier. "
-            f"Import error: {e}"
-        ) from e
 
 
 def _rulekit_jvm_hint() -> str:

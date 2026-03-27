@@ -292,24 +292,6 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
         factory=lambda: ScoredRuleSetClassifier(
             backend="rulelcs",
             backend_params={
-                "max_rules": 15,
-                "min_samples_leaf": 3,
-                "candidate_pool_size": 64,
-                "beam_width": 16,
-                "max_iterations": 32,
-                "validation_fraction": 0.25,
-                "complexity_penalty": 0.001,
-                "sequential_covering": True,
-                "enable_compaction": True,
-            },
-            random_state=0,
-        ),
-    ),
-    "paper_ruleLCS2": EstimatorSpec(
-        name="ruleLCS2",
-        factory=lambda: ScoredRuleSetClassifier(
-            backend="rulelcs2",
-            backend_params={
                 "population_size": 200,
                 "n_iterations": 50,
                 "n_repetitions": 2,

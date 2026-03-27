@@ -1,10 +1,34 @@
+"""ruleLCS – BioHEL-inspired iterative rule learning classifier.
+
+A simplified reimplementation of the BioHEL algorithm (Bacardit & Butz, 2009)
+as a scikit-learn compatible estimator.
+
+Key elements from BioHEL:
+* **Iterative Rule Learning (IRL)** – sequential covering with GA-based rule
+  discovery.  Each GA run produces *one* rule; the rule set is built
+  incrementally by removing correctly covered instances after each rule.
+* **Hyperrectangle representation with attribute list** – variable-length
+  rules that combine interval predicates for numeric features and subset
+  predicates for categoricals.  Attributes not expressed are "don't-care".
+* **MDL-based fitness** – balances rule precision, recall (coverage), and
+  theory length (complexity) with a dynamically relaxed MDL weight.
+* **Tournament selection (WOR)** – selection without replacement.
+* **Attribute-level crossover** – variable-length crossover that exchanges
+  attribute blocks between parents.
+* **Generalize / Specialize operators** – probabilistic structural mutation
+  that adds or removes attributes from a rule.
+* **Smart initialisation** – rules are seeded around randomly sampled
+  training instances with class-balanced sampling.
+* **ILAS windowing** – incremental learning with alternating strata for
+  efficient fitness evaluation.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
-from sklearn.metrics import f1_score
-from sklearn.model_selection import train_test_split
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
@@ -12,1035 +36,900 @@ from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
 from .base import BaseRuleSetEstimator
-from ._split_utils import (
-    best_numeric_split,
-    categorical_group_splits,
-    categorical_splits,
-    distribution_to_scores,
-    gini,
-    numeric_interval_splits,
-)
 
 
-@dataclass(frozen=True)
-class _CandidateRule:
-    gain: float
-    rule: Rule
-    coverage: int
+# ---------------------------------------------------------------------------
+# Internal data structures
+# ---------------------------------------------------------------------------
 
+@dataclass
+class _Predicate:
+    """One condition on a single feature."""
+    feature_idx: int
+    is_numeric: bool
+    # numeric: (lo, hi) interval
+    lo: float = 0.0
+    hi: float = 0.0
+    # categorical: set of allowed values
+    allowed: set[int] = field(default_factory=set)
+
+    def matches_value(self, val: float) -> bool:
+        if self.is_numeric:
+            return self.lo <= val <= self.hi
+        return int(round(val)) in self.allowed
+
+
+@dataclass
+class _Individual:
+    """One classifier (rule) in the GA population."""
+    predicates: list[_Predicate]
+    class_value: int
+    # fitness components
+    fitness: float = np.inf
+    accuracy2: float = 0.0  # precision = TP / (TP + FP)
+    recall: float = 0.0
+    theory_length: float = 0.0
+    exceptions_length: float = 0.0
+
+    def matches(self, x: np.ndarray) -> bool:
+        for p in self.predicates:
+            if not p.matches_value(x[p.feature_idx]):
+                return False
+        return True
+
+
+def _matches_mask(ind: _Individual, X: np.ndarray) -> np.ndarray:
+    """Return boolean mask of instances matched by *ind* (vectorised)."""
+    mask = np.ones(X.shape[0], dtype=bool)
+    for p in ind.predicates:
+        col = X[:, p.feature_idx]
+        if p.is_numeric:
+            mask &= (col >= p.lo) & (col <= p.hi)
+        else:
+            rounded = np.rint(col).astype(np.intp)
+            allowed_arr = np.array(sorted(p.allowed), dtype=np.intp)
+            mask &= np.isin(rounded, allowed_arr)
+        if not mask.any():
+            break
+    return mask
+
+
+# ---------------------------------------------------------------------------
+# BioHEL GA core
+# ---------------------------------------------------------------------------
+
+def _smart_init(
+    rng: np.random.Generator,
+    X: np.ndarray,
+    y: np.ndarray,
+    n_features: int,
+    feature_info: list[dict],
+    target_class: int,
+    prob_include: float,
+    prob_one: float,
+) -> _Individual:
+    """Create one individual seeded around a random training instance."""
+    # Pick a random instance of the target class
+    class_mask = y == target_class
+    class_indices = np.where(class_mask)[0]
+    if len(class_indices) == 0:
+        class_indices = np.arange(len(y))
+    idx = rng.choice(class_indices)
+    inst = X[idx]
+
+    predicates: list[_Predicate] = []
+    for fi in range(n_features):
+        if rng.random() > prob_include:
+            continue  # don't-care
+        info = feature_info[fi]
+        if info["numeric"]:
+            domain = info["max"] - info["min"]
+            if domain <= 0:
+                continue
+            size = rng.uniform(0.25, 0.75) * domain
+            center = inst[fi]
+            lo = max(info["min"], center - size / 2)
+            hi = min(info["max"], center + size / 2)
+            predicates.append(_Predicate(
+                feature_idx=fi, is_numeric=True, lo=lo, hi=hi,
+            ))
+        else:
+            vals = info["values"]
+            allowed: set[int] = set()
+            v = int(round(inst[fi]))
+            allowed.add(v)
+            for ov in vals:
+                if ov != v and rng.random() < prob_one:
+                    allowed.add(ov)
+            if len(allowed) < len(vals):
+                predicates.append(_Predicate(
+                    feature_idx=fi, is_numeric=False, allowed=allowed,
+                ))
+            # if all values allowed → don't-care
+
+    return _Individual(predicates=predicates, class_value=target_class)
+
+
+def _compute_theory_length(ind: _Individual, feature_info: list[dict]) -> float:
+    """Compute normalised theory length ∈ [0, 1].
+
+    For each expressed attribute:
+      numeric: 1 - (hi - lo) / domain_size
+      categorical: num_excluded / num_values
+    Average over *all* features (unexpressed = 0 contribution).
+    """
+    if len(feature_info) == 0:
+        return 0.0
+    total = 0.0
+    for p in ind.predicates:
+        info = feature_info[p.feature_idx]
+        if p.is_numeric:
+            domain = info["max"] - info["min"]
+            if domain > 0:
+                total += 1.0 - (p.hi - p.lo) / domain
+            # else: single-value domain → 0
+        else:
+            n_vals = len(info["values"])
+            if n_vals > 0:
+                total += (n_vals - len(p.allowed)) / n_vals
+    return total / len(feature_info)
+
+
+def _evaluate(
+    ind: _Individual,
+    X: np.ndarray,
+    y: np.ndarray,
+    feature_info: list[dict],
+    coverage_break: float,
+    coverage_ratio: float,
+    mdl_weight: float,
+    use_mdl: bool,
+) -> None:
+    """Compute MDL-based fitness for one individual."""
+    total_positive = int(np.sum(y == ind.class_value))
+    match_mask = _matches_mask(ind, X)
+    matched_y = y[match_mask]
+    tp = int(np.sum(matched_y == ind.class_value))
+    fp = int(match_mask.sum()) - tp
+    matched = tp + fp
+    # Precision
+    if matched > 0:
+        ind.accuracy2 = tp / matched
+    else:
+        ind.accuracy2 = 0.0
+
+    # Recall
+    if total_positive > 0:
+        ind.recall = tp / total_positive
+    else:
+        ind.recall = 0.0
+
+    # Coverage penalty
+    min_recall = coverage_break / 3.0
+    if ind.recall < min_recall:
+        coverage = 0.0
+    elif ind.recall < coverage_break:
+        coverage = coverage_ratio * ind.recall / coverage_break
+    else:
+        coverage = coverage_ratio + (1.0 - coverage_ratio) * min(
+            1.0, (ind.recall - coverage_break) / max(1e-12, 1.0 - coverage_break)
+        )
+
+    acc_error = 1.0 - ind.accuracy2
+    coverage_penalty = 1.0 - coverage
+    ind.exceptions_length = acc_error + coverage_penalty
+
+    # Theory length
+    ind.theory_length = _compute_theory_length(ind, feature_info)
+
+    # MDL fitness (minimise)
+    if use_mdl:
+        ind.fitness = ind.theory_length * mdl_weight + ind.exceptions_length
+    else:
+        ind.fitness = ind.exceptions_length
+
+
+def _crossover_hyperrect_list(
+    rng: np.random.Generator,
+    p1: _Individual,
+    p2: _Individual,
+    feature_info: list[dict],
+) -> tuple[_Individual, _Individual]:
+    """Attribute-level crossover for variable-length rules."""
+    if len(p1.predicates) == 0 or len(p2.predicates) == 0:
+        # Can't crossover empty rules — just swap classes
+        c1_preds = [_clone_pred(p) for p in p1.predicates]
+        c2_preds = [_clone_pred(p) for p in p2.predicates]
+        cls1 = p2.class_value if rng.random() < 0.5 else p1.class_value
+        cls2 = p1.class_value if rng.random() < 0.5 else p2.class_value
+        return (
+            _Individual(predicates=c1_preds, class_value=cls1),
+            _Individual(predicates=c2_preds, class_value=cls2),
+        )
+
+    pos1 = rng.integers(0, len(p1.predicates))
+    att1 = p1.predicates[pos1].feature_idx
+
+    # Find position in p2 with closest attribute index
+    pos2 = 0
+    best_dist = abs(p2.predicates[0].feature_idx - att1)
+    for j in range(1, len(p2.predicates)):
+        d = abs(p2.predicates[j].feature_idx - att1)
+        if d < best_dist:
+            best_dist = d
+            pos2 = j
+
+    c1_preds = [_clone_pred(p) for p in p1.predicates[:pos1]] + \
+               [_clone_pred(p) for p in p2.predicates[pos2:]]
+    c2_preds = [_clone_pred(p) for p in p2.predicates[:pos2]] + \
+               [_clone_pred(p) for p in p1.predicates[pos1:]]
+
+    # Deduplicate attributes (keep first occurrence)
+    c1_preds = _dedup_predicates(c1_preds)
+    c2_preds = _dedup_predicates(c2_preds)
+
+    cls1 = p1.class_value if rng.random() < 0.5 else p2.class_value
+    cls2 = p2.class_value if rng.random() < 0.5 else p1.class_value
+
+    return (
+        _Individual(predicates=c1_preds, class_value=cls1),
+        _Individual(predicates=c2_preds, class_value=cls2),
+    )
+
+
+def _dedup_predicates(preds: list[_Predicate]) -> list[_Predicate]:
+    seen: set[int] = set()
+    out: list[_Predicate] = []
+    for p in preds:
+        if p.feature_idx not in seen:
+            seen.add(p.feature_idx)
+            out.append(p)
+    return out
+
+
+def _clone_pred(p: _Predicate) -> _Predicate:
+    return _Predicate(
+        feature_idx=p.feature_idx,
+        is_numeric=p.is_numeric,
+        lo=p.lo,
+        hi=p.hi,
+        allowed=set(p.allowed),
+    )
+
+
+def _clone_individual(ind: _Individual) -> _Individual:
+    return _Individual(
+        predicates=[_clone_pred(p) for p in ind.predicates],
+        class_value=ind.class_value,
+        fitness=ind.fitness,
+        accuracy2=ind.accuracy2,
+        recall=ind.recall,
+        theory_length=ind.theory_length,
+        exceptions_length=ind.exceptions_length,
+    )
+
+
+def _mutate(
+    rng: np.random.Generator,
+    ind: _Individual,
+    feature_info: list[dict],
+    classes: np.ndarray,
+    default_class: int | None,
+) -> None:
+    """Mutate one individual in-place."""
+    # 10% chance: class mutation
+    if rng.random() < 0.1:
+        available = [c for c in classes if c != ind.class_value]
+        if default_class is not None:
+            available = [c for c in available if c != default_class]
+        if available:
+            ind.class_value = int(rng.choice(available))
+        return
+
+    # 90% chance: attribute mutation
+    if len(ind.predicates) == 0:
+        return
+    pidx = rng.integers(0, len(ind.predicates))
+    p = ind.predicates[pidx]
+    info = feature_info[p.feature_idx]
+
+    if p.is_numeric:
+        domain = info["max"] - info["min"]
+        offset = rng.uniform(-0.5, 0.5) * domain
+        if rng.random() < 0.5:
+            p.lo = np.clip(p.lo + offset, info["min"], info["max"])
+        else:
+            p.hi = np.clip(p.hi + offset, info["min"], info["max"])
+        if p.lo > p.hi:
+            p.lo, p.hi = p.hi, p.lo
+    else:
+        vals = list(info["values"])
+        if vals:
+            v = int(rng.choice(vals))
+            if v in p.allowed:
+                if len(p.allowed) > 1:
+                    p.allowed.discard(v)
+            else:
+                p.allowed.add(v)
+
+
+def _generalize_specialize(
+    rng: np.random.Generator,
+    ind: _Individual,
+    feature_info: list[dict],
+    prob_generalize: float,
+    prob_specialize: float,
+) -> None:
+    """Apply BioHEL's generalize/specialize structural operators."""
+    # Generalize: remove a random attribute (make it don't-care)
+    if len(ind.predicates) > 0 and rng.random() < prob_generalize:
+        idx = rng.integers(0, len(ind.predicates))
+        del ind.predicates[idx]
+
+    # Specialize: add a new random attribute
+    if rng.random() < prob_specialize:
+        expressed = {p.feature_idx for p in ind.predicates}
+        unexpressed = [fi for fi in range(len(feature_info)) if fi not in expressed]
+        if unexpressed:
+            fi = int(rng.choice(unexpressed))
+            info = feature_info[fi]
+            if info["numeric"]:
+                domain = info["max"] - info["min"]
+                if domain > 0:
+                    size = rng.uniform(0.25, 0.75) * domain
+                    center = rng.uniform(info["min"], info["max"])
+                    lo = max(info["min"], center - size / 2)
+                    hi = min(info["max"], center + size / 2)
+                    ind.predicates.append(_Predicate(
+                        feature_idx=fi, is_numeric=True, lo=lo, hi=hi,
+                    ))
+            else:
+                vals = info["values"]
+                allowed = {int(rng.choice(list(vals)))}
+                for v in vals:
+                    if v not in allowed and rng.random() < 0.5:
+                        allowed.add(v)
+                if len(allowed) < len(vals):
+                    ind.predicates.append(_Predicate(
+                        feature_idx=fi, is_numeric=False, allowed=allowed,
+                    ))
+
+
+def _tournament_select_wor(
+    rng: np.random.Generator,
+    population: list[_Individual],
+    tournament_size: int,
+    n_select: int,
+) -> list[_Individual]:
+    """Tournament selection without replacement."""
+    selected: list[_Individual] = []
+    pop_size = len(population)
+    for _ in range(n_select):
+        contenders = rng.choice(pop_size, size=min(tournament_size, pop_size), replace=False)
+        best_idx = contenders[0]
+        for ci in contenders[1:]:
+            if population[ci].fitness < population[best_idx].fitness:
+                best_idx = ci
+        selected.append(_clone_individual(population[best_idx]))
+    return selected
+
+
+def _is_majority_rule(
+    ind: _Individual,
+    X: np.ndarray,
+    y: np.ndarray,
+    coverage_break: float,
+) -> bool:
+    """Check BioHEL's majority condition for a rule."""
+    match_mask = _matches_mask(ind, X)
+    matched_y = y[match_mask]
+    if len(matched_y) == 0:
+        return False
+
+    classes, counts_arr = np.unique(matched_y, return_counts=True)
+    best_pos = int(np.argmax(counts_arr))
+    best_class = int(classes[best_pos])
+    if best_class != ind.class_value:
+        return False
+
+    # Check no tie
+    if len(counts_arr) > 1:
+        sorted_c = np.sort(counts_arr)[::-1]
+        if sorted_c[0] == sorted_c[1]:
+            return False
+
+    # Coverage check
+    total_positive = int(np.sum(y == ind.class_value))
+    if total_positive == 0:
+        return False
+    tp = int(counts_arr[best_pos]) if best_class == ind.class_value else 0
+    recall = tp / total_positive
+    return recall >= coverage_break / 3.0
+
+
+def _ilas_strata(
+    rng: np.random.Generator,
+    y: np.ndarray,
+    n_strata: int,
+) -> list[np.ndarray]:
+    """Create ILAS strata indices with class-stratified round-robin."""
+    if n_strata <= 1:
+        return [np.arange(len(y))]
+    strata: list[list[int]] = [[] for _ in range(n_strata)]
+    classes = np.unique(y)
+    for c in classes:
+        c_indices = np.where(y == c)[0]
+        rng.shuffle(c_indices)
+        for j, idx in enumerate(c_indices):
+            strata[j % n_strata].append(int(idx))
+    return [np.array(s) for s in strata]
+
+
+def _run_ga(
+    rng: np.random.Generator,
+    X: np.ndarray,
+    y: np.ndarray,
+    feature_info: list[dict],
+    classes: np.ndarray,
+    default_class: int | None,
+    *,
+    population_size: int,
+    n_iterations: int,
+    tournament_size: int,
+    crossover_prob: float,
+    mutation_prob: float,
+    prob_generalize: float,
+    prob_specialize: float,
+    prob_include: float,
+    prob_one: float,
+    coverage_break: float,
+    coverage_ratio: float,
+    mdl_initial_ratio: float,
+    mdl_activate_iter: int,
+    mdl_relax_factor: float,
+    n_strata: int,
+) -> _Individual:
+    """Run one GA to find a single rule."""
+    # Determine target classes (exclude default class)
+    target_classes = [int(c) for c in classes]
+    if default_class is not None:
+        target_classes = [c for c in target_classes if c != default_class]
+    if not target_classes:
+        target_classes = [int(classes[0])]
+
+    # Create ILAS strata
+    strata = _ilas_strata(rng, y, n_strata)
+
+    # Initialise population
+    population: list[_Individual] = []
+    for _ in range(population_size):
+        tc = int(rng.choice(target_classes))
+        ind = _smart_init(rng, X, y, len(feature_info), feature_info,
+                          tc, prob_include, prob_one)
+        population.append(ind)
+
+    # Evaluate on first stratum
+    stratum_idx = strata[0]
+    X_w, y_w = X[stratum_idx], y[stratum_idx]
+    for ind in population:
+        _evaluate(ind, X_w, y_w, feature_info, coverage_break, coverage_ratio,
+                  0.0, False)
+
+    # Track best
+    best = _clone_individual(min(population, key=lambda i: i.fitness))
+    best_exceptions = best.exceptions_length
+    no_improve_count = 0
+
+    # MDL weight
+    mdl_weight = 0.0
+    mdl_active = False
+
+    for iteration in range(n_iterations):
+        # Windowing: pick stratum
+        stratum_idx = strata[iteration % len(strata)]
+        if iteration == n_iterations - 1:
+            # Last iteration: use all data
+            stratum_idx = np.arange(len(y))
+        X_w, y_w = X[stratum_idx], y[stratum_idx]
+
+        # Selection
+        offspring = _tournament_select_wor(rng, population, tournament_size,
+                                           population_size)
+
+        # Crossover
+        i = 0
+        while i + 1 < len(offspring):
+            if rng.random() < crossover_prob:
+                c1, c2 = _crossover_hyperrect_list(rng, offspring[i], offspring[i + 1],
+                                                    feature_info)
+                offspring[i] = c1
+                offspring[i + 1] = c2
+            i += 2
+
+        # Mutation + generalize/specialize
+        for ind in offspring:
+            if rng.random() < mutation_prob:
+                _mutate(rng, ind, feature_info, classes, default_class)
+            _generalize_specialize(rng, ind, feature_info,
+                                   prob_generalize, prob_specialize)
+
+        # Evaluate offspring
+        for ind in offspring:
+            _evaluate(ind, X_w, y_w, feature_info, coverage_break,
+                      coverage_ratio, mdl_weight, mdl_active)
+
+        # Elitism: inject best into population if better than worst
+        population = offspring
+        worst_idx = max(range(len(population)), key=lambda j: population[j].fitness)
+        _evaluate(best, X_w, y_w, feature_info, coverage_break,
+                  coverage_ratio, mdl_weight, mdl_active)
+        if best.fitness < population[worst_idx].fitness:
+            population[worst_idx] = _clone_individual(best)
+
+        # Update best
+        cur_best = min(population, key=lambda i: i.fitness)
+        if cur_best.fitness < best.fitness:
+            best = _clone_individual(cur_best)
+
+        # MDL weight management
+        if iteration == mdl_activate_iter and not mdl_active:
+            # Activate MDL weight
+            mdl_active = True
+            if best.theory_length > 1e-12:
+                mdl_weight = (mdl_initial_ratio / (1.0 - mdl_initial_ratio)) * \
+                             (best.exceptions_length / best.theory_length)
+            else:
+                mdl_weight = 0.1
+            # Re-evaluate everyone with MDL
+            for ind in population:
+                _evaluate(ind, X_w, y_w, feature_info, coverage_break,
+                          coverage_ratio, mdl_weight, True)
+            best = _clone_individual(min(population, key=lambda i: i.fitness))
+            best_exceptions = best.exceptions_length
+            no_improve_count = 0
+
+        if mdl_active:
+            cur_exc = min(population, key=lambda i: i.exceptions_length).exceptions_length
+            if cur_exc < best_exceptions - 1e-9:
+                best_exceptions = cur_exc
+                no_improve_count = 0
+            else:
+                no_improve_count += 1
+                if no_improve_count >= 10:
+                    mdl_weight *= mdl_relax_factor
+                    no_improve_count = 0
+                    # Re-evaluate with relaxed weight
+                    for ind in population:
+                        _evaluate(ind, X_w, y_w, feature_info, coverage_break,
+                                  coverage_ratio, mdl_weight, True)
+                    best = _clone_individual(min(population, key=lambda i: i.fitness))
+
+    # Final: re-evaluate best on all data using exceptions only
+    _evaluate(best, X, y, feature_info, coverage_break, coverage_ratio, 0.0, False)
+    return best
+
+
+# ---------------------------------------------------------------------------
+# Public estimator
+# ---------------------------------------------------------------------------
 
 class RuleLCSClassifier(BaseRuleSetEstimator):
-    """Pittsburgh-style rule-set learner with beam search over rule subsets.
+    """BioHEL-inspired iterative rule learning classifier.
 
-    Supports several BioHEL-inspired enhancements beyond a simple beam search:
+    Learns one rule at a time via a Genetic Algorithm, then removes covered
+    instances (sequential covering).  Uses an MDL-based fitness function,
+    hyperrectangle representation with attribute lists, tournament selection
+    without replacement, attribute-level crossover, and generalize/specialize
+    structural mutation.
 
-    * **Sequential Covering (IRL)** – when ``sequential_covering=True``, rules
-      are learned iteratively: after each rule is selected, the correctly covered
-      examples are removed and candidates are rebuilt on the residual dataset.
-    * **Token Competition** – ``token_competition_weight`` adds an overlap
-      penalty to the fitness so that rules covering the same examples as already
-      selected rules are penalized, promoting specialization.
-    * **Post-hoc Rule Compaction** – ``enable_compaction=True`` runs a backward
-      elimination step after fitting: rules are greedily removed if removal does
-      not decrease macro-F1 on the evaluation set.  ``compaction_min_gain``
-      (default ``0.0``) raises the bar: a rule is only removed when its absence
-      *improves* F1 by at least that value.  Set to e.g. ``0.005`` to keep rules
-      that are likely to generalise even if they add no measurable gain on a
-      small val set; set to a negative value for more aggressive pruning.
-    * **Windowing** – ``window_fraction`` (0–1] controls stochastic subset
-      evaluation.  When set to less than 1.0, each beam-search iteration
-      evaluates candidates on a random subset of the evaluation indices,
-      significantly speeding up large datasets.
-    * **Low-Cardinality Detection** – ``low_cardinality_threshold`` (default 10)
-      causes numeric features with at most that many unique values to be
-      additionally treated as categorical: equality splits (``== value``) are
-      generated alongside the standard threshold splits (``<=`` / ``>``).  This
-      is essential for datasets where categorical features are integer-encoded
-      (e.g. MONK, car_evaluation).
+    Parameters
+    ----------
+    population_size : int
+        Number of individuals in the GA population.
+    n_iterations : int
+        Number of GA generations per rule learning attempt.
+    n_repetitions : int
+        Number of independent GA runs per rule; the best rule is kept.
+    tournament_size : int
+        Tournament size for selection.
+    crossover_prob : float
+        Probability of crossover per pair.
+    mutation_prob : float
+        Probability of mutation per individual.
+    prob_generalize : float
+        Probability of removing an attribute (generalize operator).
+    prob_specialize : float
+        Probability of adding an attribute (specialize operator).
+    prob_include : float
+        Probability that an attribute is included during smart init.
+    prob_one : float
+        Probability that a categorical value is included during init.
+    coverage_break : float
+        Minimal recall threshold for the coverage penalty.
+    coverage_ratio : float
+        Scaling parameter for the coverage penalty curve.
+    mdl_initial_ratio : float
+        Initial theory-length ratio for MDL weight initialisation.
+    mdl_activate_iter : int
+        Iteration at which MDL weight is activated.
+    mdl_relax_factor : float
+        Factor by which MDL weight is relaxed upon stagnation.
+    max_rules : int
+        Maximum number of rules to learn (excluding default rule).
+    max_consecutive_fails : int
+        Stop if this many consecutive GA runs fail the majority check.
+    n_strata : int
+        Number of ILAS windowing strata (1 = no windowing).
+    default_class_policy : str
+        "major" = use majority class as default, "auto" = determine from
+        remaining after IRL, "disabled" = no default class during GA.
+    low_cardinality_threshold : int
+        Numeric features with ≤ this many unique values are additionally
+        treated as categorical.
+    include_default_rule : bool
+        Whether to append a default (catch-all) rule to the rule set.
+    random_state : int or None
+        Random seed for reproducibility.
     """
 
     def __init__(
         self,
-        aggregation: str = "argmax_sum",
-        temperature: float = 1.0,
-        include_default_rule: bool = True,
-        enable_categorical_rules: bool = True,
-        max_rules: int = 5,
-        min_samples_leaf: int = 5,
-        min_gain: float = 1e-9,
-        candidate_pool_size: int = 24,
-        beam_width: int = 8,
-        max_iterations: int = 16,
-        validation_fraction: float = 0.2,
-        complexity_penalty: float = 0.003,
-        random_state: int | None = None,
-        max_thresholds_per_feature: int | None = None,
-        # -- BioHEL-inspired enhancements --
-        sequential_covering: bool = False,
-        token_competition_weight: float = 0.0,
-        enable_compaction: bool = False,
-        compaction_min_gain: float = 0.0,
-        window_fraction: float = 1.0,
-        # -- Multi-class strategy --
-        multiclass_strategy: str = "auto",
-        # -- Low-cardinality detection --
+        population_size: int = 200,
+        n_iterations: int = 50,
+        n_repetitions: int = 2,
+        tournament_size: int = 4,
+        crossover_prob: float = 0.6,
+        mutation_prob: float = 0.6,
+        prob_generalize: float = 0.10,
+        prob_specialize: float = 0.10,
+        prob_include: float = 0.5,
+        prob_one: float = 0.75,
+        coverage_break: float = 0.01,
+        coverage_ratio: float = 0.90,
+        mdl_initial_ratio: float = 0.25,
+        mdl_activate_iter: int = 10,
+        mdl_relax_factor: float = 0.90,
+        max_rules: int = 15,
+        max_consecutive_fails: int = 3,
+        n_strata: int = 1,
+        default_class_policy: str = "major",
         low_cardinality_threshold: int = 10,
+        include_default_rule: bool = True,
+        random_state: int | None = None,
     ):
-        self.aggregation = aggregation
-        self.temperature = temperature
-        self.include_default_rule = include_default_rule
-        self.enable_categorical_rules = enable_categorical_rules
+        self.population_size = population_size
+        self.n_iterations = n_iterations
+        self.n_repetitions = n_repetitions
+        self.tournament_size = tournament_size
+        self.crossover_prob = crossover_prob
+        self.mutation_prob = mutation_prob
+        self.prob_generalize = prob_generalize
+        self.prob_specialize = prob_specialize
+        self.prob_include = prob_include
+        self.prob_one = prob_one
+        self.coverage_break = coverage_break
+        self.coverage_ratio = coverage_ratio
+        self.mdl_initial_ratio = mdl_initial_ratio
+        self.mdl_activate_iter = mdl_activate_iter
+        self.mdl_relax_factor = mdl_relax_factor
         self.max_rules = max_rules
-        self.min_samples_leaf = min_samples_leaf
-        self.min_gain = min_gain
-        self.candidate_pool_size = candidate_pool_size
-        self.beam_width = beam_width
-        self.max_iterations = max_iterations
-        self.validation_fraction = validation_fraction
-        self.complexity_penalty = complexity_penalty
-        self.random_state = random_state
-        self.max_thresholds_per_feature = max_thresholds_per_feature
-        self.sequential_covering = sequential_covering
-        self.token_competition_weight = token_competition_weight
-        self.enable_compaction = enable_compaction
-        self.compaction_min_gain = compaction_min_gain
-        self.window_fraction = window_fraction
-        self.multiclass_strategy = multiclass_strategy
+        self.max_consecutive_fails = max_consecutive_fails
+        self.n_strata = n_strata
+        self.default_class_policy = default_class_policy
         self.low_cardinality_threshold = low_cardinality_threshold
-        self._ovr_binary_f1_ = False
+        self.include_default_rule = include_default_rule
+        self.random_state = random_state
 
+    # ------------------------------------------------------------------ fit
     def fit(self, X, y):
-        X_valid, y_valid = check_X_y(X, y, dtype=None)
-        self.n_features_in_ = X_valid.shape[1]
-        self.feature_names_in_ = np.asarray([f"f{i}" for i in range(self.n_features_in_)], dtype=object)
-        self.classes_ = unique_labels(y_valid)
-        self._rng_ = np.random.default_rng(self.random_state)
+        X, y = check_X_y(X, y)
+        self.classes_ = unique_labels(y)
+        self.n_features_in_ = X.shape[1]
+        n_features = X.shape[1]
+        self.feature_names_in_ = [f"x{i}" for i in range(n_features)]
 
-        class_to_idx = {label: idx for idx, label in enumerate(self.classes_)}
-        y_idx = np.asarray([class_to_idx[v] for v in y_valid], dtype=int)
-        n_classes = len(self.classes_)
-        train_idx, val_idx = self._train_val_indices(y_idx)
+        rng = np.random.default_rng(self.random_state)
 
-        train_X = X_valid[train_idx]
-        train_y = y_idx[train_idx]
-        prior_counts = np.bincount(train_y, minlength=n_classes).astype(float)
-        self._default_scores_ = self._distribution_to_scores(prior_counts)
+        # Build feature info
+        feature_info = self._build_feature_info(X)
 
-        if self.multiclass_strategy not in ("direct", "ovr", "auto"):
-            raise ValueError(
-                f"multiclass_strategy must be 'direct', 'ovr' or 'auto', got {self.multiclass_strategy!r}"
-            )
+        # Default class
+        default_class: int | None = None
+        if self.default_class_policy == "major":
+            counts = np.bincount(y.astype(int))
+            default_class = int(np.argmax(counts))
+        elif self.default_class_policy == "disabled":
+            default_class = None
+        # "auto": default_class stays None during GA, determined later
 
-        # 'auto' → OvR for >=3 classes, direct for binary
-        effective_strategy = self.multiclass_strategy
-        if effective_strategy == "auto":
-            effective_strategy = "ovr" if n_classes >= 3 else "direct"
+        # Per-class coverage breakpoint
+        total = len(y)
+        class_counts = {int(c): int(np.sum(y == c)) for c in self.classes_}
 
-        use_ovr = effective_strategy == "ovr" and n_classes > 2
+        # Iterative rule learning
+        rules: list[_Individual] = []
+        remaining_mask = np.ones(len(y), dtype=bool)
+        fail_count = 0
 
-        if use_ovr:
-            selected_rules, iterations_ran = self._fit_ovr(
-                X_valid, y_idx, n_classes, train_idx, val_idx,
-            )
-        elif self.sequential_covering:
-            selected_rules, iterations_ran = self._fit_sequential_covering(
-                X_valid, y_idx, n_classes, train_idx, val_idx,
-            )
-        else:
-            selected_rules, iterations_ran = self._fit_beam_search(
-                X_valid, y_idx, n_classes, train_idx, val_idx,
-            )
-
-        # -- Post-hoc Rule Compaction (BioHEL-inspired) --
-        if self.enable_compaction and len(selected_rules) > 1:
-            selected_rules = self._compact_rules(selected_rules, X_valid, y_idx, train_idx, val_idx)
-
-        ruleset = self._build_ruleset(selected_rules)
-        ruleset.metadata.update(
-            {
-                "source": "rulelcs",
-                "model_type": "rulelcs_rule_set_search",
-                "candidate_pool_size": int(self._candidate_count_),
-                "beam_width": int(self.beam_width),
-                "max_iterations": int(self.max_iterations),
-                "iterations_ran": int(iterations_ran),
-                "selected_rule_count": int(len(selected_rules)),
-                "used_validation": bool(val_idx is not None),
-                "validation_fraction": float(self.validation_fraction),
-                "sequential_covering": bool(self.sequential_covering),
-                "token_competition_weight": float(self.token_competition_weight),
-                "compaction_enabled": bool(self.enable_compaction),
-                "window_fraction": float(self.window_fraction),
-                "multiclass_strategy": str(self.multiclass_strategy),
-            }
-        )
-        ruleset.validate()
-        self.ruleset_ = ruleset
-        return self
-
-    # ------------------------------------------------------------------
-    # Standard beam search (original approach)
-    # ------------------------------------------------------------------
-
-    def _fit_beam_search(
-        self,
-        X_valid: np.ndarray,
-        y_idx: np.ndarray,
-        n_classes: int,
-        train_idx: np.ndarray,
-        val_idx: np.ndarray | None,
-    ) -> tuple[list[Rule], int]:
-        """Run the classic beam-search over rule subsets."""
-        train_X = X_valid[train_idx]
-        train_y = y_idx[train_idx]
-        candidates = self._build_candidate_rules(train_X, train_y, n_classes)
-        self._candidate_count_ = len(candidates)
-
-        if not candidates:
-            return [], 0
-
-        initial_states = {tuple()}
-        initial_states.update((idx,) for idx in range(min(len(candidates), self.beam_width)))
-        frontier = sorted(initial_states)
-        best_state = tuple()
-        best_score = self._state_score(best_state, candidates, X_valid, y_idx, train_idx, val_idx)
-        no_improvement_rounds = 0
-        iterations_ran = 0
-
-        for iteration in range(max(1, int(self.max_iterations))):
-            iterations_ran = iteration + 1
-            improved = False
-            scored_frontier = []
-            seen: set[tuple[int, ...]] = set()
-            for state in frontier:
-                if state in seen:
-                    continue
-                seen.add(state)
-                score = self._state_score(state, candidates, X_valid, y_idx, train_idx, val_idx)
-                scored_frontier.append((score, state))
-                if score > best_score + 1e-12:
-                    best_score = score
-                    best_state = state
-                    improved = True
-
-                for neighbor in self._neighbors(state, len(candidates)):
-                    if neighbor in seen:
-                        continue
-                    seen.add(neighbor)
-                    neighbor_score = self._state_score(
-                        neighbor,
-                        candidates,
-                        X_valid,
-                        y_idx,
-                        train_idx,
-                        val_idx,
-                    )
-                    scored_frontier.append((neighbor_score, neighbor))
-                    if neighbor_score > best_score + 1e-12:
-                        best_score = neighbor_score
-                        best_state = neighbor
-                        improved = True
-
-            ranked = sorted(
-                scored_frontier,
-                key=lambda item: (
-                    item[0],
-                    -len(item[1]),
-                    -self._state_atom_count(item[1], candidates),
-                    tuple(-i for i in item[1]),
-                ),
-                reverse=True,
-            )
-            frontier = [state for _, state in ranked[: max(1, int(self.beam_width))]]
-
-            if best_state not in frontier:
-                frontier.insert(0, best_state)
-                frontier = frontier[: max(1, int(self.beam_width))]
-
-            if improved:
-                no_improvement_rounds = 0
-            else:
-                no_improvement_rounds += 1
-            if no_improvement_rounds >= 6:
+        for _rule_idx in range(self.max_rules):
+            if np.sum(remaining_mask) == 0:
                 break
 
-        selected_rules = [candidates[idx].rule for idx in best_state]
-        return selected_rules, iterations_ran
+            X_rem = X[remaining_mask]
+            y_rem = y[remaining_mask]
 
-    # ------------------------------------------------------------------
-    # Sequential Covering / Iterative Rule Learning (BioHEL-inspired)
-    # ------------------------------------------------------------------
+            # Per-class coverage break
+            cb = self.coverage_break
+            # Scale for class imbalance as BioHEL does
+            n_remaining = len(y_rem)
 
-    def _fit_sequential_covering(
-        self,
-        X_valid: np.ndarray,
-        y_idx: np.ndarray,
-        n_classes: int,
-        train_idx: np.ndarray,
-        val_idx: np.ndarray | None,
-    ) -> tuple[list[Rule], int]:
-        """Learn rules one at a time, removing covered examples after each round.
-
-        This is the *Iterative Rule Learning* (IRL) strategy used in BioHEL.
-        After each rule is selected the correctly covered training examples are
-        removed so the next round focuses on the residual (uncovered) data.
-        """
-        max_rules = max(1, int(self.max_rules))
-        remaining_train_idx = train_idx.copy()
-        selected_rules: list[Rule] = []
-        total_iterations = 0
-        self._candidate_count_ = 0
-
-        for _round in range(max_rules):
-            if remaining_train_idx.size < max(2, self.min_samples_leaf):
-                break
-
-            residual_X = X_valid[remaining_train_idx]
-            residual_y = y_idx[remaining_train_idx]
-            candidates = self._build_candidate_rules(residual_X, residual_y, n_classes)
-            self._candidate_count_ += len(candidates)
-
-            if not candidates:
-                break
-
-            # Score each candidate in combination with already-selected rules
-            # (not in isolation) so that rules 2+ are evaluated in the context
-            # of earlier rules and don't appear weak just because they specialise
-            # on residual cases.  We always add the best-scoring rule (original
-            # IRL behaviour); the compaction pass prunes redundant rules later.
-            eval_idx_comb = val_idx if val_idx is not None else train_idx
-            best_rule, best_combined_f1 = None, -np.inf
-            for cand in candidates:
-                combo_rules = list(selected_rules) + [cand.rule]
-                score = self._evaluate_rule_list_f1(
-                    combo_rules, X_valid, y_idx, eval_idx_comb
+            best_rule: _Individual | None = None
+            for _rep in range(self.n_repetitions):
+                rule = _run_ga(
+                    rng, X_rem, y_rem, feature_info, self.classes_,
+                    default_class,
+                    population_size=self.population_size,
+                    n_iterations=self.n_iterations,
+                    tournament_size=self.tournament_size,
+                    crossover_prob=self.crossover_prob,
+                    mutation_prob=self.mutation_prob,
+                    prob_generalize=self.prob_generalize,
+                    prob_specialize=self.prob_specialize,
+                    prob_include=self.prob_include,
+                    prob_one=self.prob_one,
+                    coverage_break=cb,
+                    coverage_ratio=self.coverage_ratio,
+                    mdl_initial_ratio=self.mdl_initial_ratio,
+                    mdl_activate_iter=self.mdl_activate_iter,
+                    mdl_relax_factor=self.mdl_relax_factor,
+                    n_strata=self.n_strata,
                 )
-                if score > best_combined_f1:
-                    best_combined_f1 = score
-                    best_rule = cand.rule
-            total_iterations += 1
+                if best_rule is None or rule.fitness < best_rule.fitness:
+                    best_rule = rule
 
             if best_rule is None:
                 break
 
-            selected_rules.append(best_rule)
-
-            # Remove correctly covered training examples (IRL core step)
-            ruleset_so_far = self._build_ruleset(selected_rules)
-            preds = predict_from_ruleset(ruleset_so_far, X_valid[remaining_train_idx])
-            y_true_str = np.asarray(self.classes_[y_idx[remaining_train_idx]], dtype=str)
-            preds_str = np.asarray(preds, dtype=str)
-            correctly_covered = preds_str == y_true_str
-            # Keep only incorrectly classified examples for the next round
-            remaining_train_idx = remaining_train_idx[~correctly_covered]
-
-            if remaining_train_idx.size == 0:
-                break
-
-        # NOTE: _default_scores_ is deliberately NOT recomputed from the
-        # residual here.  The default rule has empty atoms and fires as an
-        # additive baseline for *all* examples via argmax_sum, not just
-        # uncovered ones.  Overwriting it with the (heavily skewed) residual
-        # distribution would corrupt the global prior and cause the model to
-        # predict only the residual's majority class on every sample.  The
-        # full-training-set prior set at the start of fit() is the correct
-        # baseline to keep.
-
-        return selected_rules, total_iterations
-
-    # ------------------------------------------------------------------
-    # One-vs-Rest (OvR) Multi-class Strategy
-    # ------------------------------------------------------------------
-
-    def _fit_ovr(
-        self,
-        X_valid: np.ndarray,
-        y_idx: np.ndarray,
-        n_classes: int,
-        train_idx: np.ndarray,
-        val_idx: np.ndarray | None,
-    ) -> tuple[list[Rule], int]:
-        """Learn rules via One-vs-Rest decomposition.
-
-        For each class *c* the labels are binarised (class *c* → 1, rest → 0)
-        and either beam search or sequential covering is run on the resulting
-        2-class problem.  The binary score vectors are then expanded back to
-        the full *n_classes* dimensions so that all per-class rules can be
-        combined into a single :class:`ScoredRuleSet`.
-        """
-        all_rules: list[Rule] = []
-        total_iterations = 0
-        self._candidate_count_ = 0
-
-        # Save originals – will be restored after all OvR rounds
-        saved_default_scores = list(self._default_scores_)
-        saved_classes = self.classes_.copy()
-        saved_include_default = self.include_default_rule
-
-        max_rules_per_class = max(1, int(self.max_rules))
-        binary_classes = np.array([0, 1])
-
-        for class_idx in range(n_classes):
-            # Binarise: class_idx → 1, everything else → 0
-            y_bin = (y_idx == class_idx).astype(int)
-
-            # Temporarily set up binary environment so _build_ruleset
-            # and the runtime create consistent 2-class rulesets.
-            self.classes_ = binary_classes
-            # Use binary F1 (for the positive class) during OvR subproblems
-            # so that rules for minority classes are properly rewarded.
-            self._ovr_binary_f1_ = True
-            # Disable default rule during OvR search so that rules can
-            # actually shift predictions toward the positive class
-            # (with argmax_sum the default prior overwhelms minority rules).
-            self.include_default_rule = False
-
-            # Temporary binary defaults (still needed for _distribution_to_scores)
-            bin_train_y = y_bin[train_idx]
-            bin_counts = np.bincount(bin_train_y, minlength=2).astype(float)
-            # Store base rate for contrast scoring
-            self._ovr_base_rate_ = float(bin_counts[1]) / max(1.0, float(bin_counts.sum()))
-            self._default_scores_ = self._distribution_to_scores(bin_counts)
-
-            if self.sequential_covering:
-                class_rules, iters = self._fit_sequential_covering(
-                    X_valid, y_bin, 2, train_idx, val_idx,
-                )
+            # Check majority condition
+            if _is_majority_rule(best_rule, X_rem, y_rem, cb):
+                rules.append(best_rule)
+                fail_count = 0
+                # Remove matched instances of the rule's class (vectorised)
+                idx_remaining = np.where(remaining_mask)[0]
+                sub_match = _matches_mask(best_rule, X[idx_remaining])
+                class_match = y[idx_remaining] == best_rule.class_value
+                to_remove = idx_remaining[sub_match & class_match]
+                remaining_mask[to_remove] = False
             else:
-                class_rules, iters = self._fit_beam_search(
-                    X_valid, y_bin, 2, train_idx, val_idx,
-                )
+                fail_count += 1
+                if fail_count >= self.max_consecutive_fails:
+                    break
 
-            total_iterations += iters
+        # Determine default class from remaining instances
+        remaining_y = y[remaining_mask]
+        if len(remaining_y) > 0:
+            counts = np.bincount(remaining_y.astype(int), minlength=len(self.classes_))
+            default_class_final = int(np.argmax(counts))
+        else:
+            # All covered — default to majority of full data
+            counts = np.bincount(y.astype(int), minlength=len(self.classes_))
+            default_class_final = int(np.argmax(counts))
 
-            # Expand binary scores to full n_classes vector and relabel rules
-            for rule in class_rules:
-                expanded = self._expand_binary_scores_to_multiclass(
-                    rule, class_idx, n_classes,
-                )
-                all_rules.append(expanded)
+        # Build ScoredRuleSet
+        self.rules_ = rules
+        self.default_class_ = default_class_final
+        self.ruleset_ = self._build_ruleset(rules, default_class_final)
+        self.ruleset_.validate()
+        return self
 
-        # Restore originals
-        self.classes_ = saved_classes
-        self._default_scores_ = saved_default_scores
-        self._ovr_binary_f1_ = False
-        self.include_default_rule = saved_include_default
-
-        # Limit total rules: keep at most max_rules (round-robin across classes)
-        if len(all_rules) > max_rules_per_class * n_classes:
-            all_rules = all_rules[: max_rules_per_class * n_classes]
-
-        # -- Post-hoc score rebalancing: scale per-class scores to maximise
-        #    macro-F1 on the evaluation set.  Lift scoring amplifies minority
-        #    classes, so we search for per-class scale factors in (0, 1] that
-        #    improve the combined model.
-        eval_idx = val_idx if val_idx is not None else train_idx
-        all_rules = self._rebalance_ovr_scores(
-            all_rules, X_valid, y_idx, eval_idx, n_classes,
-        )
-
-        return all_rules, total_iterations
-
-    def _rebalance_ovr_scores(
-        self,
-        rules: list[Rule],
-        X: np.ndarray,
-        y_idx: np.ndarray,
-        eval_idx: np.ndarray,
-        n_classes: int,
-    ) -> list[Rule]:
-        """Scale per-class scores to maximise macro-F1 on the evaluation set.
-
-        After OvR, minority-class rules often have inflated lift scores that
-        cause over-prediction.  We search for per-class scale factors that
-        improve the combined macro-F1.
-        """
-        if not rules:
-            return rules
-
-        # Group rules by OvR class index
-        class_rule_indices: dict[int, list[int]] = {}
-        for i, rule in enumerate(rules):
-            ci = rule.metadata.get("ovr_class_index")
-            if ci is not None:
-                class_rule_indices.setdefault(int(ci), []).append(i)
-
-        if not class_rule_indices:
-            return rules
-
-        # Evaluate baseline macro-F1
-        def _eval_f1() -> float:
-            rs = self._build_ruleset(rules)
-            y_pred = predict_from_ruleset(rs, X[eval_idx])
-            y_true = np.asarray(self.classes_[y_idx[eval_idx]], dtype=str)
-            y_pred = np.asarray(y_pred, dtype=str)
-            return float(f1_score(y_true, y_pred, average="macro", zero_division=0))
-
-        best_f1 = _eval_f1()
-
-        # Coordinate descent: for each class, search for best scale factor
-        scale_grid = [0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0]
-        best_scales = {ci: 1.0 for ci in class_rule_indices}
-
-        for _pass in range(3):  # 3 passes of coordinate descent
-            improved = False
-            for ci in sorted(class_rule_indices.keys()):
-                cur_scale = best_scales[ci]
-                best_ci_scale = cur_scale
-                # Save current scores
-                saved = {idx: list(rules[idx].scores) for idx in class_rule_indices[ci]}
-
-                for scale in scale_grid:
-                    if abs(scale - cur_scale) < 1e-9:
-                        continue
-                    # Apply new scale
-                    ratio = scale / cur_scale
-                    for idx in class_rule_indices[ci]:
-                        rules[idx].scores = [s * ratio for s in saved[idx]]
-                    trial_f1 = _eval_f1()
-                    # Restore
-                    for idx in class_rule_indices[ci]:
-                        rules[idx].scores = list(saved[idx])
-
-                    if trial_f1 > best_f1 + 1e-6:
-                        best_f1 = trial_f1
-                        best_ci_scale = scale
-                        improved = True
-
-                # Apply best scale permanently
-                if best_ci_scale != cur_scale:
-                    ratio = best_ci_scale / cur_scale
-                    for idx in class_rule_indices[ci]:
-                        rules[idx].scores = [s * ratio for s in rules[idx].scores]
-                    best_scales[ci] = best_ci_scale
-
-            if not improved:
-                break
-
-        return rules
-
-    @staticmethod
-    def _expand_binary_scores_to_multiclass(
-        rule: Rule,
-        class_idx: int,
-        n_classes: int,
-    ) -> Rule:
-        """Convert a 2-class score vector to an *n_classes* vector.
-
-        The positive-class score (``scores[1]``) is placed at position
-        *class_idx*; all other positions receive 0.0.
-        """
-        binary_scores = rule.scores
-        # The "positive" score in the binary sub-problem
-        pos_score = binary_scores[1] if len(binary_scores) >= 2 else binary_scores[0]
-
-        full_scores = [0.0] * n_classes
-        full_scores[class_idx] = float(pos_score)
-
-        new_metadata = dict(rule.metadata) if rule.metadata else {}
-        new_metadata["ovr_class_index"] = class_idx
-
-        return Rule(
-            atoms=rule.atoms,
-            scores=full_scores,
-            rule_id=f"rulelcs_ovr_c{class_idx}_{rule.rule_id or 'rule'}",
-            metadata=new_metadata,
-        )
-
-    def _single_rule_score(
-        self,
-        rule: Rule,
-        X: np.ndarray,
-        y_idx: np.ndarray,
-        train_idx: np.ndarray,
-        val_idx: np.ndarray | None,
-    ) -> float:
-        """Evaluate a single rule wrapped in a ruleset."""
-        ruleset = self._build_ruleset([rule])
-        eval_idx = val_idx if val_idx is not None else train_idx
-        y_pred = predict_from_ruleset(ruleset, X[eval_idx])
-        y_true = np.asarray(self.classes_[y_idx[eval_idx]], dtype=str)
-        y_pred = np.asarray(y_pred, dtype=str)
-        return float(f1_score(y_true, y_pred, **self._f1_kwargs))
-
-    # ------------------------------------------------------------------
-    # Post-hoc Rule Compaction (BioHEL-inspired)
-    # ------------------------------------------------------------------
-
-    def _compact_rules(
-        self,
-        rules: list[Rule],
-        X: np.ndarray,
-        y_idx: np.ndarray,
-        train_idx: np.ndarray,
-        val_idx: np.ndarray | None,
-    ) -> list[Rule]:
-        """Backward elimination: greedily remove rules that don't help F1."""
-        eval_idx = val_idx if val_idx is not None else train_idx
-        current_rules = list(rules)
-        current_f1 = self._evaluate_rule_list_f1(current_rules, X, y_idx, eval_idx)
-
-        improved = True
-        while improved and len(current_rules) > 1:
-            improved = False
-            best_drop_idx = None
-            best_drop_f1 = -np.inf
-            for i in range(len(current_rules)):
-                reduced = current_rules[:i] + current_rules[i + 1:]
-                reduced_f1 = self._evaluate_rule_list_f1(reduced, X, y_idx, eval_idx)
-                # A rule is removed only when its *absence* improves (or at
-                # worst barely changes) val F1 by at least compaction_min_gain.
-                # Setting compaction_min_gain > 0 makes compaction conservative
-                # so rules with marginal-but-real contributions are kept.
-                remove_threshold = float(self.compaction_min_gain) - 1e-9
-                if reduced_f1 >= current_f1 + remove_threshold and reduced_f1 > best_drop_f1:
-                    best_drop_f1 = reduced_f1
-                    best_drop_idx = i
-
-            if best_drop_idx is not None:
-                current_rules = current_rules[:best_drop_idx] + current_rules[best_drop_idx + 1:]
-                current_f1 = best_drop_f1
-                improved = True
-
-        return current_rules
-
-    @property
-    def _f1_kwargs(self) -> dict:
-        """Return f1_score kwargs: 'binary' with pos_label='1' during OvR, 'macro' otherwise."""
-        if getattr(self, "_ovr_binary_f1_", False):
-            return {"average": "binary", "pos_label": "1", "zero_division": 0}
-        return {"average": "macro", "zero_division": 0}
-
-    def _evaluate_rule_list_f1(
-        self,
-        rules: list[Rule],
-        X: np.ndarray,
-        y_idx: np.ndarray,
-        eval_idx: np.ndarray,
-    ) -> float:
-        ruleset = self._build_ruleset(rules)
-        y_pred = predict_from_ruleset(ruleset, X[eval_idx])
-        y_true = np.asarray(self.classes_[y_idx[eval_idx]], dtype=str)
-        y_pred = np.asarray(y_pred, dtype=str)
-        return float(f1_score(y_true, y_pred, **self._f1_kwargs))
-
+    # ------------------------------------------------------------- predict
     def predict(self, X):
-        check_is_fitted(self, "ruleset_")
-        X_valid = np.asarray(check_array(X, dtype=None))
-        return predict_from_ruleset(self.ruleset_, X_valid)
+        check_is_fitted(self)
+        X = check_array(X)
+        return predict_from_ruleset(self.ruleset_, X)
 
     def predict_proba(self, X):
-        check_is_fitted(self, "ruleset_")
-        X_valid = np.asarray(check_array(X, dtype=None))
-        return predict_proba_from_ruleset(self.ruleset_, X_valid)
+        check_is_fitted(self)
+        X = check_array(X)
+        return predict_proba_from_ruleset(self.ruleset_, X)
 
     def to_ruleset(self) -> ScoredRuleSet:
-        check_is_fitted(self, "ruleset_")
+        check_is_fitted(self)
         return self.ruleset_
 
-    def _build_ruleset(self, selected_rules: list[Rule]) -> ScoredRuleSet:
-        rules = list(selected_rules)
-        if self.include_default_rule:
-            rules.append(
-                Rule(
-                    atoms=[],
-                    scores=list(self._default_scores_),
-                    rule_id="rulelcs_default_prior",
-                    metadata={"source": "rulelcs", "kind": "class_prior"},
-                )
+    # ------------------------------------------------------------ internal
+    def _build_feature_info(self, X: np.ndarray) -> list[dict]:
+        """Analyse features: detect numeric vs categorical."""
+        info: list[dict] = []
+        for fi in range(X.shape[1]):
+            col = X[:, fi]
+            unique_vals = np.unique(col)
+            n_unique = len(unique_vals)
+            # Categorical heuristic: integer-valued and low cardinality
+            is_cat = (
+                n_unique <= self.low_cardinality_threshold
+                and np.all(col == np.round(col))
             )
-        return ScoredRuleSet(
-            class_labels=self.classes_.tolist(),
-            feature_names=self.feature_names_in_.tolist(),
-            aggregation=AggregationSpec(type=self.aggregation, temperature=self.temperature),
-            rules=rules,
-            metadata={},
-        )
-
-    def _train_val_indices(self, y_idx: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
-        if self.validation_fraction <= 0.0:
-            return np.arange(len(y_idx)), None
-        _, counts = np.unique(y_idx, return_counts=True)
-        if np.any(counts < 2):
-            return np.arange(len(y_idx)), None
-        train_idx, val_idx = train_test_split(
-            np.arange(len(y_idx)),
-            test_size=float(self.validation_fraction),
-            random_state=self.random_state,
-            stratify=y_idx,
-        )
-        return np.asarray(train_idx), np.asarray(val_idx)
-
-    def _build_candidate_rules(
-        self,
-        X: np.ndarray,
-        y_idx: np.ndarray,
-        n_classes: int,
-    ) -> list[_CandidateRule]:
-        candidates: list[_CandidateRule] = []
-        seen_signatures: set[tuple[tuple[str, str, str], ...]] = set()
-
-        for feature_idx in range(X.shape[1]):
-            column = X[:, feature_idx]
-            feature_name = str(self.feature_names_in_[feature_idx])
-
-            # -- Low-cardinality detection: numeric features with few
-            #    unique values are *also* treated as categorical so that
-            #    equality splits (== value) are generated in addition to
-            #    the standard threshold splits (<= / >).
-            col_arr = np.asarray(column)
-            is_numeric = np.issubdtype(col_arr.dtype, np.number)
-            n_unique = len(np.unique(col_arr))
-            is_low_cardinality = (
-                is_numeric and n_unique <= self.low_cardinality_threshold
-            )
-
-            split = self._best_numeric_split(column, y_idx, n_classes)
-            if split is not None:
-                threshold, gain, left_counts, right_counts, left_cov, right_cov = split
-                if gain >= self.min_gain:
-                    candidates.extend(
-                        [
-                            self._candidate_from_rule(
-                                Rule(
-                                    atoms=[Atom(feature=feature_name, op="<=", value=float(threshold))],
-                                    scores=self._distribution_to_scores(left_counts),
-                                    rule_id=f"rulelcs_rule_f{feature_idx}_le",
-                                    metadata={"source": "rulelcs", "gain": float(gain)},
-                                ),
-                                gain,
-                                left_cov,
-                                seen_signatures,
-                            ),
-                            self._candidate_from_rule(
-                                Rule(
-                                    atoms=[Atom(feature=feature_name, op=">", value=float(threshold))],
-                                    scores=self._distribution_to_scores(right_counts),
-                                    rule_id=f"rulelcs_rule_f{feature_idx}_gt",
-                                    metadata={"source": "rulelcs", "gain": float(gain)},
-                                ),
-                                gain,
-                                right_cov,
-                                seen_signatures,
-                            ),
-                        ]
-                    )
-
-                for interval_idx, (interval_gain, low, high, counts, coverage) in enumerate(
-                    self._numeric_interval_splits(column, y_idx, n_classes)
-                ):
-                    if interval_gain < self.min_gain:
-                        continue
-                    candidates.append(
-                        self._candidate_from_rule(
-                            Rule(
-                                atoms=[Atom(feature=feature_name, op="between", value=[float(low), float(high)])],
-                                scores=self._distribution_to_scores(counts),
-                                rule_id=f"rulelcs_rule_f{feature_idx}_between_{interval_idx}",
-                                metadata={"source": "rulelcs", "gain": float(interval_gain)},
-                            ),
-                            interval_gain,
-                            coverage,
-                            seen_signatures,
-                        )
-                    )
-
-                # For high-cardinality numeric features we are done;
-                # for low-cardinality ones fall through to the categorical block.
-                if not is_low_cardinality:
-                    continue
-
-            # -- Categorical / low-cardinality equality splits --
-            if self.enable_categorical_rules or is_low_cardinality:
-                for category_idx, (gain, category, match_counts, coverage) in enumerate(
-                    self._categorical_splits(column, y_idx, n_classes)
-                ):
-                    if gain < self.min_gain:
-                        continue
-                    candidates.append(
-                        self._candidate_from_rule(
-                            Rule(
-                                atoms=[Atom(feature=feature_name, op="==", value=category)],
-                                scores=self._distribution_to_scores(match_counts),
-                                rule_id=f"rulelcs_rule_f{feature_idx}_eq_{category_idx}",
-                                metadata={"source": "rulelcs", "gain": float(gain), "category": category},
-                            ),
-                            gain,
-                            coverage,
-                            seen_signatures,
-                        )
-                    )
-                for group_idx, (gain, group_values, group_counts, coverage) in enumerate(
-                    self._categorical_group_splits(column, y_idx, n_classes)
-                ):
-                    if gain < self.min_gain:
-                        continue
-                    candidates.append(
-                        self._candidate_from_rule(
-                            Rule(
-                                atoms=[Atom(feature=feature_name, op="in", value=group_values)],
-                                scores=self._distribution_to_scores(group_counts),
-                                rule_id=f"rulelcs_rule_f{feature_idx}_in_{group_idx}",
-                                metadata={"source": "rulelcs", "gain": float(gain), "group": group_values},
-                            ),
-                            gain,
-                            coverage,
-                            seen_signatures,
-                        )
-                    )
-
-        candidates = [c for c in candidates if c is not None]
-        candidates.sort(key=lambda c: (c.gain, c.coverage, -len(c.rule.atoms)), reverse=True)
-
-        feat_name_to_idx = {str(fn): idx for idx, fn in enumerate(self.feature_names_in_)}
-
-        # -- Conjunctive candidates: combine top single-atom rules from
-        #    different features into 2-atom conjunctions.  This is essential
-        #    for datasets where individual features are weak (e.g. categorical
-        #    multi-class datasets like car_evaluation).
-        single_atom = [c for c in candidates if len(c.rule.atoms) == 1]
-        n_conj_base = min(len(single_atom), max(6, int(self.candidate_pool_size // 4)))
-        top_singles = single_atom[:n_conj_base]
-        conj2_candidates: list[_CandidateRule] = []
-        for i in range(len(top_singles)):
-            for j in range(i + 1, len(top_singles)):
-                a_i = top_singles[i].rule.atoms[0]
-                a_j = top_singles[j].rule.atoms[0]
-                if a_i.feature == a_j.feature:
-                    continue
-                c = self._make_conjunction_candidate(
-                    [a_i, a_j], X, y_idx, n_classes, feat_name_to_idx,
-                    (top_singles[i].gain + top_singles[j].gain) / 2.0,
-                    seen_signatures,
-                )
-                if c is not None:
-                    conj2_candidates.append(c)
-
-        candidates.extend(conj2_candidates)
-
-        # -- 3-atom conjunctions: extend top 2-atom rules with an extra
-        #    single atom from a different feature.  This is critical for
-        #    minority classes on datasets like car_evaluation where 3–4
-        #    feature interactions determine class membership.
-        conj3_candidates: list[_CandidateRule] = []
-        top_conj2 = sorted(conj2_candidates, key=lambda c: c.gain, reverse=True)[
-            : max(4, int(self.candidate_pool_size // 6))
-        ]
-        for c2 in top_conj2:
-            used_features = {str(a.feature) for a in c2.rule.atoms}
-            for s in top_singles:
-                a_s = s.rule.atoms[0]
-                if str(a_s.feature) in used_features:
-                    continue
-                atoms3 = list(c2.rule.atoms) + [a_s]
-                c3 = self._make_conjunction_candidate(
-                    atoms3, X, y_idx, n_classes, feat_name_to_idx,
-                    c2.gain * 0.9,  # slight discount for deeper rules
-                    seen_signatures,
-                )
-                if c3 is not None:
-                    conj3_candidates.append(c3)
-
-        candidates.extend(conj3_candidates)
-        candidates.sort(key=lambda c: (c.gain, c.coverage, -len(c.rule.atoms)), reverse=True)
-        return candidates[: max(1, int(self.candidate_pool_size))]
-
-    def _make_conjunction_candidate(
-        self,
-        atoms: list[Atom],
-        X: np.ndarray,
-        y_idx: np.ndarray,
-        n_classes: int,
-        feat_name_to_idx: dict[str, int],
-        base_gain: float,
-        seen_signatures: set[tuple[tuple[str, str, str], ...]],
-    ) -> _CandidateRule | None:
-        """Create a conjunctive candidate rule from a list of atoms."""
-        mask = np.ones(X.shape[0], dtype=bool)
-        for atom in atoms:
-            feat_idx = feat_name_to_idx.get(str(atom.feature))
-            if feat_idx is None:
-                continue
-            col = X[:, feat_idx]
-            if atom.op == "==":
-                mask &= col == atom.value
-            elif atom.op == "<=":
-                mask &= col <= atom.value
-            elif atom.op == ">":
-                mask &= col > atom.value
-            elif atom.op == "in":
-                vals = atom.value if isinstance(atom.value, (list, tuple)) else [atom.value]
-                mask &= np.isin(col, vals)
-            elif atom.op == "between":
-                lo, hi = atom.value[0], atom.value[1]
-                mask &= (col >= lo) & (col <= hi)
-
-        coverage = int(mask.sum())
-        if coverage < max(1, self.min_samples_leaf):
-            return None
-
-        conj_y = y_idx[mask]
-        counts = np.bincount(conj_y, minlength=n_classes).astype(float)
-
-        feat_tag = "_".join(str(a.feature) for a in atoms)
-        rule = Rule(
-            atoms=atoms,
-            scores=self._distribution_to_scores(counts),
-            rule_id=f"rulelcs_conj_{feat_tag}",
-            metadata={"source": "rulelcs", "gain": float(base_gain), "kind": "conjunction"},
-        )
-        return self._candidate_from_rule(rule, base_gain, coverage, seen_signatures)
-
-    def _candidate_from_rule(
-        self,
-        rule: Rule,
-        gain: float,
-        coverage: int,
-        seen_signatures: set[tuple[tuple[str, str, str], ...]],
-    ) -> _CandidateRule | None:
-        signature = tuple(
-            (str(atom.feature), atom.op, repr(atom.value))
-            for atom in rule.atoms
-        )
-        if signature in seen_signatures:
-            return None
-        seen_signatures.add(signature)
-        return _CandidateRule(gain=float(gain), rule=rule, coverage=int(coverage))
-
-    def _neighbors(self, state: tuple[int, ...], n_candidates: int) -> list[tuple[int, ...]]:
-        neighbors: set[tuple[int, ...]] = set()
-        state_set = set(state)
-        candidate_order = list(range(n_candidates))
-
-        if len(state) < max(1, int(self.max_rules)):
-            # Consider a wider range so mid-tier candidates can be combined
-            n_add = min(n_candidates, max(4 * max(1, int(self.max_rules)), int(self.beam_width) * 2))
-            for idx in candidate_order[:n_add]:
-                if idx not in state_set:
-                    neighbors.add(tuple(sorted((*state, idx))))
-
-        for idx in state:
-            reduced = tuple(v for v in state if v != idx)
-            neighbors.add(reduced)
-
-        if state:
-            absent = [idx for idx in candidate_order if idx not in state_set][: max(4, int(self.beam_width))]
-            for drop_idx in state[: max(1, len(state))]:
-                for add_idx in absent:
-                    swapped = tuple(sorted([v for v in state if v != drop_idx] + [add_idx]))
-                    if len(swapped) <= max(1, int(self.max_rules)):
-                        neighbors.add(swapped)
-
-        return [neighbor for neighbor in neighbors if len(neighbor) <= max(1, int(self.max_rules))]
-
-    def _state_score(
-        self,
-        state: tuple[int, ...],
-        candidates: list[_CandidateRule],
-        X: np.ndarray,
-        y_idx: np.ndarray,
-        train_idx: np.ndarray,
-        val_idx: np.ndarray | None,
-    ) -> float:
-        selected_rules = [candidates[idx].rule for idx in state]
-        ruleset = self._build_ruleset(selected_rules)
-        eval_idx = val_idx if val_idx is not None else train_idx
-
-        # -- Windowing (BioHEL-inspired): stochastic subset evaluation --
-        wf = float(self.window_fraction)
-        if 0.0 < wf < 1.0 and eval_idx.size > 10:
-            window_size = max(5, int(round(eval_idx.size * wf)))
-            window_idx = self._rng_.choice(eval_idx, size=window_size, replace=False)
-        else:
-            window_idx = eval_idx
-
-        y_pred = predict_from_ruleset(ruleset, X[window_idx])
-        y_true = np.asarray(self.classes_[y_idx[window_idx]], dtype=str)
-        y_pred = np.asarray(y_pred, dtype=str)
-        f1 = float(f1_score(y_true, y_pred, **self._f1_kwargs))
-        n_rules = len(selected_rules)
-        n_atoms = sum(len(rule.atoms) for rule in selected_rules)
-        complexity = self.complexity_penalty * (
-            n_rules + n_atoms / max(1.0, float(self.max_rules))
-        )
-        coverage_bonus = 0.001 * sum(candidates[idx].coverage for idx in state) / max(1, len(train_idx))
-
-        # -- Token Competition (BioHEL-inspired): penalize rule overlap --
-        token_penalty = 0.0
-        tc_weight = float(self.token_competition_weight)
-        if tc_weight > 0.0 and len(state) >= 2:
-            # Count how many rules fire per example; penalize multi-coverage
-            fire_count = np.zeros(window_idx.size, dtype=int)
-            for idx in state:
-                rule = candidates[idx].rule
-                # Build a minimal single-rule ruleset to get firing mask
-                single_rs = self._build_ruleset([rule])
-                single_pred = predict_from_ruleset(single_rs, X[window_idx])
-                # A rule "fires" if it changes the prediction from default
-                default_rs = self._build_ruleset([])
-                default_pred = predict_from_ruleset(default_rs, X[window_idx])
-                fires = np.asarray(single_pred, dtype=str) != np.asarray(default_pred, dtype=str)
-                fire_count += fires.astype(int)
-            # Fraction of examples covered by >1 rule
-            overlap_fraction = float((fire_count > 1).mean())
-            token_penalty = tc_weight * overlap_fraction
-
-        return f1 - complexity + coverage_bonus - token_penalty
-
-    def _state_atom_count(self, state: tuple[int, ...], candidates: list[_CandidateRule]) -> int:
-        return sum(len(candidates[idx].rule.atoms) for idx in state)
-
-    def _distribution_to_scores(self, counts: np.ndarray) -> list[float]:
-        if getattr(self, "_ovr_binary_f1_", False) and len(counts) == 2:
-            # OvR contrast scoring: use lift-based scores so that rules
-            # covering regions enriched in the positive class actually
-            # predict class 1 under argmax_sum aggregation.
-            total = float(counts.sum())
-            if total == 0:
-                return [0.0, 0.0]
-            pos_rate = float(counts[1]) / total
-            base_rate = getattr(self, "_ovr_base_rate_", 0.5)
-            if pos_rate > base_rate:
-                # Positive-enriched region → favor class 1
-                lift = min(pos_rate / max(base_rate, 1e-6), 10.0)
-                return [0.0, float(lift)]
+            if is_cat:
+                info.append({
+                    "numeric": False,
+                    "values": set(int(v) for v in unique_vals),
+                    "min": float(col.min()),
+                    "max": float(col.max()),
+                })
             else:
-                # Negative-enriched region → favor class 0
-                lift = min((1.0 - pos_rate) / max(1.0 - base_rate, 1e-6), 10.0)
-                return [float(lift), 0.0]
-        return distribution_to_scores(counts, self.aggregation)
+                info.append({
+                    "numeric": True,
+                    "values": set(),
+                    "min": float(col.min()),
+                    "max": float(col.max()),
+                })
+        return info
 
-    def _best_numeric_split(self, feature_values, y_idx: np.ndarray, n_classes: int):
-        return best_numeric_split(
-            feature_values, y_idx, n_classes,
-            min_samples_leaf=self.min_samples_leaf,
-            max_thresholds_per_feature=self.max_thresholds_per_feature,
+    def _build_ruleset(
+        self,
+        rules: list[_Individual],
+        default_class: int,
+    ) -> ScoredRuleSet:
+        """Convert internal rules to ScoredRuleSet."""
+        n_classes = len(self.classes_)
+        scored_rules: list[Rule] = []
+
+        for ridx, ind in enumerate(rules):
+            atoms: list[Atom] = []
+            for p in ind.predicates:
+                fname = self.feature_names_in_[p.feature_idx]
+                if p.is_numeric:
+                    atoms.append(Atom(
+                        feature=fname,
+                        op="between",
+                        value=[float(p.lo), float(p.hi)],
+                    ))
+                else:
+                    if len(p.allowed) == 1:
+                        atoms.append(Atom(
+                            feature=fname,
+                            op="==",
+                            value=int(next(iter(p.allowed))),
+                        ))
+                    else:
+                        atoms.append(Atom(
+                            feature=fname,
+                            op="in",
+                            value=[int(v) for v in sorted(p.allowed)],
+                        ))
+
+            # Scores: high for the predicted class
+            scores = [0.0] * n_classes
+            class_idx = list(self.classes_).index(ind.class_value)
+            scores[class_idx] = 1.0
+            scored_rules.append(Rule(
+                atoms=atoms,
+                scores=scores,
+                rule_id=f"R{ridx}",
+            ))
+
+        # Default rule
+        if self.include_default_rule:
+            default_scores = [0.0] * n_classes
+            default_idx = list(self.classes_).index(default_class)
+            default_scores[default_idx] = 1.0
+            scored_rules.append(Rule(
+                atoms=[],
+                scores=default_scores,
+                rule_id="default",
+                metadata={"default_rule": True},
+            ))
+
+        return ScoredRuleSet(
+            class_labels=[int(c) for c in self.classes_],
+            rules=scored_rules,
+            feature_names=list(self.feature_names_in_),
+            aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
+            metadata={
+                "estimator": "RuleLCSClassifier",
+                "algorithm": "BioHEL-inspired IRL",
+                "n_rules": len(rules),
+                "default_class": int(default_class),
+            },
         )
-
-    def _categorical_splits(self, feature_values, y_idx: np.ndarray, n_classes: int):
-        return categorical_splits(
-            feature_values, y_idx, n_classes,
-            min_samples_leaf=self.min_samples_leaf,
-        )
-
-    def _numeric_interval_splits(self, feature_values, y_idx: np.ndarray, n_classes: int):
-        return numeric_interval_splits(
-            feature_values, y_idx, n_classes,
-            min_samples_leaf=self.min_samples_leaf,
-            max_thresholds_per_feature=self.max_thresholds_per_feature,
-            max_results=2,
-        )
-
-    def _categorical_group_splits(self, feature_values, y_idx: np.ndarray, n_classes: int):
-        return categorical_group_splits(
-            feature_values, y_idx, n_classes,
-            min_samples_leaf=self.min_samples_leaf,
-            max_results=2,
-        )
-
-    @staticmethod
-    def _gini(counts: np.ndarray) -> float:
-        return gini(counts)
-
-
-

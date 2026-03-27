@@ -91,12 +91,17 @@ class TestThresholdBudget:
     """max_thresholds_per_feature for native backends."""
 
 
-    def test_rulelcs_threshold_cap_fit(self, iris_data):
-        """RuleLCSClassifier with max_thresholds_per_feature fits OK."""
+    def test_rulelcs_fit(self, iris_data):
+        """RuleLCSClassifier (BioHEL) fits OK via wrapper."""
         X, y = iris_data
         clf = ScoredRuleSetClassifier(
             backend="rulelcs",
-            backend_params={"max_thresholds_per_feature": 3, "max_rules": 4},
+            backend_params={
+                "population_size": 50,
+                "n_iterations": 10,
+                "n_repetitions": 1,
+                "max_rules": 4,
+            },
             random_state=0,
         )
         clf.fit(X, y)

@@ -50,7 +50,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     """
 
     # Backends whose estimator exposes `max_thresholds_per_feature` attribute
-    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "rulelcs", "rulelcs2", "rulenln", "logicgp", "rulegp", "rulegp2"})
+    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "rulelcs", "rulenln", "logicgp", "rulegp", "rulegp2"})
 
     def __init__(
         self,
@@ -164,14 +164,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "LogicGPClassifier has no 'ruleset_' after fit(). "
                     "Please check logicgp.py for errors."
                 )
-        elif backend_lower == "rulelcs":
-            if hasattr(self.estimator_, "ruleset_"):
-                self.ruleset_ = self.estimator_.ruleset_
-            else:
-                raise RuntimeError(
-                    "RuleLCSClassifier has no 'ruleset_' after fit(). "
-                    "Please check rulelcs.py for errors."
-                )
+
         elif backend_lower == "rulenln":
             if hasattr(self.estimator_, "ruleset_"):
                 self.ruleset_ = self.estimator_.ruleset_
@@ -204,13 +197,13 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "RuleGP2Classifier has no 'ruleset_' after fit(). "
                     "Please check rulegp2.py for errors."
                 )
-        elif backend_lower == "rulelcs2":
+        elif backend_lower == "rulelcs":
             if hasattr(self.estimator_, "ruleset_"):
                 self.ruleset_ = self.estimator_.ruleset_
             else:
                 raise RuntimeError(
-                    "RuleLCS2Classifier has no 'ruleset_' after fit(). "
-                    "Please check rulelcs2.py for errors."
+                    "RuleLCSClassifier has no 'ruleset_' after fit(). "
+                    "Please check rulelcs.py for errors."
                 )
         else:
             # Tree-basierte Transformation (CART, HS)
