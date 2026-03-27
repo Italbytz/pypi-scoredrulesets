@@ -1,4 +1,4 @@
-"""Paper-Benchmark: 9 rule-learning-Methoden auf 10 selected datasets.
+"""Paper-Benchmark: 7 rule-learning-Methoden auf 10 selected datasets.
 
 The goal of this benchmark is a direct method comparison for publication.
 Estimators are shown with concise display names so they can be used directly
@@ -9,9 +9,7 @@ Estimators (short name -> internal wrapper):
     RuleKit         <- wrapper_rulekit_native
     ExSTraCS        <- wrapper_exstracs
     ExSTraCS (LRC)  <- wrapper_exstracs_compact (Lossy Rule Compaction)
-    logicGP         <- wrapper_logicgp_strong
     ruleGP          <- wrapper_rulegp_strong
-    ruleGP2         <- wrapper_rulegp2_strong
     ruleNLN         <- wrapper_rulenln_strong
     ruleLCS         <- wrapper_rulelcs_strong
 
@@ -124,24 +122,6 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
             random_state=0,
         ),
     ),
-    "paper_logicGP": EstimatorSpec(
-        name="logicGP",
-        factory=lambda: ScoredRuleSetClassifier(
-            backend="logicgp",
-            backend_params={
-                "trainer": "rlcw",
-                "f1_averaging": "macro",
-                "max_generations": 500,
-                "stagnation_generations": 80,
-                "population_size": 120,
-                "n_adaptations_per_gen": 20,
-                "n_bins": 5,
-                "max_fit_seconds": 240,
-                "random_state": 0,
-            },
-            random_state=0,
-        ),
-    ),
     "paper_ruleGP": EstimatorSpec(
         name="ruleGP",
         factory=lambda: ScoredRuleSetClassifier(
@@ -155,117 +135,6 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
                 "early_stopping_rounds": 30,
                 "max_fit_seconds": 240,
                 "enable_compaction": True,
-            },
-            random_state=0,
-        ),
-    ),
-    "paper_ruleGP2": EstimatorSpec(
-        name="ruleGP2",
-        factory=lambda: ScoredRuleSetClassifier(
-            backend="rulegp2",
-            backend_params={
-                "f1_averaging": "macro",
-                "max_generations": 500,
-                "stagnation_generations": 80,
-                "population_size": 120,
-                "n_adaptations_per_gen": 20,
-                "tournament_size": 3,
-                "max_rules": 12,
-                "max_atoms_per_rule": 5,
-                "max_fit_seconds": 240,
-            },
-            random_state=0,
-        ),
-    ),
-    "paper_ruleGP2_ablate_stop_consolidated": EstimatorSpec(
-        name="ruleGP2 (stop=consolidated)",
-        factory=lambda: ScoredRuleSetClassifier(
-            backend="rulegp2",
-            backend_params={
-                "f1_averaging": "macro",
-                "max_generations": 500,
-                "stagnation_generations": 80,
-                "early_stopping_metric": "consolidated",
-                "population_size": 120,
-                "n_adaptations_per_gen": 20,
-                "max_rules": 12,
-                "max_atoms_per_rule": 5,
-                "max_fit_seconds": 240,
-            },
-            random_state=0,
-        ),
-    ),
-    "paper_ruleGP2_ablate_tournament2": EstimatorSpec(
-        name="ruleGP2 (tournament=2)",
-        factory=lambda: ScoredRuleSetClassifier(
-            backend="rulegp2",
-            backend_params={
-                "f1_averaging": "macro",
-                "max_generations": 500,
-                "stagnation_generations": 80,
-                "early_stopping_metric": "f1",
-                "population_size": 120,
-                "n_adaptations_per_gen": 20,
-                "tournament_size": 2,
-                "max_rules": 12,
-                "max_atoms_per_rule": 5,
-                "max_fit_seconds": 240,
-            },
-            random_state=0,
-        ),
-    ),
-    "paper_ruleGP2_ablate_tournament3": EstimatorSpec(
-        name="ruleGP2 (tournament=3)",
-        factory=lambda: ScoredRuleSetClassifier(
-            backend="rulegp2",
-            backend_params={
-                "f1_averaging": "macro",
-                "max_generations": 500,
-                "stagnation_generations": 80,
-                "early_stopping_metric": "f1",
-                "population_size": 120,
-                "n_adaptations_per_gen": 20,
-                "tournament_size": 3,
-                "max_rules": 12,
-                "max_atoms_per_rule": 5,
-                "max_fit_seconds": 240,
-            },
-            random_state=0,
-        ),
-    ),
-    "paper_ruleGP2_ablate_tournament4": EstimatorSpec(
-        name="ruleGP2 (tournament=4)",
-        factory=lambda: ScoredRuleSetClassifier(
-            backend="rulegp2",
-            backend_params={
-                "f1_averaging": "macro",
-                "max_generations": 500,
-                "stagnation_generations": 80,
-                "early_stopping_metric": "f1",
-                "population_size": 120,
-                "n_adaptations_per_gen": 20,
-                "tournament_size": 4,
-                "max_rules": 12,
-                "max_atoms_per_rule": 5,
-                "max_fit_seconds": 240,
-            },
-            random_state=0,
-        ),
-    ),
-    "paper_ruleGP2_ablate_adapt40": EstimatorSpec(
-        name="ruleGP2 (adapt=40)",
-        factory=lambda: ScoredRuleSetClassifier(
-            backend="rulegp2",
-            backend_params={
-                "f1_averaging": "macro",
-                "max_generations": 500,
-                "stagnation_generations": 80,
-                "early_stopping_metric": "f1",
-                "population_size": 120,
-                "n_adaptations_per_gen": 40,
-                "max_rules": 12,
-                "max_atoms_per_rule": 5,
-                "max_fit_seconds": 240,
             },
             random_state=0,
         ),
@@ -396,7 +265,7 @@ def main(
     timeout_seconds: float | None = 300.0,
     checkpoint_path: str | Path | None = "benchmarks/checkpoint_paper.jsonl",
     output_dir: str | Path = "benchmarks/paper",
-    console_title: str = "PAPER BENCHMARK: 9 methods, 10 datasets",
+    console_title: str = "PAPER BENCHMARK: 7 methods, 10 datasets",
     report_title: str = "ScoredRuleSets Paper Benchmark - Rule-Based Classifiers Comparison",
 ):
     """Run the paper benchmark and generate all reports."""
@@ -517,7 +386,7 @@ def main(
             "repeats": repeats,
             "timeout_seconds": timeout_display,
             "design": (
-                f"8 Rule-Based Classifiers x {len(ds_names)} Datasets "
+                f"7 Rule-Based Classifiers x {len(ds_names)} Datasets "
                 f"({len([d for d in ds_names if d.startswith('sklearn_') or d.startswith('uci_')])} real-world, "
                 f"{len([d for d in ds_names if d.startswith('synth_')])} synthetic), "
                 f"{repeats} repeats"
@@ -552,7 +421,7 @@ def main(
             "efficiency_pdf": str(eff_pdf.name),
         },
         notes=[
-            "Paper Benchmark: 8 rule-based classifiers on 10 selected datasets.",
+            "Paper Benchmark: 7 rule-based classifiers on 10 selected datasets.",
             "Real-world datasets: sklearn_breast_cancer, sklearn_wine, "
             "uci_car_evaluation, uci_heart_disease.",
             "Synthetic datasets chosen for concept diversity: DNF rules, overlapping "
@@ -602,7 +471,7 @@ def main(
             "efficiency_pdf": str(eff_pdf.name),
         },
         notes=[
-            "Paper Benchmark: 8 rule-based classifiers on 10 selected datasets.",
+            "Paper Benchmark: 7 rule-based classifiers on 10 selected datasets.",
             f"Timeout per run: {timeout_display}. {repeats} repeats.",
         ],
     )
@@ -637,9 +506,9 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Paper-Benchmark: 9 rule-based classifiers on 10 selected datasets.",
+        description="Paper-Benchmark: 7 rule-based classifiers on 10 selected datasets.",
         epilog=(
-            "Estimators: HS, RuleKit, ExSTraCS, ExSTraCS (LRC), logicGP, ruleGP, ruleGP2, ruleNLN, ruleLCS. "
+            "Estimators: HS, RuleKit, ExSTraCS, ExSTraCS (LRC), ruleGP, ruleNLN, ruleLCS. "
             "10 Datasets: 4 real-world (sklearn/UCI) + 6 synthetic."
         ),
     )
