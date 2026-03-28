@@ -1,0 +1,695 @@
+\documentclass[dvipsnames,format=sigconf,anonymous=false,review=false]{acmart}
+
+\usepackage{enumitem}  
+\usepackage{dsfont}
+\usepackage{listings}
+\usepackage[mode=buildnew]{standalone}% requires -shell-escape
+\usepackage{tikz}
+
+%%
+%% \BibTeX command to typeset BibTeX logo in the docs
+\AtBeginDocument{%
+  \providecommand\BibTeX{{%
+    Bib\TeX}}}
+
+%% Rights management information.  This information is sent to you
+%% when you complete the rights form.  These commands have SAMPLE
+%% values in them; it is your responsibility as an author to replace
+%% the commands and values with those provided to you when you
+%% complete the rights form.
+
+\copyrightyear{2025}
+\acmYear{2025}
+\setcopyright{acmlicensed}\acmConference[GECCO '25 Companion]{Genetic and Evolutionary Computation Conference}{July 14--18, 2025}{Malaga, Spain}
+\acmBooktitle{Genetic and Evolutionary Computation Conference (GECCO '25 Companion), July 14--18, 2025, Malaga, Spain}
+\acmDOI{10.1145/3712255.3734300}
+\acmISBN{979-8-4007-1464-1/2025/07}
+
+%%
+%% Submission ID.
+%% Use this when submitting an article to a sponsored event. You'll
+%% receive a unique submission ID from the organizers
+%% of the event, and this ID should be used as the parameter to this command.
+%%\acmSubmissionID{123-A56-BU3}
+
+%%
+%% For managing citations, it is recommended to use bibliography
+%% files in BibTeX format.
+%%
+%% You can then either use BibTeX with the ACM-Reference-Format style,
+%% or BibLaTeX with the acmnumeric or acmauthoryear sytles, that include
+%% support for advanced citation of software artefact from the
+%% biblatex-software package, also separately available on CTAN.
+%%
+%% Look at the sample-*-biblatex.tex files for templates showcasing
+%% the biblatex styles.
+%%
+
+%%
+%% The majority of ACM publications use numbered citations and
+%% references.  The command \citestyle{authoryear} switches to the
+%% "author year" style.
+%%
+%% If you are preparing content for an event
+%% sponsored by ACM SIGGRAPH, you must use the "author year" style of
+%% citations and references.
+%% Uncommenting
+%% the next command will enable that style.
+%\citestyle{acmauthoryear}
+
+\usepackage[algoruled,lined,linesnumbered,algosection]{algorithm2e}
+%\newtheorem{algorithm}{Algorithm}
+
+%%
+%% end of the preamble, start of the body of the document source.
+
+\begin{document}
+\lstset{language=[Sharp]C,
+  basicstyle=\tiny\ttfamily,
+  keywordstyle=\color{blue},
+  commentstyle=\color{OliveGreen},
+  stringstyle=\color{red},
+  showstringspaces=false,
+  %numbers=left,
+  %numberstyle=\tiny\color{gray},
+  %stepnumber=1,
+  %numbersep=5pt,
+  tabsize=2,
+  breaklines=true,
+  frame=lines,
+  columns=fullflexible,
+}
+\lstset{emph={var},emphstyle=\color{blue}}
+%\lstset{emph={LogicGP*Trainer},emphstyle=\color{blue}}
+\title{logicGP -- A Framework for Literal Based Classification with a Focus on Software Architecture and Open Source Implementation} 
+
+%%
+%% The "author" command and its associated commands are used to define
+%% the authors and their affiliations.
+%% Of note is the shared affiliation of the first two authors, and the
+%% "authornote" and "authornotemark" commands
+%% used to denote shared contribution to the research.
+
+\author{Robin Nunkesser}
+\affiliation{%
+  \institution{Hamm-Lippstadt University of Applied Sciences}
+  \city{Hamm}
+  \country{Germany}}
+\email{robin.nunkesser@hshl.de}
+
+
+
+%%
+%% By default, the full list of authors will be used in the page
+%% headers. Often, this list is too long, and will overlap
+%% other information printed in the page headers. This command allows
+%% the author to define a more concise list
+%% of authors' names for this purpose.
+%\renewcommand{\shortauthors}{Trovato et al.}
+
+%%
+%% The abstract is a short summary of the work to be presented in the
+%% article.
+\begin{abstract}
+  This paper presents a Genetic Programming based framework called logicGP for classification with literal based models and the open source software created and used for the implementation. The used prediction model is a linear combination of logical monomials. The underlying algorithm is designed to be interpretable and to allow for a high degree of predictive ability. The implementation of the algorithm is done in C\# with open source code and is designed for high compatibility with Microsoft's ML.NET. The algorithm is presented as an extensible framework and different parameterizations for different tasks are discussed. Additionally, the paper presents the open source code created for the framework and discusses the software architecture used. The algorithm is tested on simulated data for binary classification with three categories (inspired by the analysis of SNP data) and on selected real data for multiclass classification. The experiments show that the algorithm is able to achieve a high degree of predictive ability while maintaining a high degree of interpretability. %The algorithm is designed to be flexible and extendable and to allow for a wide range of applications.
+\end{abstract}
+
+%%
+%% The code below is generated by the tool at http://dl.acm.org/ccs.cfm.
+%% Please copy and paste the code instead of the example below.
+%%
+  
+  
+
+\begin{CCSXML}
+  <ccs2012>
+  <concept>
+      <concept_id>10010147.10010257.10010258.10010259.10010263</concept_id>
+      <concept_desc>Computing methodologies~Supervised learning by classification</concept_desc>
+      <concept_significance>500</concept_significance>
+      </concept>
+  <concept>
+      <concept_id>10010147.10010257.10010293.10003660</concept_id>
+      <concept_desc>Computing methodologies~Classification and regression trees</concept_desc>
+      <concept_significance>500</concept_significance>
+      </concept>
+  <concept>
+      <concept_id>10011007.10011074.10011092.10011782.10011813</concept_id>
+      <concept_desc>Software and its engineering~Genetic programming</concept_desc>
+      <concept_significance>500</concept_significance>
+      </concept>
+  <concept>
+      <concept_id>10010405.10010444.10010450</concept_id>
+      <concept_desc>Applied computing~Bioinformatics</concept_desc>
+      <concept_significance>300</concept_significance>
+      </concept>
+  <concept>
+      <concept_id>10011007.10011006.10011072</concept_id>
+      <concept_desc>Software and its engineering~Software libraries and repositories</concept_desc>
+      <concept_significance>100</concept_significance>
+      </concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Computing methodologies~Supervised learning by classification}
+\ccsdesc[500]{Computing methodologies~Classification and regression trees}
+\ccsdesc[500]{Software and its engineering~Genetic programming}
+\ccsdesc[300]{Applied computing~Bioinformatics}
+\ccsdesc[100]{Software and its engineering~Software libraries and repositories}
+
+%%
+%% Keywords. The author(s) should pick words that accurately describe
+%% the work being presented. Separate the keywords with commas.
+  \keywords{Genetic Programming, Classification, Interpretable Machine Learning, Open Source, SNP, Bioinformatics, ML.NET}
+
+%\received{20 February 2007}
+%\received[revised]{12 March 2009}
+%\received[accepted]{5 June 2009}
+
+%%
+%% This command processes the author and affiliation and title
+%% information and builds the first part of the formatted document.
+\maketitle
+
+\section{Introduction}
+
+\citet{10.1093/bioinformatics/btm522} introduce the Genetic Programming for Association Studies (GPAS) algorithm for association studies on Single Nucleotide Polymorphism (SNP) data (SNPs are the most common type of genetic variation in humans) and additionally propose to use GPAS as a classification algorithm for binary classification of ordinal data. Possible extensions of the GPAS algorithm for further applications are discussed in \cite{Nunkesser2008b,bioinformatics24}. %To the best of our knowledge, GPAS was the first algorithm using disjunctive normal form (disjuncts of conjunctions of literals) for classification.
+
+This paper builds upon the concept of extending GPAS and realizes it through the development of a framework called logicGP, which is optimized for categorical and ordinal data and designed for binary and multiclass classification. logicGP is designed to be flexible and extendable and to allow for a wide range of applications. It is based on the idea of using Genetic Programming (GP) to evolve literal based models. The algorithm emphasizes interpretability while maintaining a high degree of predictive accuracy. It is implemented in C\# with open source code to ensure seamless integration with Microsoft's ML.NET framework \cite{10.1145/3292500.3330667} and to allow the use and extension of the algorithm for interested parties.
+
+\citet{lau_logicdt_2024} show that applications like the classification of SNP data benefit from interpretable machine learning algorithms and that existing algorithms are not always able to provide the desired level of interpretability and predictive performance. \citet{bioinformatics24} shows that GPAS and logicDT \cite{lau_logicdt_2024} are a very good choice to achieve a high degree of interpretability and predictive performance for the classification of SNP data. logicGP is designed to be a generalization of the GPAS algorithm and to provide a general framework for classification with literal based models. It maintains the performance of GPAS and logicDT for the classification of SNP data and is designed to be used for a wide range of applications and to also outperform other state of the art classification algorithms on these applications in terms of interpretability and predictive performance.   
+
+The remainder of this paper is organized as follows: Section \ref{sec:relatedwork} reviews related work. Section \ref{sec:logicgp} introduces the logicGP algorithm framework. Section \ref{sec:trainers} discusses three parameterizations of logicGP for different tasks. Section \ref{sec:implementation} details the implementation of logicGP with a focus on created and used open source code. Section \ref{sec:exmperiments} presents experimental results on real and simulated data for binary and multiclass classification. Section \ref{sec:outlook} offers an outlook on future work and a conclusion.
+
+
+\section{Related Work}\label{sec:relatedwork}
+
+This paper builds on the work of \citet{Nunkesser2008b,bioinformatics24} and implements part of the outlook contained therein. Therewith, it expands and generalizes the highly interpretable GPAS algorithm presented in \citet{10.1093/bioinformatics/btm522} (for an overview of principles in interpretable machine learning, we refer to \citet{RudinEtAlSurvey2022}). %GPAS is primarily designed for SNP data. 
+
+Relevant topics for related work in this regard are algorithms for SNP data, more general interpretable classification algorithms, and GP algorithms for classification.
+
+%\subsection{Classification of SNP Data}
+
+The work of \citet{5728791} offers a review of methods for identifying SNP interactions. \citet{lau_logicdt_2024} propose logicDT as a new algorithm for SNP data. Further more general classification methods for similar applications are:  tree-based statistical learning methods such as decision trees, random forests, or logic regression applied in \citet{https://doi.org/10.1002/gepi.20041,winham_snp_2012,RUCZINSKI2004178}, for example. \citet{lau_logicdt_2024} and \citet{bioinformatics24} show that logicDT and GPAS are a very good choice for the classification of SNP data. As this paper focuses on the generalization of the GPAS algorithm, logicDT is the main other algorithm for comparison.
+
+%the Perceptron Algorithm presented in \citet{freund_large_1999}
+%Parallel Stochastic Gradient Descent presented in \citet{maleki2017parallelstochasticgradientdescent}
+
+%\subsection{General Classification Algorithms}
+
+The conducted experiments additionally compare logicGP with algorithms implemented in ML.NET. They represent a good choice of state of the art classification algorithms. The integrated algorithms are mainly the Stochastic Dual Coordinate Ascent (SDCA) method presented in \citet{10.1145/2086737.2086743,10.5555/2567709.2502598}, L-BFGS  presented in \citet{liu_limited_1989}, Gradient Boosting Decision Tree presented in \citet{10.5555/3294996.3295074}, and Fast Forest based on \citet{JMLR:v7:meinshausen06a}. %The experiments in this paper are intended to show the performance of logicGP in comparison to state of the art classification algorithms for other domains as SNP data. 
+
+%\subsection{Classification with Genetic Programming}
+
+Apart from the above-mentioned methods there are many other methods for classification that use GP. \citet{5340522} give an extensive overview. \citet{9965435} provide a survey focussing on interpretability of GP models. \citet{RIVERALOPEZ2022101006} provide a survey focussing on Decision Trees. \citet{Korns2019,10.1145/3520304.3528922} compare different GP algorithms for classification with a focus on Symbolic Regression. 
+
+
+\section{logicGP}\label{sec:logicgp}
+
+The underlying GPAS algorithm was introduced in \citet{10.1093/bioinformatics/btm522} and was originally designed for association studies on SNP data. It was presented in a more general form with a prediction model of multiple-valued input, binary-valued output functions. This prediction model is restricted to logic expressions that are disjunctions of one or more monomials, where a monomial is a single literal or a conjunction of literals \citep[see e.g.\ ][]{10.5555/1625135.1625242}. Given a vector of inputs $X^T=(X_1,X_2,\ldots,X_p)$, each of which can take $K$ values coded by $1, \ldots, K$, the literals used in GPAS are based on an idea of \citet{DussaultMetzeEtAl1976} and notated as follows: 
+
+ \begin{equation}
+  \left(X_i = k\right)\hspace*{1ex}\text{and}\hspace*{1ex}\left(X_i  \neq k\right)\hspace*{2ex} k=1,\ldots, K,\ i=1,\ldots, p. \label{eq:lit1}
+ \end{equation}
+
+ 
+
+An exemplary GPAS prediction model for e.g.\ $K=p=3$ is: 
+\begin{equation}
+  \hat{G} = (X_{1}=3) \vee (X_{2}\neq1)(X_{3}=1). \label{eq:gpasexample}
+  \end{equation}
+
+An input $x_i$ is classified as positive if the prediction model evaluates to true for $x_i$ and negative otherwise. The GPAS algorithm is designed to evolve such prediction models.
+
+\citet{bioinformatics24} proposes to use the ideas of the GPAS algorithm for a more general prediction model, keeping literals and monomials as the basic building blocks for a \emph{literal based classification}. The resulting new algorithm is presented in the following. The new algorithm generalizes the GPAS algorithm for general data and multiclass classification. 
+
+Microsoft's ML.NET uses the concept of \emph{pipelines} and \emph{trainers}, which we also use. A trainer is a combination of a parameterized algorithm and a task and typically central part of a pipeline with additional pre- and postprocessing of the data. The tasks we consider here are binary classification and multiclass classification. In this paper we will present different trainers based on logicGP. Future work will provide further parameterizations for different types of data and classification tasks. Due to the open source implementation of logicGP, it is easy to create new trainers for different tasks.  
+
+Let us consider a vector of inputs $X^T=(X_1,X_2,\ldots,X_p)$, each of which can take $K_i$ values coded by $1, \ldots, K_i$ and a qualitative output $G$.
+logicGP trainers have the flexibility to use different literals for each variable $X_i$. Continuous variables or variables with a high number of categories can be handled with binning in the pipeline. Let us therefore for the sake of simplicity consider $1, \ldots, K_i$ to be either the categories of $X_i$ or the bins of a binned variable.
+
+As a first step, we will introduce the prediction model of the logicGP algorithm.
+
+\subsection{Prediction Model}
+
+ logicGP also uses logic expression literals that are evaluated to true or false. However, the use of literals is much more flexible. 
+ The most flexible approach is to use the power set of the categories of each variable $X_i$ as literals, which we will also call \emph{full literals}.
+ For each set $s_{i,j}\in \mathcal{P}(\{1, \ldots, K_i\}) \setminus \{\emptyset,\{1, \ldots, K_i\} \} $ one literal 
+ \begin{equation}\label{eq:lit2}
+  \left(X_i \in s_{i,j}\right)
+ \end{equation}
+  is used (this corresponds to the literals defined by \citet{RudellSangiovanni-Vincentelli1987}). Note, that the number of literals used grows exponentially with the number of categories of $X_i$. 
+
+  There are apparent reduction possibilities for ordinal data. As already suggested in \cite{10.1093/bioinformatics/btm522}, for the categories $\{1, \ldots, K_i\}$ of $X_i$ the literals 
+  \begin{equation}\label{eq:lit3}
+    \left(X_i < k\right) \hspace*{1ex}k=2,\ldots,K_i\hspace*{1ex}\text{and}\hspace*{1ex}\left(X_i > k\right) \hspace*{1ex}k=1,\ldots,K_{i}-1  
+  \end{equation}
+   may be used. logicGP is designed to let the trainer choose the literals used. All three mentioned types of literals may be used in the prediction model. 
+
+Different from GPAS, the prediction model in logicGP is not completely based on logic expressions but a hybrid model. To restrict the search space and maintain interpretability, the prediction model is also polynomial based. Therefore, monomials in logicGP are also single literals or a conjunction/product of literals. However, a monomial evaluating to true is instead evaluated to a monomial specific weight. Thus, the prediction model is a linear combination of weights. 
+
+Let $g$ be the number of output groups and $n$ be the number of monomials. Let further $l_{i,j}$ be the $j$-th of $k_i$ literals of the $i$-th monomial and let $W=(w_0,\ldots,w_n)$ be a vector of $g$-dimensional weights. The prediction model gives a prediction of the output group $\hat{G}$ composed of the monomials prediction $\hat{M}$ and the polynomial prediction $\hat{Y}$ as follows:
+
+\begin{equation*}
+  \begin{split}
+    \hat{M} &= \sum_{i=1}^{n} w_i \prod_{j=1}^{k_{i}} \begin{cases} 1, & \textrm{if
+      } l_{i,j} \textrm{ is }\textit{true}\\ 0, & \textrm{otherwise} \end{cases} \\
+  \hat{Y} &= \begin{cases} \hat{M}, & \textrm{if
+     } \hat{M} > 0 \\ w_0, & \textrm{otherwise} \end{cases}  \\ 
+  \hat{G} &= d \hspace*{1ex} \text{where} \hspace*{1ex} \hat{y}_d = \text{max} \hspace*{1ex} {\hat{y}_1,\ldots,\hat{y}_g}.
+  \end{split}
+\end{equation*}
+
+For simplicity, we typically use a tabular representation of the prediction model. Table \ref{tab:example} shows an example of a prediction model representation equivalent to (\ref{eq:gpasexample}).  
+
+\begin{table}
+  \centering
+  \caption{Exemplary representation of a prediction model.}
+  \label{tab:example}
+  \begin{tabular}{rrl}
+    \toprule
+  $w_{i,1}$ & $w_{i,2}$ & Condition \\ 
+  \midrule
+  $1$             & $0$                   & none below fulfilled                \\ 
+  $0$             & $1$                   & $X_1\in\{3\}$                             \\
+  $0$             & $1$                   & $X_2\in\{2,3\}\wedge X_3\in\{1\}$              \\
+  \bottomrule
+  \end{tabular}
+  \end{table}
+
+  
+
+\subsubsection{Aggregation Function}
+  
+
+Note, that it is also possible to use a different aggregation function for $\hat{G}$ than the max function. Softmax for example is a possible alternative if probabilities are desired. 
+
+
+\subsubsection{Comparison to GPAS}
+
+The prediction model is much more general than the prediction model of GPAS. It is easy to see that the prediction model of GPAS is a special case of the prediction model of logicGP. For binary classification, if $g=2$, $w_0=(1,0)$, and all other weights are set to e.g.\ $(0,1)$ the prediction model is a straightforward generalization of the GPAS prediction model. 
+
+The intention of this paper is to present logicGP as a general framework for classification with literal based models. In this line of thought, GPAS is one parameterization of logicGP. 
+
+
+
+% The parameterization presented in this paper uses the full set of literals for each variable but a restriced weight vector. The weight vector is restricted to have only one non-zero entry for each output group. This entry is restricted to the value $1$. This variant of logicGP is called logicGP-FLRW (Full Literals Restricted Weights). 
+
+\subsection{Genetic Programming Algorithm}
+
+In Genetic Programming \citep{Koza1992}, a set of \emph{individuals} called \emph{population}
+undergoes \emph{adaptions} and afterwards a \emph{selection} process based on \emph{fitness}
+leading to a new \emph{generation} of individuals. This procedure is iterated until a \emph{termination criterion} is fulfilled. In the following, we customize the basic GP algorithm for our
+purpose. Because logicGP extends GPAS, we may use many of the ideas presented in \citet{10.1093/bioinformatics/btm522}. The main differences are the use of the new prediction model, the new literals, and the introduction of weights.
+
+\subsubsection{Initial Population}
+
+Initially, a population of fixed size, where each individual consists of one randomly
+selected literal, is created. Alternatively, for small problem sizes, it is possible to use all possible literals as the initial population.
+
+
+
+\subsubsection{Adapting Individuals}
+
+
+The set of candidate individuals for a new generation are constructed by selecting
+\begin{itemize}
+\item all individuals for \emph{reproduction}, i.e.\ copying all
+individuals from the current generation,
+\item at least two individuals uniformly at random for \emph{crossover}, i.e.\ combining
+one randomly chosen of the two individuals with one randomly chosen
+monomial from the other individual to create a new individual,
+\item at least six individuals uniformly at random, where each of the following \emph{mutations} is applied to exactly one of the chosen individuals:
+\begin{itemize}
+\item[--] changing the weight vector,
+\item[--] inserting a new random literal,
+\item[--] deleting a random literal,
+\item[--] replacing a literal by a new random literal,
+\item[--] inserting a new random literal as a new monomial,
+\item[--] deleting a random monomial.
+\end{itemize}
+
+\end{itemize}
+%In the latter adaption, the literals or monomials that should be deleted are chosen uniformly at random. New literals are also selected at random and inserted into a randomly chosen monomial or as a new monomial. 
+An overview of the possible adaptions is given in Figure
+\ref{fig:Mutations}. The parameters for the algorithm are: 
+\begin{itemize}
+  \item Number of individuals in the initial population.
+  \item Number or ratio of individuals that are created by crossover.
+  \item Number or ratio of individuals that are created by mutation.
+\end{itemize}
+
+The parameters are flexible and can be changed in the trainers. 
+
+
+\begin{figure*}
+  \centerline{\includegraphics[width=0.75\textwidth]{MutationsCrossoverOverview2}}
+  \caption{\label{fig:Mutations}Examples for the crossover and the different mutations used.}
+  \end{figure*}
+
+  
+  \subsubsection{Fitness}
+
+
+  To determine which of the new and reproduced individuals are selected to be part of the next generation,
+  we compute the fitness for each individual.
+  
+  We are interested in predictors that correctly classify as many observations as
+  possible, while being as short as possible. To achieve both goals
+  equally well we conduct a multi-objective optimization by using multidimensional
+  fitness values. The basic objectives of our optimization may
+  be transferred to fitness values easily. Explaining as many observations as possible,
+  for instance, translates to fitness values measuring the amount of
+  data values fulfilled.
+  
+  The fitness of an individual is thus
+evaluated by the fitness function
+$f$ that maps the individual to the following tuple:
+
+\begin{itemize}  
+\item For each classification group
+\begin{itemize}
+  \item (Maximize the) ratio of correct predictions.
+\end{itemize}
+\item (Minimize the) length of the model, i.e. the number of
+different literals used in the model.
+\end{itemize}
+
+\subsubsection{Selection}
+
+  In the context of multi-objective optimization,
+  an individual \emph{dominates} another individual, if at least one
+  component of its fitness
+  value is superior, and none is inferior. An individual is \emph{pareto
+  optimal}, if it is not dominated by another individual. Consequently, we seek to
+  find pareto optimal individuals that offer a set of well fitting models.
+  
+  For the new generation of individuals
+  that is derived after the adaptions, we choose only individuals that
+  are not dominated by other individuals. Thus, we conduct a \emph{domination
+  selection.} 
+  
+  \subsubsection{Termination Criterion}
+
+  We need termination criteria for the GP process
+  in order to derive a final population building the models. Natural
+  termination criteria are the excess of a certain number of generations
+  or of a certain fitness value. Another possibility is to terminate the
+  execution if the algorithm \emph{stagnates}, i.e.\ no new individuals survived
+  selection for a given number of generations.
+  
+  \subsection{Final Model Selection}
+
+  After the GP process has terminated, we typically obtain a large final population. The selection of the final model is based on the selection algorithm proposed in \citet{bioinformatics24} that is presented in Algorithm \ref{alg:modelselection}. It is based on a cross-validation strategy, an accuracy function, a consolidation strategy, and a selection strategy. The algorithm is designed to choose the best model from the candidate list. We present the used strategies in the following. 
+  
+  \begin{algorithm}
+   
+    \SetKw{KwTrue}{true}
+    
+    \SetKw{KwFalse}{false}
+       
+    \KwIn{Data set, Accuracy function $acc$, Cross-validation strategy $cv$, Consolidation strategy $cons$, Selection strategy $sel$}
+    
+    \KwOut{Chosen polynomial}
+    
+    Use $cv$ to split the data set into a set of training and validation data pairs\;
+ 
+    \ForEach{Pair of training and validation data}{
+ 
+    Call \texttt{logicGP} with the training data set\; 
+    Compute $acc$ of the returned models on the validation data set\;
+    Add the returned models to a list of candidate models\;
+    
+    }
+ 
+    Consolidate the list of candidate models with $cons$\;
+ 
+    Select a model from the candidate list with $sel$\;
+  
+    \Return{The chosen model}
+ 
+    \caption{Automatic Model Selection\label{alg:modelselection}}
+ 
+ \end{algorithm}
+
+ %The used strategies are also flexible and extendable. 
+
+ \paragraph{Cross-validation Strategy}
+
+ For cross validation, $5$-fold cross validation is chosen in this paper, which is very helpful for the small data sets used in the experiments. Microsoft's ML.NET can be configured to use different cross-validation strategies. However, the standard setting in the current version is to use a single train/validation split with $90\%$ of the data for training and $10\%$ for validation. 
+ 
+ \paragraph{Accuracy Function}
+
+  The accuracy (or misclassification) function used in GPAS is the ratio of correctly predicted instances to the total number of instances. For multiclass classification, it is often useful to consider the accuracy for each class separately. Fortunately, logicGP is designed to be flexible and extendable and the automatic model selection algorithm is the first step where the choice of the accuracy function makes a difference for the final prediction model. Any accuracy function can be used here. In this paper, we concentrate on two accuracy functions: the accuracy function used in GPAS (MicroAccuracy) and the accuracy function that considers the mean of the accuracies for each seperate class (MacroAccuracy).
+
+ 
+  \paragraph{Consolidation Strategy}
+ 
+  For the consolidation strategy, we have to cope with a few differences in comparison to the prediction model used in \cite{bioinformatics24}. These differences mainly result from the more general prediction model and the  increased search space. 
+
+ The consolidation strategy presented in \cite{bioinformatics24} is based on a check of model equality across cross-validation folds which will not work in logicGP. Hence, for the consolidation in logicGP, we consider models equal, iff they predict the same values on the considered data. Additionally, the increased search space leads to more situations where equal models are not found in all folds and the consolidation strategy presented in \cite{bioinformatics24} will return too small models.
+
+ The consolidation strategy for logicGP is therefore reduced to discarding all models where a model of the same size with a better average accuracy on the validation data exists.
+
+\paragraph{Selection Strategy} The used selection strategy is:
+
+\begin{enumerate}
+  \item Discard all models that do not at least offer $1\%$ more accuracy than all smaller models.
+  \item Determine the size of the model with the greatest accuracy.
+  \item Return the model of this size that appeared most often in the candidate list (if there are multiple candidates, choose the model with the highest average accuracy).
+\end{enumerate}
+
+\subsection{Search Space Restriction}
+
+To restrict the search space, the algorithm may be run twice. The size of the model found in the first run may be used to calculate a size restriction for models in the second run.
+
+\section{Trainers}\label{sec:trainers}
+
+As mentioned in Section \ref{sec:logicgp}, logicGP is designed to be a general framework for classification with literal based models. In this section, we present different trainers based on logicGP.
+
+The standard stopping criterion used in the trainers is the production of $10000$ generations. However, different stopping criteria may easily be used. Stopping criteria are flexible in the trainers.  
+
+Currently, all trainers use two individuals for crossover and five individuals for mutation (weight mutation is not used, yet) in each generation as motivated in \citet{Nunkesser2008b}. An optimization of the parameters is planned for future work.
+
+\subsection{logicGP-GPAS}
+
+The logicGP-GPAS trainer is a parameterization of logicGP for binary classification of categorical data optimized for three categories like SNP data has. The literals used in the prediction model are restricted to the literals (\ref{eq:lit1}), the weights are restricted to $w_0=(1,0),w_i=(0,1)\hspace*{1ex}\text{for}\hspace*{1ex}i>0$, the initial population consists of two random individuals. 
+
+\subsection{logicGP-FLCW-Micro and -Macro}
+
+In this paper, two additional trainers based on logicGP are presented. The logicGP Full Literals Computed Weights (logicGP-FLCW) trainer is a parameterization of logicGP for multiclass classification of categorical data. It is optimized for a small number of variables with a small number of categories. The literals used in the prediction model are not restricted, the weights are computed by the algorithm. The logicGP-FLCW-Micro trainer uses the MicroAccuracy function for the automatic model selection, the logicGP-FLCW-Macro trainer uses the MacroAccuracy function.
+
+\subsubsection{Choice of Literals}
+
+The literals used in the prediction model are not restricted, i.e.\ literals (\ref{eq:lit2}) are used. 
+
+\subsubsection{Weights Computation}
+
+The weights are computed by the algorithm. $w_0$ is set to the distribution of the output groups in the training data for the inputs where all monomials evaluate to false. 
+
+The weights for the monomials are computed as the ratio of the distribution of the output groups in the training data for the inputs the monomial is true to the distribution of the output groups in the training data for the inputs the monomial is false.
+% \begin{equation*}
+% w_i = \frac{\text{count}(\text{true positives for monomial } m_i)}{\text{count}(\text{true positives for monomial } m_i) + \text{count}(\text{false positives for monomial } m_i)}
+% \end{equation*}
+
+\subsubsection{Aggregation Function}
+
+The aggregation function used in both logicGP-FLCW-Micro and -Macro is the max function. 
+
+\section{Implementation}\label{sec:implementation}
+
+logicGP generalizes the GPAS algorithm, which is open source. 
+
+\subsection{GPAS Source Code}
+
+The GPAS Java source code is available as open source as a module of the Free Evolutionary Algorithm Kit (FrEAK) which was used for the experiments in \citet{10.1007/978-3-540-30217-9_3}. The corresponding libraries are available from Maven Central:
+
+\begin{itemize}
+  \item \texttt{freak-core} (core functionality)\footnote{Source: \url{https://github.com/Italbytz/mvn-freak-core}}
+  \item \texttt{freak-modules} (additional modules)\footnote{Source: \url{https://github.com/Italbytz/mvn-freak-modules}}
+  \item \texttt{freak-rinterface} (interface to R)\footnote{Source: \url{https://github.com/Italbytz/mvn-freak-rinterface}}
+  \item \texttt{freak-core-graph} (interface to the GUI)\footnote{Source: \url{https://github.com/Italbytz/mvn-freak-core-graph}}
+\end{itemize}
+
+The first three are also embedded in the R package RFreak\footnote{Source: \url{https://github.com/RobinNunkesser/RFreak}}. While it would have been possible to extend the GPAS algorithm with the new prediction model and the new literals, the decision was made to create a new implementation. The main reason for this decision was the possibility to create a more flexible and extendable algorithm with better software design. Modernizing other parts of FrEAK is potentially a good idea for future work.
+
+
+\subsection{Solution Strategy}
+
+logicGP is implemented using the Hexagonal Architecture. 
+
+
+\subsubsection{Hexagonal Architecture}
+
+The Hexagonal Architecture was introduced by \citet{Cockburn2005}. It is also known as Ports and Adapters Architecture. The main idea is to decouple the core business logic from the user interface and the database. The core business logic is placed in the center of the architecture. It is surrounded by ports, which are interfaces to the outside world, and adapters, which implement the ports. In our case, the Hexagonal Architecture helps to decouple the algorithm design from the implementation. We also gain high flexibility on the so called \emph{driving side} to use e.g.\ unit tests, a console application, a web or desktop application, or even mobile applications e.g.\ for educational purposes with logicGP \citep[see e.g.][]{Nunkesser2022}.
+
+%The core business logic does not know anything about the outside world. This makes it possible to replace the user interface or the database without changing the core business logic. %\citet{Nunkesser2022} shows that the Hexagonal Architecture is a good choice for implementations tha
+
+\subsubsection{Programming Language}
+
+The logicGP algorithm is implemented in C\# and is designed for high compatibility with Microsoft's ML.NET. This may seem to be an unusual choice in comparison to the more common choice of Python or R for machine learning algorithms. However, the choice of C\# is based on the following reasons:
+
+\begin{itemize}
+  \item .NET is a strong platform for enterprise applications that is widely used in the industry. ML.NET is the official machine learning framework for .NET developers. It is designed to be used in production environments and is a common choice for machine learning in .NET environments.
+  \item ML.NET easily interoperates with Python and R data exporting and importing. The scrime and logicDT simulations in this paper for example are conducted in R and the analysis of the results in this paper is done in Python.   
+\end{itemize}
+
+\subsection{Building Blocks}
+
+The chosen programming language and the Hexagonal Architecture lead to the possibilty to integrate existing open source projects as building blocks. The most important ones are:
+
+\begin{itemize}
+  \item \texttt{ML.NET}\footnote{Source: \url{https://github.com/dotnet/machinelearning}} (Machine Learning for .NET framework)
+  \item \texttt{Italbytz.ML}\footnote{Source: \url{https://github.com/Italbytz/nuget-ml}} (Extensions to ML.NET) 
+  \item \texttt{Italbytz.Ports.Algorithms.AI}\footnote{Source: \url{https://github.com/Italbytz/nuget-ports-algorithms-ai}} and the accompanying \texttt{Italbytz.Adapters.Algorithms.AI}\footnote{Source: \url{https://github.com/Italbytz/nuget-adapters-algorithms-ai}} (Providing Hexagonal Architecture ports and adapters for algorithms presented in \citet{russel2020} and for GP)   
+\end{itemize}
+
+\subsubsection{Provided Libraries}
+
+The two mentioned libraries for ports and adapters are written by the author and provide Hexagonal Architecture ports and adapters for chosen algorithms presented in \citet{russel2020} and for GP (based on modernized ideas used for FrEAK). They are available as NuGet packages and presented for the first time in this paper.
+
+Although official C\# code for the algorithms presented in \citet{russel2020} is available\footnote{https://github.com/aimacode/aima-csharp}, the libraries provided by the author are designed to be more flexible and extendable and offer algorithms not provided by the official code. In addition, it must be mentioned that the official C\# code does not follow architectural principles, does not provide a NuGet package, and only offers a few algorithms.
+
+
+Figure \ref{fig:gpport} shows a port interface for GP. The corresponding adapter implementation is a flexible and straightforward implementation of the basic GP algorithm. It offers the flexibility to run many different GP algorithms with different parameterizations. 
+
+\begin{figure}
+  \centerline{\includegraphics[width=0.72\columnwidth]{IGeneticProgram}}
+  \caption{\label{fig:gpport}Exemplary Port interface for the GP framework}
+\end{figure}
+
+
+\begin{figure*}
+  \centerline{\includegraphics[width=0.72\textwidth]{logicgpseq}}
+  \caption{\label{fig:logicgpseq}Simplified sequence diagram for classification}
+\end{figure*}
+
+
+At the time of writing, the packages mainly provide the algorithms presented in \citet{russel2020} needed by the author for his work. It additionally provides everything needed from FrEAK to run the logicGP algorithm. Lastly, it provides help for the integration of machine learning algorithms with ML.NET.
+ The author plans to extend the packages with more algorithms. Due to the open source nature of the packages, it is also easy for interested parties to extend them with new algorithms.
+
+\subsection{logicGP Implementation}
+
+The logicGP algorithm is also implemented as open source. Due to the use of Hexagonal Architecture, the driving side is flexible. Currently, the experiments and simulations are conducted in unit tests\footnote{Source: \url{https://github.com/RobinNunkesser/csharp-mstest-logicgp}}. A console application similar to \texttt{mlnet} is planned\footnote{Source: \url{https://github.com/RobinNunkesser/csharp-console-logicgp}}. The implementation is based on the provided libraries. It provides the logicGP algorithm as a parameterization of the GP algorithm and the mentioned logicGP-GPAS trainers. Specific implementations are also needed for the search space (including mutations and crossover), the prediction model, the fitness function, the consolidation strategy, and the selection strategy. Everything else is provided by the libraries.
+
+Figure \ref{fig:logicgpseq} shows a simplified sequence diagram for the classification process. The necessary (slightly simplified) code is analogous to code for trainers in ML.NET except for the use of dependency injection.
+
+\begin{lstlisting}  
+  // logicGP trainers are configured with Dependency Injection
+  var trainer = serviceProvider.GetRequiredService<LogicGP*Trainer>();
+  var mlContext = new MLContext();
+  var trainData = mlContext.Data.LoadFromTextFile<ModelInput>("data_train.csv");
+  var testData = mlContext.Data.LoadFromTextFile<ModelInput>("data_test.csv");
+  // logicGP trainers can be used in ML.NET pipelines
+  var pipeline = GetPipeline(trainer);
+  var model = pipeline.Fit(trainData);
+  var testResults = model.Transform(testData);    
+  var metrics = mlContext.MulticlassClassification.Evaluate(testResults);
+\end{lstlisting}
+
+All code used in the ports and adapters libraries can be used in a generic way for other algorithms. Interested researchers can use the libraries to implement their own algorithms in a flexible and extendable way. It is also easy to write additional logicGP trainers based on the logicGP algorithm.  
+
+  
+
+\section{Experiments}\label{sec:exmperiments}
+
+%\subsection{Software Used}
+The experiments are conducted for different tasks. The needed third party software is described in the following.
+ 
+We use the R package \texttt{scrime} for data simulation. We use version \texttt{1.3.5} available from CRAN. logicDT is also available from CRAN and we use version \texttt{1.0.4}. Microsoft's AutoML is part of ML.Net and we use version \texttt{16.18.2}. The trainers provided in AutoML are SDCA \cite{10.1145/2086737.2086743,10.5555/2567709.2502598}, L-BFGS  \cite{liu_limited_1989}, Fast Tree \cite{10.5555/3294996.3295074}, and Fast Forest \cite{JMLR:v7:meinshausen06a}. Trained models are provided in binary ML.NET format, which massively limits the interpretability of the models. The only suggested way to better interpret the models is to use Permutation Feature Importance (PFI).
+
+\subsection{Simulated Data for Binary Classification with Three Categories}
+
+We simulate data for binary classification with three categories. We use the \texttt{scrime} package for this. Three different data sets are simulated. All data sets are intended to simulate SNP data. They consist of inputs $X^T=(X_1,X_2,\ldots,X_p)$, each of which can take values coded by $1,2,3$.
+
+The first data set is the same as the one used in \citet{10.1093/bioinformatics/btm522,Nunkesser2008b,bioinformatics24}. The second and third data set are taken from \citet{lau_evaluation_2022} (the second data set was originally used in \citet{huls_comparison_2017}). The three simulations are described by the  following equations:
+
+  \begin{align}
+     \text{logit}(\mathds{P}(Y=1)) &= -0.5 + 1.5  (X_6 \in \{2,3\})  (X_7 \in \{1\}) \notag \\
+     & + 1.5  (X_3 \in \{1\})  (X_9 \in \{1\})  (X_{10} \in \{1\}) \label{eq:sim1} \\
+%    \end{align}
+%    \begin{align}
+     \text{logit}(\mathds{P}(Y=1)) &=  \log (\beta_0/(1-\beta_0)) + \sum_{i=1}^{6} \log(\beta_i)  (X_i \in \{2,3\}) \notag \\ 
+     & \text{with} \hspace*{1ex} \beta_0=0.225, \beta_i=1.5,i=1,\ldots, 6 \label{eq:sim2} \\
+     \text{logit}(\mathds{P}(Y=1)) &= \log (\beta_0/(1-\beta_0)) + \sum_{i=1}^{3} 1.2  (X_i \in \{2,3\}) \notag \\ 
+     & + \log(\beta_1)  (X_1 \in \{2,3\})(X_4 \in \{2,3\}) \notag \\
+     & \text{with} \hspace*{1ex} \beta_0=0.225, \beta_1=1.5 \label{eq:sim3}   
+    \end{align}
+
+  The data sets are simulated with $1000$ observations and $50$ variables each. $100$ data sets are simulated for each of the three simulations. Data set $i$ is used for training and data set $i+1$ is used for testing for $i=1,\ldots,99$. The training of data set $100$ is tested on data set $1$. The data sets are simulated with a fixed seed for reproducibility. Figure \ref{fig:gpasautoml} shows the MicroAccuracy on test data of the underlying model and the model chosen by AutoML, logicDT, logicGP-GPAS, and logicGP-FLCW-Micro with standard parameters for the three simulations. 
+
+  \begin{figure*}
+    \includegraphics[width=0.95\textwidth]{gpasaccgrouped}
+    \caption{MicroAccuracy on test data of the underlying model and the model chosen by AutoML, logicDT, logicGP-GPAS, and logicGP-FLCW-Micro for the three simulations.}
+    \label{fig:gpasautoml}
+    \end{figure*}
+  
+    logicGP-GPAS or logicGP-FLCW-Micro performs best or second best with regard to MicroAccuracy in all three simulations. An oddity may occur in the simulation based on (\ref{eq:sim3}). The data has a large difference in the number of observations for the different output groups. The computation of $w_0$ in logicGP-FLCW-Micro and the use of MicroAccuracy enables logicGP-FLCW-Micro to sometimes outperform the true model with regard to MicroAccuracy. When a high MacroAccuracy is desired, logicGP-FLCW-Macro should be used instead. The results show that the presented algorithms are competitive algorithms for binary classification with three categories for SNP data.
+    
+
+\subsection{Real Data for Multiclass Classification}
+
+%We chose the five most popular data sets that are suitable for multiclass classification with the presented trainers (only categorical features, ). 
+
+We use data sets from the UC Irvine Machine Learning Repository for multiclass classification. We only consider the most popular data sets where binning is not necessary and the number of output classes is between 3 and 10. Here, we compare logicGP-FLCW-Macro with the different trainers contained in AutoML because these trainers also report MacroAccuracy and good MacroAccuracy is often harder to achieve in multiclass classification.
+
+We use a setting similar to AutoML: the alogrithms operate on a train-validation-split of the data and the best accuracy on the validation data after $10$ runs is used for comparison. 
+
+The data sets used are the National Poll on Healthy Aging (NPHA) data set \citep{malani_national_2019}, the Car Evaluation (CAR) data set \citep{Bohanec1988KNOWLEDGEAA}, the Balance Scale (BS) data set \citep{balance_scale_12}, the Solar Flare (SF) data set \citep{solar_flare_89} (target variable "common flares"), and the Lenses data set \citep{lenses_58}. Table \ref{tab:datasets} shows an overview of the data sets used.
+
+\begin{table}
+\centering
+\caption{Overview of the used data sets}
+\label{tab:datasets}
+\begin{tabular}{rlll}
+  \toprule
+Data Set & Observations & Variables & Classes \\ 
+\midrule
+NPHA             & 714                   & 14                 & 3                \\ 
+CAR              & 1728                  & 6                  & 4                \\ 
+BS               & 625                   & 4                  & 3                \\ 
+SF               & 1389                  & 10                 & 8                \\ 
+LENSES           & 24                    & 3                  & 3                \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The LENSES data set is an interesting special case. It is an extremely small data set with only $24$ observations and $3$ variables. AutoML typically is unable to find a model for such data sets.
+
+Figure \ref{fig:logicgpmulti} shows the MacroAccuracy on the chosen data sets of the model chosen by logicGP-FLCW-Macro and AutoML algorithms.
+
+\begin{figure*}
+  \centerline{\includegraphics[width=0.95\textwidth]{macroacc}}
+  \caption{MacroAccuracy on the chosen data sets of the model chosen by logicGP-FLCW-Macro and AutoML algorithms.}
+  \label{fig:logicgpmulti}
+  \end{figure*}
+
+  logicGP-FLCW-Macro performs best with regard to macro accuracy on three data sets. On the other data sets, logicGP-FLCW-Macro is in the middle of the field. The results show that logicGP-FLCW-Macro is competitive with the mentioned restrictions.
+
+
+\section{Outlook and Conclusion}\label{sec:outlook}
+
+The experiments show that logicGP is a competitive algorithm for the considered data sets. Future work will provide further parameterizations as new trainers for different types of data and classification tasks. The main focus of future work will be to
+\begin{enumerate}
+  \item Implement a literal or feature selection for variables with a high number of categories or features.
+  \item Integrate a sophisticated weight mutation instead of computing the weights.
+  \item Consider data sets that need binning.
+\end{enumerate}
+
+As logicGP is designed to be a general framework for classification with literal based models, future work will primarily be based on new trainers and new data transformations. The open source implementation allows other researchers to participate. 
+
+
+  This paper introduced the logicGP algorithm, a flexible and extendable framework for classification with logical operator-based models obtained by Genetic Programming. We presented the prediction model, trainers, and implementation details of logicGP. The experiments conducted on simulated and real data demonstrated that logicGP is a competitive algorithm for binary classification with three categories and multiclass classification with restrictions. Future work will present more trainers and data transformations based on logicGP. 
+  
+  Overall, logicGP provides a robust and interpretable approach to classification tasks, leveraging the power of GP.
+
+%\pagebreak
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{logicgp}
+
+\end{document}
+
+\endinput
+%%
+%% End of file `sample-sigconf.tex'.

@@ -1,0 +1,7 @@
+dataset,estimator,n_repeats,status,f1_macro_mean,f1_macro_error,fit_seconds_mean,fit_seconds_error,predict_seconds_mean,predict_seconds_error,n_rules_mean,n_rules_error,n_atoms_mean,n_atoms_error,ruleset_json_bytes_mean,ruleset_json_bytes_error,validation_warning_count,validation_warning_example
+synth_xor_3bit,logicGP,1,ok,0.7270546017747799,0.0,6.5697021670639515,0.0,0.0015062079764902592,0.0,5.0,0.0,5.0,0.0,1268.0,0.0,0,
+synth_xor_3bit,ruleGP,1,ok,0.8664421816062553,0.0,10.249265416990966,0.0,0.0015922909369692206,0.0,5.0,0.0,8.0,0.0,1303.0,0.0,0,
+uci_breast_cancer_wisconsin_diagnostic,logicGP,1,ok,0.9390451832907076,0.0,5.532807874958962,0.0,0.0014777500182390213,0.0,4.0,0.0,3.0,0.0,1192.0,0.0,0,
+uci_breast_cancer_wisconsin_diagnostic,ruleGP,1,ok,0.9085677749360614,0.0,14.346424584044144,0.0,0.0003297090297564864,0.0,3.0,0.0,3.0,0.0,1051.0,0.0,0,
+uci_wine,logicGP,1,ok,0.94499815430048,0.0,4.473093374981545,0.0,0.0006767919985577464,0.0,7.0,0.0,6.0,0.0,1711.0,0.0,0,
+uci_wine,ruleGP,1,ok,0.9046122534494628,0.0,10.448462125030346,0.0,0.00014833291061222553,0.0,4.0,0.0,4.0,0.0,1174.0,0.0,0,

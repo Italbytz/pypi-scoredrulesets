@@ -1,0 +1,338 @@
+\documentclass[a4paper,twoside]{article}
+
+\usepackage[LGR,T1]{fontenc}
+\usepackage[utf8x]{inputenc}
+\usepackage[english]{babel}
+\usepackage{graphicx}
+\usepackage{lipsum}  
+
+\usepackage{epsfig}
+\usepackage{subcaption}
+\usepackage{calc}
+\usepackage{amssymb}
+\usepackage{amstext}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{multicol}
+\usepackage{pslatex}
+\usepackage{natbib}
+\usepackage{apalike}
+\usepackage{xurl}
+\usepackage[algoruled,lined,linesnumbered,algosection]{algorithm2e}
+\usepackage{booktabs}
+\usepackage{dsfont}
+\usepackage{SCITEPRESS}
+
+\newtheorem{defn}{Definition}
+
+\begin{document}
+
+\title{A logicGP Trainer for Classification of Biomedical Data}
+
+
+\author{\authorname{Robin Nunkesser} \affiliation{Hamm-Lippstadt University of Applied Sciences, Marker Allee 76--78, 59063 Hamm, Germany}\email{robin.nunkesser@hshl.de}}
+
+\keywords{Genetic Programming, logicGP, Classification, Biomedical Data, Computational Complexity}
+
+\abstract{This paper presents logicGP-RLCW, a novel set of trainers for the logicGP framework designed to address the computational challenges associated with the original design and implementation. By restricting the hypothesis space, modifying the Genetic Programming algorithm, and introducing a two-phase final model selection procedure, logicGP-RLCW achieves significant improvements in computational efficiency while maintaining competitive predictive performance.
+Experiments on both simulated and real-world datasets demonstrate that logicGP-RLCW often outperforms existing methods, such as the algorithms contained in ML.NET's AutoML. The results highlight the effectiveness of the proposed modifications.
+}
+
+
+\onecolumn \maketitle \normalsize \setcounter{footnote}{0} \vfill
+
+\section{\uppercase{Introduction}}
+Building on the generalization concept for SNP data algorithms introduced by \citet{bioinformatics25}, \citet{10.1145/3712255.3734300} developed the logicGP classification framework. logicGP demonstrates strong predictive performance and interpretability on both simulated SNP data and selected real-world datasets. Nevertheless, its application has so far been restricted to categorical features and relatively small datasets, primarily due to computational complexity constraints. Consequently, only a single real biomedical dataset has been analyzed to date. While the initial results are promising, further research is required to assess the robustness and generalizability of logicGP across larger and more diverse datasets.
+
+This paper investigates the computational bottlenecks in logicGP and proposes strategies to enhance its scalability and efficiency. Additionally, we extend the evaluation to a broader range of biomedical datasets to assess the generalizability of the framework. Comparative analyses are conducted against Microsoft's AutoML, representing state-of-the-art machine learning algorithms. The competitive performance of AutoML has been demonstrated in previous studies \citep{NunkesserExplains}.
+
+This paper mainly builds on the work of \citet{10.1145/3712255.3734300} and introduces a new trainer for the logicGP framework (which originally builds on ideas from SNP data analysis). The work of \citet{5728791} offers a review of methods for identifying SNP interactions. Classification algorithms have a long history and many alternatives exist. Overviews for bioinformatics applications are given by \citet{Alam2024} and \citet{OBRIEN2025323}. Note, that logicGP is highly interpretable, which is an important aspect in biomedical applications, restricting the number of comparable algorithms \citep{bioinformatics25}.
+
+Section~\ref{sec:logicgp} introduces the logicGP framework with a focus on computational complexity; Section~\ref{sec:trainers} presents the logicGP-RLCW trainers; Section~\ref{sec:data_simulation} describes data simulation; Section~\ref{sec:modelsize} discusses model size determination; Section~\ref{sec:exmperiments} reports experiments; Section~\ref{sec:conclusion} concludes and outlines future work.
+
+\section{\uppercase{logicGP}}\label{sec:logicgp}
+
+The logicGP framework integrates Genetic Programming (GP) with logical expressions to construct interpretable models for classification tasks. This methodology exploits the advantages of GP and symbolic reasoning, facilitating the identification of meaningful patterns within complex datasets.
+
+\subsection{Framework Components}
+
+The framework is modular, comprising several interchangeable and extensible components. In the following, we elaborate on the descriptions provided by \citet{10.1145/3712255.3734300} for the principal components: hypothesis space, GP algorithm, and \emph{trainers}. Trainers refer to parameterizations of the algorithm tailored to particular tasks or datasets, enabling the optimization of logicGP’s performance across diverse contexts.
+
+The hypothesis space, search algorithm, and trainers described in \citet{10.1145/3712255.3734300} are primarily suited to relatively small datasets, a limitation mainly imposed by computational complexity. In the following, we detail the components employed in logicGP and discuss potential challenges and solutions related to computational complexity. 
+
+\paragraph{Hypothesis Space}
+
+\citet{10.1145/3712255.3734300} introduces the concept of \emph{literal-based classification} where the hypothesis space encompasses models constructed from literals. logicGP utilizes a specific subset of this hypothesis space:
+
+\begin{defn}
+   The hypothesis space of \emph{linear combinations of logical conjunctions} comprises models representable as linear combinations of logical conjunctions of literals.
+\end{defn}
+
+Formally, let $g$ be the number of output groups and $n$ be the number of monomials. Let further $l_{i,j}$ be the $j$-th of $k_i$ literals of the $i$-th monomial and let $W=(w_0,\ldots,w_n)$ be a vector of $g$-dimensional weights. The prediction model gives a prediction of the output group $\hat{G}$ composed of the monomials prediction $\hat{M}$ and the polynomial prediction $\hat{Y}$ as follows:
+
+\begin{equation*}
+  \begin{split}
+    \hat{M} &= \sum_{i=1}^{n} w_i \prod_{j=1}^{k_{i}} \begin{cases} 1, & \textrm{if
+      } l_{i,j} \textrm{ is }\textit{true}\\ 0, & \textrm{otherwise} \end{cases} \\
+  \hat{Y} &= \begin{cases} \hat{M}, & \textrm{if
+     } \hat{M} > 0 \\ w_0, & \textrm{otherwise} \end{cases}  \\ 
+  \hat{G} &= d \hspace*{1ex} \text{where} \hspace*{1ex} \hat{y}_d = \text{max} \hspace*{1ex} {\hat{y}_1,\ldots,\hat{y}_g}.
+  \end{split}
+\end{equation*}
+
+\begin{table}
+   \centering
+   \caption{Exemplary logicGP model for the Iris data set.}
+   \label{tab:iris_example}
+   \begin{tabular}{p{0.4cm} p{0.4cm} p{0.4cm} p{4.2cm}}
+      \toprule
+      $w_{\text{seto}}$ & $w_{\text{vers}}$ & $w_{\text{virg}}$ & Condition \\
+      \midrule
+      $1.00$ & $0.00$ & $0.00$ & None below fulfilled \\
+      $0.00$ & $2.31$ & $1.39$ & petal width $\in [1.4,\,1.6]$ \\
+      $0.00$ & $5.56$ & $0.00$ & sepal width $\in [2.0,\,3.0]$ $\wedge$ petal width $\in [0.4,\,1.3]$ \\
+      $0.00$ & $0.00$ & $7.00$ & petal length $\in [5.2,\,6.9]$ \\
+      $0.00$ & $0.00$ & $7.00$ & petal width $\in [1.9,\,2.5]$ \\
+      \bottomrule
+   \end{tabular}
+\end{table}
+
+Table~\ref{tab:iris_example} illustrates an exemplary logicGP model for the well-known Iris dataset, demonstrating how logical conjunctions of feature conditions are combined with weights to classify iris species in a highly interpretable manner.
+
+
+\paragraph{GP Algorithm}
+
+logicGP employs a GP algorithm \citep{Koza1992} to navigate the hypothesis space of linear combinations of logical conjunctions. The GP algorithm iteratively evolves a population of candidate models through processes inspired by natural selection, including adaptation and selection based on fitness.
+
+logicGP uses multi-objective optimization with Pareto front selection for generation selection. The objectives used are per-class metrics for each output class and the model size. The final model selection uses cross-validation to select the best model.
+
+\subsection{Algorithmic Complexity}\label{sec:complexity}
+
+This section examines the computational complexity of logicGP.
+
+\paragraph{Provided Implementation}
+
+The logicGP framework has been implemented in C\#, with the source code publicly available in GitHub repositories\footnote{\url{https://github.com/RobinNunkesser/csharp-mstest-logicgp}}. Empirical analyses indicate that while logicGP achieves competitive predictive performance, its computational demands are substantial. The algorithm typically terminates after a fixed number of generations; however, the overall runtime increases markedly with dataset size. The primary factors influencing runtime, aside from the number of generations, are the number of literals—which can increase exponentially with the number of categories in the data features \citep{10.1145/3712255.3734300}—and the number of individuals per generation. In the published logicGP trainers, the latter is largely determined by the potential size of the Pareto front, which itself tends to grow with the number of output classes.
+
+\begin{table}
+\centering
+\caption{Overview of the considered data sets}
+\label{tab:datasets}
+\begin{tabular}{rlll}
+  \toprule
+Data Set & Literals & Classes & Runtime \\  
+\midrule
+LENSES           & 6                    & 3 & 0.04          \\
+BS               & 120                  & 3 & 4.53               \\
+CAR              & 60                   & 4 & 37.68               \\
+NPHA             & 334                  & 3 & 189.34               \\
+SF               & 160                  & 8 & 780.00               \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:datasets} shows an overview of the data sets used in \citet{10.1145/3712255.3734300} with the number of literals and classes and the runtime (in minutes) for logicGP applied to these data sets.  
+These results highlight the necessity of developing variants of logicGP with reduced computational complexity to enable its application to larger and more diverse datasets. Profiling runs show that the computation of the fitness and the Pareto front selection are dominating the running time, indicating specific areas for optimization.
+
+\paragraph{Hypothesis Space}
+
+The size of the hypothesis space is determined by the number of literals and the discretization of the weights. \citet{10.1145/3712255.3734300} shows that the number of literals can grow exponentially with the number of categories in the data features, which poses challenges. A possible solution is to limit the number of literals by testing their potential influence on the output, e.g.\ with statistical tests. 
+
+The weights used in \citet{10.1145/3712255.3734300} are computed and therefore do not increase the size of the hypothesis space. However, the weight computation is computationally expensive. A possible solution is to use a fixed set of weights, which would limit the expressiveness of the models.
+
+\paragraph{GP Algorithm}
+
+The current implementation of logicGP adopts the uncommon strategy of selecting only a limited number of individuals for adaptation in each generation. This approach may be suboptimal, particularly when the computational cost of evaluation and selection exceeds that of adaptation operations.
+
+Additionally, the use of Pareto front selection for multi-objective optimization introduces significant computational overhead. While the Pareto front facilitates the selection of individuals based on multiple objectives, its maintenance can be computationally intensive. If multi-objective optimization is essential, the adoption of more efficient data structures, such as ND-trees \citep{DBLP:journals/corr/JaszkiewiczL16}, should be considered to mitigate this overhead.
+
+Alternatively, employing a single-objective optimization could substantially reduce computational complexity. The original motivation for Pareto front selection was to enhance population diversity and mitigate overfitting. However, model selection strategies incorporating cross-validation, as described in \citet{10.1145/3712255.3734300}, can also address overfitting. Population diversity may be preserved through increased population sizes and alternative selection mechanisms \citep{GOLDBERG199169}.
+
+A compromise between single-objective and multi-objective optimization could involve reducing the number of objectives in the Pareto front. For instance, employing a one-vs-all strategy to compute per-class metrics and aggregating these into a smaller set of objectives could decrease the size of the Pareto front and, consequently, the computational burden.
+
+
+\section{\uppercase{logicGP-RLCW Trainers}}\label{sec:trainers}
+
+The logicGP-RLCW (Restricted Literals Computed Weights) trainers are introduced to mitigate the computational challenges outlined in the preceding sections while maintaining predictive performance.
+
+These trainers implement targeted modifications to the hypothesis space, the GP algorithm, and the trainer configuration.
+
+\subsection{Hypothesis Space}
+
+The hypothesis space in the logicGP-RLCW trainers is deliberately restricted to enhance computational efficiency while preserving predictive performance. Specifically, only a subset of literals identified as most relevant to the classification task are retained. Relevance is determined using the existing computed weights, and a weight threshold parameter is introduced: only literals with weights exceeding this threshold are included in the hypothesis space. This targeted selection reduces the combinatorial complexity of the search space while maintaining sufficient expressiveness. The use of the weights in this procedure also motivates the retention of computed weights in the model, as they provide valuable information regarding feature importance.
+
+Additionally, the maximum number of literals permitted per model is constrained. This restriction is governed by a new two-phase final model selection procedure, which empirically determines an appropriate model size. Together, these modifications ensure that the hypothesis space remains tractable for complex datasets without substantially compromising interpretability or accuracy.
+
+\subsection{GP Algorithm}
+
+The GP algorithm in the logicGP-RLCW trainers retains the core structure of the original logicGP implementation. However, specific adaptations are made to enhance computational efficiency.
+
+\paragraph{Adaptation Strategy}
+
+The logicGP-RLCW trainers modify the adaptation strategy to address the imbalance between the computational costs of adaptation and survivor selection observed in the original logicGP implementation. Specifically, the number of adaptation operations per generation is increased, as adaptation is computationally less expensive than survivor selection. The optimal number of adaptations per generation remains an open research question and warrants further empirical study \citep[cf.][]{info10120390}. However, previous work by \citet{Nunkesser2008b} indicates that increasing the number of adaptation operations, particularly crossover, can reduce overall computational complexity.
+
+\paragraph{Fitness Evaluation and Selection}
+Table \ref{tab:datasets} demonstrates that an increased number of output classes leads to a substantial rise in the runtime of logicGP. This effect is primarily attributable to the Pareto front selection employed in the original logicGP trainers, which utilize metrics for all output classes as well as model size as objectives in the multi-objective optimization. In contrast, the logicGP-RLCW trainers mitigate this complexity by reducing the number of objectives to three, drawing on a one-vs-all strategy. Specifically, logicGP-RLCW computes a per-class metric for each class; the first objective is the maximum per-class metric across all classes, the second objective is the average of the remaining per-class metrics (with both micro and macro averaging supported), and the third objective is model size. Domination between individuals is redefined to only be possible if one individual outperforms another in all objectives and achieves its highest metric for the same class. As a result, the number of objectives is substantially reduced, leading to a smaller Pareto front and, consequently, lower computational complexity.
+
+The choice of per-class metric and averaging strategy is configurable, allowing the trainers to accommodate a range of performance criteria. For transparency and reproducibility, the specific metric and averaging method used are indicated in the trainer designation (e.g., logicGP-RLCW-F1-Micro).
+
+For survivor selection, the logicGP-RLCW trainers have flexibility in their approach. For less complex scenarios, they retain the Pareto front selection method from the original logicGP implementation. However, to further reduce computational complexity, they can also utilize tournament selection, a method widely recognized in GP for its computational efficiency and linear complexity relative to the number of individuals selected \citep{GOLDBERG199169}. Tournaments are conducted based on Pareto dominance, enabling selection according to performance across multiple objectives while substantially reducing the computational burden compared to full Pareto front maintenance. In scenarios where the Pareto front exceeds the number of individuals to be selected, the selection process may become stagnant. To address this, a fallback to single-objective tournament selection is implemented, ensuring robust survivor selection under all circumstances. Alternatively, increasing the maximum population size could address this issue, though at the expense of increased runtime.
+
+\paragraph{Final Model Selection}
+
+The final model selection procedure in logicGP-RLCW is structured as a two-phase process to systematically identify the optimal model within the restricted hypothesis space. The first phase serves as a screening step to determine an appropriate model size based on cross-validation performance, while the second phase conducts a focused search for the best model of the selected size. This approach balances computational efficiency with robust model selection.
+
+For clarity, we first describe the second phase, as it is straightforward and is included in the overall procedure presented in Algorithm~\ref{alg:modelselection}. The rationale and details of the first phase, which primarily addresses overfitting, are discussed subsequently, following the introduction of data simulations.
+
+
+
+\begin{algorithm}
+   
+   \SetKw{KwTrue}{true}
+   
+   \SetKw{KwFalse}{false}
+      
+   \KwIn{Strategy $s$, Data $d$, Metric $m$}
+   
+   \KwOut{Chosen model}
+   
+   \tcp{Screening phase}
+   Determine the model size $s_c$ with strategy $s$\;
+\tcp{Search phase}
+Call \texttt{logicGP} (with size restriction $s_c$+1)\;
+Drop all models with sizes $\neq s_c$\;
+Choose the best model according to $m$\;
+ 
+   \Return{The chosen model}
+
+   \caption{Final Model Selection\label{alg:modelselection}}
+
+\end{algorithm}
+
+The second phase of the final model selection procedure focuses on identifying the best model of a predetermined size $s_c$. This size is established during the initial screening phase. The process involves invoking the logicGP algorithm with a size restriction set to $s_c + 1$, allowing for a slight flexibility in model complexity. After generating models, those that do not match the chosen size $s_c$ are discarded. The optimal model is then selected based on a specified performance metric $m$, ensuring that the final choice aligns with the desired evaluation criteria.
+
+Each trainer specifies a per-class metric and an averaging strategy. The overall performance metric $m$ is computed as either the micro or macro average of the selected per-class metrics.
+
+
+\begin{figure*}[t]
+  \begin{align}
+     \text{logit}(\mathds{P}(Y=1)) &= -0.5 + 1.5  (X_6 \in \{2,3\})  (X_7 \in \{1\}) + 1.5  (X_3 \in \{1\})  (X_9 \in \{1\})  (X_{10} \in \{1\}) \label{eq:sim1} \\
+     \text{logit}(\mathds{P}(Y=1)) &=  \log (\beta_0/(1-\beta_0)) + \sum_{i=1}^{6} \log(\beta_i)  (X_i \in \{2,3\}) \label{eq:sim2} \\
+     \text{logit}(\mathds{P}(Y=1)) &= \log (\beta_0/(1-\beta_0)) + \sum_{i=1}^{3} \log(\beta_i)  (X_i \in \{2,3\}) + \log(\beta_4)  (X_j \in \{2,3\})(X_k \in \{2,3\}) \label{eq:sim3} \\
+     \text{logit}(\mathds{P}(Y=1)) &= (3) + \beta_5 E_1 + \beta_6 E_2 (X_l \in \{2,3\}) \label{eq:sim4} 
+    \end{align}
+   \end{figure*} 
+
+\section{\uppercase{Data Simulation}}\label{sec:data_simulation}
+
+This section describes the data sets used for the experiments on simulated data. We use simulated data sets for binary classification with three categories intended to represent SNP data. The simulations are based on \citet{10.1093/bioinformatics/btm522}, \citet{huls_comparison_2017}, and \citet{lau_evaluation_2022}. Four different data sets are simulated. All data sets consist of inputs $X^T=(X_1,X_2,\ldots,X_p)$, each of which can take values coded by $1,2,3$. For the simulation, we use $\beta=(0.225,1.5,1.5,1.5,1.5,1.5,1.5)$ in equation (\ref{eq:sim2}), $\beta=(0.225,1.2,1.2,1.2,1.5)$ and $(j,k)=(1,4)$ in equation (\ref{eq:sim3}), and $\beta=(0.225,1.2,1.5,1.8,1.5,1.2/\text{IQR}(E_1),1.5)$ and $(j,k,l)=(1,4,2)$ in equation (\ref{eq:sim4}). The continuous variables $E_1$ and $E_2$ were generated following a multivariate normal distribution.
+
+The data sets are simulated with $1000$ observations and $50$ variables each ($52$ in case of (\ref{eq:sim4})). $100$ data sets are simulated for each of the four simulations. Data set $i$ is used for training and data set $i+1$ is used for testing for $i=1,\ldots,99$. The training of data set $100$ is tested on data set $1$. 
+
+\section{\uppercase{Screening Phase}}\label{sec:modelsize}
+
+Model size determination for final model selection, as outlined in Algorithm~\ref{alg:modelselection}, is performed using a cross-validation-based strategy.
+
+The algorithmic approach involves conducting multiple independent runs of the logicGP algorithm, each employing $k$-fold cross-validation to generate diverse training and validation splits. Within each run, models are evaluated based on their performance across three objectives: training performance, validation performance, and model size. To focus on high-performing models, only those whose validation performance ranks within the top quartile are retained for further consideration.
+
+\newcommand{\forcond}{$i=0$ \KwTo $r$}
+
+\begin{algorithm}
+   
+   \SetKw{KwTrue}{true}
+   
+   \SetKw{KwFalse}{false}
+      
+   \KwIn{Data set $d$, folds $k$, repetitions $r$, metric $\in \{\text{mean},\text{mode},\text{median}\}$}
+   
+   \KwOut{Chosen model size $s_c$}
+   
+   \For{\forcond}{
+   Use $k$-fold-cross-validation to split the data into $k$ data pairs\;
+
+   \ForEach{data pair}{
+
+   Call \texttt{logicGP}\; 
+   Add the last population to the archive\;   
+   }   
+   Compute the Pareto front of all models in the archive with regard to training and validation fitness and model size\;
+   Retain only models in the Pareto front with validation fitness in the top quartile\;
+   Add the Pareto front to the set of all Pareto fronts\;
+   }
+   Compute the mean, median, and mode of the model sizes in all Pareto fronts\;
+   Choose one of the three as the final model size $s_c$\;
+   
+   \Return{The chosen model size $s_c$}
+
+   \caption{Model Size Determination\label{alg:modelsizedetermination}}
+
+\end{algorithm}
+
+
+To empirically illustrate this approach, we conducted 100 independent runs of logicGP employing 5-fold cross-validation on the simulated datasets.  The KDE of different model sizes in the estimated Pareto front are visualized in Figure~\ref{fig:pareto} together with dots for the true model sizes specified in the simulations. The results reveal that, for simulations (\ref{eq:sim1}), (\ref{eq:sim2}), and (\ref{eq:sim3}), the mode of the model sizes observed in the Pareto fronts closely approximate the underlying true model sizes. Notably, for simulation (\ref{eq:sim4}), the model sizes identified in the Pareto fronts are substantially smaller than the true model size. This discrepancy can be attributed to the formulation of equation (\ref{eq:sim4}), which places considerable emphasis on $X_1$, thereby enabling highly predictive models with reduced complexity. Subsequent analyses will demonstrate that these more compact models nonetheless achieve strong predictive performance. In this paper, we use $k=5$, $r=100$, and the mode as the final model size.
+
+\begin{figure}
+   \centering
+   \includegraphics[width=\columnwidth]{ModelsizeHistCompact}
+   \caption{KDE for model sizes in the Pareto fronts}
+   \label{fig:pareto}
+\end{figure}
+
+
+\section{\uppercase{Experiments}}\label{sec:exmperiments}
+
+This section presents experiments conducted to evaluate the performance of the logicGP-RLCW trainers on both simulated and real-world datasets. The primary objectives are to assess predictive accuracy and computational efficiency in comparison to existing methods. To compare with existing methods, we use ML.NET's AutoML. The experiments were conducted using ML.NET \texttt{16.18.2}. Microsoft's ML.NET AutoML was chosen due to its robust performance across various classification tasks \citep{NunkesserExplains}. Note, that alternative approaches using e.g.\ ensemble methods or deep learning could be used as well. However, these methods often lead to less interpretable models, which is a key feature of logicGP and of particular importance in domains such as biology and medicine.
+
+
+\paragraph{Simulated Data}
+
+The experiments on simulated data utilize the datasets described in Section~\ref{sec:data_simulation}. Both logicGP-RLCW and ML.NET's AutoML were constrained to a maximum runtime of 100 seconds per training session to ensure a fair comparison of computational efficiency. Each method was evaluated on 100 simulated datasets, with training and testing performed on separate datasets as outlined in Section~\ref{sec:data_simulation}. Figure~\ref{fig:f1real} presents the F1-scores achieved by the logicGP-RLCW trainer in comparison to ML.NET's AutoML on these datasets. 
+
+The results indicate that logicGP-RLCW often outperforms AutoML across all simulated datasets, demonstrating its effectiveness in capturing the underlying patterns in the data. The computational efficiency of logicGP-RLCW is also noteworthy, as it achieves superior predictive performance without incurring prohibitive computational costs. These findings underscore the potential of logicGP-RLCW as a robust tool for classification tasks in scenarios characterized by complex feature interactions, such as those simulated in this study. The simulation based on equation (\ref{eq:sim3}) shows high variance, especially for AutoML. This simulation is characterized by a large difference in the number of cases and controls. This class imbalance likely contributes to the observed variability in performance, particularly for AutoML.
+
+\paragraph{Real Data}
+
+The experiments on real-world datasets utilize the most popular non-trivial datasets from the UCI Machine Learning Repository for classification tasks in the subject areas biology, health, and medicine. Table \ref{tab:datasetsexp} shows an overview of the data sets used with the number of literals and classes\footnote{Heart Disease (HD) \citep{Detrano1989InternationalAO} and its binary classification counterpart HD (Binary), Breast Cancer Wisconsin (BCW) \citep{Street1993NuclearFE}, Obesity Levels (OL) \citep{Palechor2019DatasetFE}, CDC Diabetes (CDCD) \citep{Burrows2017IncidenceOE}, and National Poll on Healthy Aging (NPHA) \citep{malani_national_2019}.}. Note, that the HD data set is used in two variants: the original multi-class version with five classes and a binary classification version where the presence of heart disease is indicated by any value greater than zero. Also note, that we have integrated data sets with non categorical features by discretizing these features with equal frequency binning into four categories, which of course influences the number of literals.
+
+The experiments follow a similar protocol to that of the simulated data. Each method was constrained to a maximum runtime of 100 seconds per training session to ensure a fair comparison of computational efficiency. Training and testing were performed using an 80/20 split of each dataset, with results averaged over multiple runs to account for variability in performance. The larger datasets (OL and CDCD) were split 90/10 and 95/5, respectively. 
+
+\begin{table}
+\centering
+\caption{Overview of the considered data sets}
+\label{tab:datasetsexp}
+\begin{tabular}{rll}
+  \toprule
+Data Set & Literals & Classes \\  
+\midrule
+HD               & 130                   & 5                \\
+HD (binary)      & 130                   & 2                \\
+BCW              & 420                   & 2                \\
+OL               & 158                   & 7                \\
+CDCD             & 430                   & 2                \\
+NPHA             & 334                  & 3                \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure*}
+   \includegraphics[width=\textwidth]{f1groupedall}
+   \caption{F1-Scores for the considered data sets}
+   \label{fig:f1real}
+\end{figure*} 
+
+ Figure~\ref{fig:f1real} presents the F1-scores achieved by the logicGP-RLCW trainer in comparison to ML.NET's AutoML on these datasets. The results demonstrate that logicGP-RLCW achieves competitive F1-scores across the real-world datasets in most cases, often surpassing the performance of AutoML. This indicates that logicGP-RLCW is not only effective in simulated environments but also translates well to practical applications involving complex biological and health-related data. 
+
+However, there are instances where AutoML outperforms logicGP-RLCW, suggesting that further refinements to the trainer may be necessary to enhance its generalizability. Specifically, on CDCD and OL, we see significant differences in performance. The CDCD data set is characterized by a high number of observations ($253.680$), which leads to a notable increase in runtime for logicGP-RLCW, mainly due to the weight computation. The problems with the OL data set are mainly due to the fixed binning strategy used for discretization (four bins of weights, etc.\ to explain seven levels of obesity) and the high model size needed. Future work will focus on alternative weightings and improved discretization strategies.
+
+\section{\uppercase{Conclusion}}\label{sec:conclusion}
+
+This paper has presented logicGP-RLCW, a novel set of trainers for the logicGP framework designed to address the computational challenges associated with the original design and implementation. By restricting the hypothesis space, modifying the GP algorithm, and introducing a two-phase final model selection procedure, logicGP-RLCW achieves significant improvements in computational efficiency while maintaining competitive predictive performance.
+
+Experiments on both simulated and real-world datasets demonstrate that logicGP-RLCW often outperforms existing methods, such as ML.NET's AutoML, in terms of F1-scores. The results highlight the effectiveness of the proposed modifications in capturing complex patterns in data while managing computational resources effectively.
+
+Future work will focus on further enhancing the efficiency and scalability of logicGP, particularly in relation to weight computation and discretization strategies. Overall, logicGP-RLCW represents a significant advancement in many classification tasks, with promising implications for future research and practical applications. 
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{logicgpbio} 
+
+\end{document} 

@@ -1,0 +1,7 @@
+dataset,estimator,repeat,status,skip_reason,error,f1_macro,fit_seconds,predict_seconds,n_rules,n_atoms,ruleset_json_bytes,n_train,n_test,n_classes,validation_action,validation_message
+uci_breast_cancer_wisconsin_diagnostic,logicGP,0,ok,,,0.9390451832907076,5.532807874958962,0.0014777500182390213,4,3,1192,426,143,2,ok,
+uci_breast_cancer_wisconsin_diagnostic,ruleGP,0,ok,,,0.9085677749360614,14.346424584044144,0.0003297090297564864,3,3,1051,426,143,2,ok,
+uci_wine,logicGP,0,ok,,,0.94499815430048,4.473093374981545,0.0006767919985577464,7,6,1711,124,54,3,ok,
+uci_wine,ruleGP,0,ok,,,0.9046122534494628,10.448462125030346,0.00014833291061222553,4,4,1174,124,54,3,ok,
+synth_xor_3bit,logicGP,0,ok,,,0.7270546017747799,6.5697021670639515,0.0015062079764902592,5,5,1268,1500,500,2,ok,
+synth_xor_3bit,ruleGP,0,ok,,,0.8664421816062553,10.249265416990966,0.0015922909369692206,5,8,1303,1500,500,2,ok,
