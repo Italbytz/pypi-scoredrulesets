@@ -5,6 +5,7 @@ from scoredrulesets import import_logicgp_json
 
 LOGICGP_FILE = (
     Path(__file__).resolve().parents[1]
+    / "scoredrulesets"
     / "ext"
     / "logicgp_model.json"
 )
