@@ -61,4 +61,6 @@ coverage.xml
 /validate_*.py
 /exstracs_debug.log
 
-scoredrulesets
+# Ignore accidental nested repo copy at workspace root only
+/scoredrulesets/
+
