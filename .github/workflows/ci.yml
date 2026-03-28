@@ -26,7 +26,7 @@ jobs:
           cache: pip
 
       - name: Install core dependencies
-        run: pip install -e ".[dev]"
+        run: pip install ".[dev]"
 
       - name: Run core tests
         run: pytest -q --tb=short --ignore=tests/test_benchmarking.py --ignore=tests/test_benchmark_comparison.py --ignore=tests/test_benchmark_datasets.py
@@ -48,7 +48,7 @@ jobs:
           cache: pip
 
       - name: Install benchmark dependencies
-        run: pip install -e ".[dev,benchmark]"
+        run: pip install ".[dev,benchmark]"
 
       - name: Run benchmark test suite
         run: pytest -q tests/test_benchmarking.py tests/test_benchmark_comparison.py tests/test_benchmark_datasets.py --tb=short
@@ -67,7 +67,7 @@ jobs:
           cache: pip
 
       - name: Install with HS backend
-        run: pip install -e ".[dev,hs]"
+        run: pip install ".[dev,hs]"
 
       - name: Run HS integration tests
         run: pytest -q -m hs --tb=short
