@@ -1,7 +1,0 @@
-dataset,estimator,n_repeats,status,f1_macro_mean,f1_macro_error,fit_seconds_mean,fit_seconds_error,predict_seconds_mean,predict_seconds_error,n_rules_mean,n_rules_error,n_atoms_mean,n_atoms_error,ruleset_json_bytes_mean,ruleset_json_bytes_error,validation_warning_count,validation_warning_example
-synth_checkerboard_4x4,logicGP,1,ok,0.6938397331571569,0.0,4.1429142920533195,0.0,0.0014951250050216913,0.0,3.0,0.0,4.0,0.0,1017.0,0.0,0,
-synth_checkerboard_4x4,ruleGP2,1,ok,0.4769790308823766,0.0,5.9531190829584375,0.0,0.0011857919162139297,0.0,5.0,0.0,4.0,0.0,1323.0,0.0,0,
-uci_heart_disease,logicGP,1,ok,0.7336585365853658,0.0,8.091912665986456,0.0,0.0006384169682860374,0.0,8.0,0.0,7.0,0.0,1780.0,0.0,0,
-uci_heart_disease,ruleGP2,1,ok,0.7100490196078432,0.0,3.6720798339229077,0.0,0.0001525420229882002,0.0,2.0,0.0,3.0,0.0,804.0,0.0,0,
-uci_wine,logicGP,1,ok,0.94499815430048,0.0,4.220547207980417,0.0,0.0006151250563561916,0.0,7.0,0.0,6.0,0.0,1711.0,0.0,0,
-uci_wine,ruleGP2,1,ok,0.9093567251461989,0.0,3.2879481250420213,0.0,0.00026420794893056154,0.0,8.0,0.0,8.0,0.0,1933.0,0.0,0,

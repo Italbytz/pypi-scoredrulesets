@@ -1,7 +1,0 @@
-dataset,estimator,repeat,status,skip_reason,error,f1_macro,fit_seconds,predict_seconds,n_rules,n_atoms,ruleset_json_bytes,n_train,n_test,n_classes,validation_action,validation_message
-uci_breast_cancer_wisconsin_diagnostic,ruleLCS,0,ok,,,0.87322695035461,0.2680599169107154,0.00022095802705734968,2,1,1009,426,143,2,ok,
-uci_breast_cancer_wisconsin_diagnostic,ruleLCS,1,ok,,,0.8852020337168852,0.2636987080331892,0.00021183304488658905,2,1,1011,426,143,2,ok,
-uci_wine,ruleLCS,0,ok,,,0.9293478260869565,0.1767216669395566,0.00014974991790950298,4,4,1422,124,54,3,ok,
-uci_wine,ruleLCS,1,ok,,,0.8914912673533363,0.16648908401839435,0.00012574996799230576,3,4,1256,124,54,3,ok,
-uci_heart_disease,ruleLCS,0,ok,,,0.7009857612267251,0.08595850004348904,0.00011904200073331594,2,1,905,212,91,2,ok,
-uci_heart_disease,ruleLCS,1,ok,,,0.7032967032967034,0.17908970906864852,0.00022241694387048483,4,7,1426,212,91,2,ok,
