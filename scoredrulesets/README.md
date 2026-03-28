@@ -1,46 +1,90 @@
 # scoredrulesets
 
-Scikit-learn-kompatible Grundstruktur fuer Klassifikation mit **Scored Rule Sets**.
+[![PyPI version](https://img.shields.io/pypi/v/scoredrulesets.svg)](https://pypi.org/project/scoredrulesets/)
+[![Python versions](https://img.shields.io/pypi/pyversions/scoredrulesets.svg)](https://pypi.org/project/scoredrulesets/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/scoredrulesets/scoredrulesets/actions/workflows/ci.yml/badge.svg)](https://github.com/scoredrulesets/scoredrulesets/actions/workflows/ci.yml)
 
-## Ziele
+A scikit-learn compatible toolkit for **scored rule set** classification — interpretable models that express each prediction as a weighted combination of human-readable IF-THEN rules.
 
-- Einheitliches, allgemeines JSON-Format fuer Scored Rule Sets
-- Import bestehender `logicGP`-Modelle in dieses Format
-- sklearn-kompatibler Wrapper, der externe Schaetzer trainiert und post-hoc in Scored Rule Sets transformiert
-- einfacher Standardaufruf (`backend="hs"`, konfigurierbar)
-- Erweiterungspunkt fuer kuenftige native Schaetzer im Paket
+## What are Scored Rule Sets?
+
+A scored rule set is a set of rules of the form
+
+> **IF** condition **THEN** score vector
+
+Each rule assigns a real-valued score to every class. At prediction time the score vectors of all *firing* rules are summed and the class with the highest total score is returned.  This representation supports:
+
+- **Full interpretability** — every prediction can be traced back to the rules that fired.
+- **Multi-class via a single model** — no one-vs-rest decomposition needed.
+- **Compact models** — typically 5–20 rules cover the relevant patterns.
+
+## Estimators
+
+| Estimator | Algorithm | Requires |
+|---|---|---|
+| `ScoredRuleSetClassifier` | Wrapper: converts any scikit-learn rule learner into a scored rule set | depends on `backend=` |
+| `RuleGPClassifier` | NSGA-II genetic programming over rule populations | – (pure Python) |
+| `RuleLCSClassifier` | Sequential covering with a genetic algorithm (LCS-style) | – (pure Python) |
+| `RuleNLNClassifier` | Neural rule extraction (Neural Logic Networks) | `torch` |
+| `AutoScoredRuleSetClassifier` | Auto-selects best estimator via cross-validation | – |
+
+### Wrapper backends
+
+`ScoredRuleSetClassifier(backend=...)` delegates training to an external rule learner and post-hoc converts the result:
+
+| `backend=` | Library |
+|---|---|
+| `"hs"` | `imodels` (Hierarchical Shrinkage / RIPPER / …) |
+| `"cart"` | scikit-learn `DecisionTreeClassifier` |
+| `"exstracs"` | `scikit-ExSTraCS` |
+| `"rulekit"` | `rulekit` + `jpype1` (Java) |
+| `"logicgp"` | logicGP JSON import |
 
 ## Installation
 
 ```bash
-pip install -e .
+pip install scoredrulesets
 ```
 
-Mit HS-Backend (imodels):
+With optional backends:
 
 ```bash
-pip install -e '.[hs]'
+# imodels backend (HS, RIPPER, …)
+pip install "scoredrulesets[hs]"
+
+# ExSTraCS backend
+pip install "scoredrulesets[exstracs]"
+
+# RuleKit backend (requires a JDK)
+pip install "scoredrulesets[rulekit]"
+
+# All optional backends
+pip install "scoredrulesets[all]"
+
+# Benchmarking utilities (matplotlib, pandas)
+pip install "scoredrulesets[benchmark]"
 ```
 
-Fuer Entwicklung/Tests:
+## Quick Start
 
-```bash
-pip install -e '.[dev]'
+### RuleLCS (no extra dependencies)
+
+```python
+from sklearn.datasets import load_iris
+from scoredrulesets import RuleLCSClassifier, format_ruleset_table
+
+X, y = load_iris(return_X_y=True)
+
+clf = RuleLCSClassifier(max_rules=6, random_state=42)
+clf.fit(X, y)
+print(clf.predict(X[:3]))
+
+ruleset = clf.to_ruleset()
+print(format_ruleset_table(ruleset))
 ```
 
-Fuer Benchmarking:
-
-```bash
-pip install -e '.[benchmark]'
-```
-
-Optional fuer lokale UCI-CSV-Benchmarks:
-
-```bash
-pip install -e '.[benchmark-uci]'
-```
-
-## Schnellstart
+### Wrapper with HS backend
 
 ```python
 from sklearn.datasets import load_iris
@@ -48,123 +92,100 @@ from scoredrulesets import ScoredRuleSetClassifier, dump_ruleset_json
 
 X, y = load_iris(return_X_y=True)
 
-# Standard ist backend="hs" (benoetigt imodels)
-clf = ScoredRuleSetClassifier(backend="cart")
+clf = ScoredRuleSetClassifier(backend="hs")   # requires: pip install scoredrulesets[hs]
 clf.fit(X, y)
 
 ruleset = clf.to_ruleset()
 dump_ruleset_json(ruleset, "iris_ruleset.json")
 ```
 
-Konsolenlesbare Tabellen-Ausgabe:
-
-```python
-from scoredrulesets import ScoredRuleSetClassifier, format_ruleset_table
-from sklearn.datasets import load_iris
-
-X, y = load_iris(return_X_y=True)
-clf = ScoredRuleSetClassifier(backend="cart")
-clf.fit(X, y)
-ruleset = clf.to_ruleset()
-
-print(format_ruleset_table(ruleset))
-```
-
-## Examples
-
-See `examples/README.md` for runnable demos:
-
-- direct estimator demo: `examples/estimators/example_rulelcs_backend.py`
-- wrapper backend demo: `examples/estimators/example_rulelcs_wrapper.py`
-
-## logicGP-Import
-
-```python
-from scoredrulesets import import_logicgp_json, dump_ruleset_json
-
-ruleset = import_logicgp_json("ext/logicgp_model.json")
-dump_ruleset_json(ruleset, "converted_ruleset.json")
-```
-
-## RuleLCS-Estimator
+### RuleGP (NSGA-II genetic programming)
 
 ```python
 from sklearn.datasets import load_iris
-from scoredrulesets import RuleLCSClassifier
+from scoredrulesets import RuleGPClassifier
 
 X, y = load_iris(return_X_y=True)
 
-clf = RuleLCSClassifier(max_rules=5, random_state=42)
+clf = RuleGPClassifier(max_rules=8, n_generations=50, random_state=42)
 clf.fit(X, y)
+print(clf.score(X, y))
+```
+
+### Loading a saved rule set
+
+```python
+from scoredrulesets import load_ruleset_json, ScoredRuleSetClassifier
+
+ruleset = load_ruleset_json("iris_ruleset.json")
+clf = ScoredRuleSetClassifier.from_ruleset(ruleset)
 print(clf.predict(X[:3]))
-
-# Optional: Beam-Search-Parameter steuern
-# RuleLCSClassifier(max_rules=6, beam_width=10, max_iterations=20)
 ```
 
-Der RuleLCS-Lerner erzeugt je nach Datenlage Atome mit `<=`, `>`, `between`, `==` und `in`.
+## Rule Set JSON Format
 
-## Benchmarking
-
-Die stabilen Entrypoints liegen unter `examples/benchmarks/` und sind ueber
-das Makefile gekapselt.
-
-Schnellstart:
-
-```bash
-make benchmark
-make benchmark-standard
-make benchmark-normal-lite
-```
-
-Reports aus vorhandenen Ergebnissen regenerieren:
-
-```bash
-make reports-standard
-make reports-normal-lite
-make reports-full
-```
-
-Direkte Python-Aufrufe sind ebenfalls moeglich:
-
-```bash
-python3 examples/benchmarks/benchmark_full_report.py
-python3 examples/benchmarks/benchmark_standard.py
-python3 examples/benchmarks/benchmark_normal_lite.py
-python3 examples/benchmarks/generate_reports.py normal-lite
-```
-
-## JSON-Format (Kurz)
+Rule sets can be serialised to a human-readable JSON format:
 
 ```json
 {
   "format": "scoredrulesets",
   "version": "0.1",
-  "class_labels": ["A", "B", "C"],
-  "feature_names": ["f0", "f1"],
+  "class_labels": ["setosa", "versicolor", "virginica"],
+  "feature_names": ["sepal length", "sepal width", "petal length", "petal width"],
   "aggregation": {"type": "argmax_sum"},
   "rules": [
     {
-      "atoms": [{"feature": "f0", "op": "<=", "value": 1.5}],
+      "atoms": [{"feature": "petal length", "op": "<=", "value": 2.45}],
       "scores": [1.0, 0.0, 0.0]
     }
   ]
 }
 ```
 
-## Hinweis zum HS-Backend
+## Benchmarking
 
-`backend="hs"` ist als Default gesetzt. Wenn `imodels` nicht installiert ist oder keine passende HS-Klasse gefunden wird, gibt das Paket eine klare Fehlermeldung und nennt die Installationsoption.
-
-Optionaler Integrationstest fuer HS:
+Benchmark entry points are under `examples/benchmarks/` and wrapped in `Makefile` targets:
 
 ```bash
-pytest -q -m hs
+make benchmark            # standard benchmark suite
+make benchmark-standard   # standard datasets only
+make reports-standard     # regenerate reports from existing results
 ```
 
-Sklearn-Kompatibilitaet (Estimator-Checks) pruefen:
+Direct invocation:
 
 ```bash
+python examples/benchmarks/benchmark_standard.py
+python examples/benchmarks/generate_reports.py normal-lite
+```
+
+## Running Tests
+
+```bash
+# core tests (no optional dependencies required)
+pytest -q
+
+# include HS integration tests
+pytest -q -m hs
+
+# sklearn estimator interface checks
 pytest -q tests/test_estimator_checks.py
 ```
+
+## Examples
+
+See [`examples/`](examples/) for runnable demos:
+
+- `examples/estimators/example_rulelcs_backend.py` — RuleLCS direct estimator
+- `examples/estimators/example_rulelcs_wrapper.py` — RuleLCS via wrapper
+- `examples/estimators/example_rulenln_backend.py` — RuleNLN (neural)
+- `examples/estimators/example_rule_shrinking.py` — LRC rule compaction
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 

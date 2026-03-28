@@ -8,14 +8,41 @@ version = "0.1.0"
 description = "Scikit-learn compatible toolkit for scored rule set classification"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [
   { name = "ScoredRuleSets contributors" }
+]
+keywords = [
+  "machine learning",
+  "rule learning",
+  "interpretable ML",
+  "explainable AI",
+  "classification",
+  "scored rule sets",
+  "genetic programming",
+  "learning classifier systems",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
   "numpy>=1.23",
   "scikit-learn>=1.2"
 ]
+
+[project.urls]
+Homepage = "https://github.com/scoredrulesets/scoredrulesets"
+Source = "https://github.com/scoredrulesets/scoredrulesets"
+"Bug Tracker" = "https://github.com/scoredrulesets/scoredrulesets/issues"
 
 [project.optional-dependencies]
 hs = ["imodels>=1.4.0"]
