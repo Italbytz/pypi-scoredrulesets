@@ -1,2 +1,66 @@
-scoredrulesets/benchmarks
-scoredrulesets Kopie
+# Virtual environments
+.venv/
+
+# Legacy local workspace from pre-root migration
+/scoredrulesets/
+venv/
+env/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python artefacts
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Benchmark output artefacts
+/benchmark_results.pdf
+/benchmark_results.png
+/benchmarks/logs/
+*.jsonl
+
+# Internal development docs (not relevant for public users)
+/RULE_SHRINKING_README.md
+/RULEKIT_EXSTRACS_INTEGRATION.md
+/RULEKIT_EXSTRACS_SUMMARY.md
+/EXSTRACS_SHRINKING.md
+/EXSTRACS_SHRINKING_FINAL.md
+/CHECKLIST.md
+/IMPLEMENTATION_OVERVIEW.md
+/PRUNING_IMPLEMENTATION.md
+/QUICK_START.md
+/REPORT_GENERATION.md
+/ext/
+
+# Temporary experiment scripts
+/_single_run_*.py
+/_analyze_*.py
+/_bench_*.py
+/_diag_*.py
+/_diagnose_*.py
+/_test_*.py
+/test_bench_*.py
+/test_pruning*.py
+/test_simple_pruning*.py
+/validate_*.py
+/exstracs_debug.log
+
