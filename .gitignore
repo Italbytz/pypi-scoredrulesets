@@ -1,8 +1,5 @@
 # Virtual environments
 .venv/
-
-# Legacy local workspace from pre-root migration
-/scoredrulesets/
 venv/
 env/
 
