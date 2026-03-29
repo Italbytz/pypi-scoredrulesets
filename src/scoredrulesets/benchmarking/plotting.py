@@ -1153,14 +1153,32 @@ def plot_2d_rank_plot(
 
     estimator_colors = _estimator_color_map(estimator_names)
 
-    fig, ax = plt.subplots(figsize=(8.5, 7.5))
+    # Collect valid plot positions
+    _pts: list[tuple[float, float, str]] = []
     for idx, name in enumerate(estimator_names):
-        xr = mean_f1_ranks[idx]
-        yr = mean_atoms_ranks[idx]
-        if not (np.isfinite(xr) and np.isfinite(yr)):
-            continue
+        xr = float(mean_f1_ranks[idx])
+        yr = float(mean_atoms_ranks[idx])
+        if np.isfinite(xr) and np.isfinite(yr):
+            _pts.append((xr, yr, name))
+
+    # Compute vertical label offsets to avoid overlapping text for nearby points.
+    # For each pair whose projected label boxes would overlap, push them apart.
+    _label_dy: dict[str, float] = {n: 0.0 for _, _, n in _pts}
+    _prox_x = 0.9   # x proximity threshold (label width in data units ~0.8)
+    _prox_y = 0.35  # y proximity threshold (label height in data units)
+    _push = 0.25    # amount to push each label up/down
+    for i in range(len(_pts)):
+        for j in range(i + 1, len(_pts)):
+            xi, yi, ni = _pts[i]
+            xj, yj, nj = _pts[j]
+            if abs(xi - xj) < _prox_x and abs(yi - yj) < _prox_y:
+                _label_dy[ni] += _push
+                _label_dy[nj] -= _push
+
+    fig, ax = plt.subplots(figsize=(8.5, 7.5))
+    for xr, yr, name in _pts:
         ax.scatter(xr, yr, s=110, color=estimator_colors[name], edgecolors="black", linewidths=0.8, zorder=3)
-        ax.text(xr + 0.14, yr, name, va="center", ha="left", fontsize=8)
+        ax.text(xr + 0.14, yr + _label_dy[name], name, va="center", ha="left", fontsize=8)
 
     # CD reference rectangle — upper-right corner of data space
     rect_x0 = k - cd_f1 - 0.05
