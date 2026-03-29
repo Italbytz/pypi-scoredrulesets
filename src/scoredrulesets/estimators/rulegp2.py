@@ -23,6 +23,8 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from .atom_space import NativeAtomSpaceStrategy
+from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
 
 
@@ -143,55 +145,14 @@ def _build_feature_specs(
     X: np.ndarray,
     max_thresholds: int | None = None,
     low_cardinality_threshold: int = 10,
+    atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
 ) -> list[dict[str, Any]]:
-    specs: list[dict[str, Any]] = []
-    for fi in range(X.shape[1]):
-        col = X[:, fi]
-        arr = np.asarray(col)
-        if np.issubdtype(arr.dtype, np.number):
-            vals = np.unique(arr.astype(float))
-            if vals.size >= 2:
-                if vals.size <= 20:
-                    thr = ((vals[:-1] + vals[1:]) / 2.0).tolist()
-                else:
-                    q = np.unique(np.quantile(vals, np.linspace(0.05, 0.95, 10)))
-                    thr = q.astype(float).tolist()
-            else:
-                thr = []
-            if max_thresholds and len(thr) > max_thresholds:
-                idx = np.round(np.linspace(0, len(thr) - 1, max_thresholds)).astype(int)
-                thr = [thr[i] for i in idx]
-
-            intervals: list[tuple[float, float]] = []
-            if vals.size >= 3:
-                qp = np.unique(np.quantile(vals, [0.15, 0.35, 0.5, 0.65, 0.85]))
-                for i in range(len(qp) - 1):
-                    if qp[i] < qp[i + 1]:
-                        intervals.append((float(qp[i]), float(qp[i + 1])))
-
-            if vals.size <= low_cardinality_threshold:
-                specs.append(
-                    {
-                        "idx": fi,
-                        "kind": "both",
-                        "thresholds": thr,
-                        "intervals": intervals,
-                        "categories": vals.tolist(),
-                    }
-                )
-            else:
-                specs.append(
-                    {
-                        "idx": fi,
-                        "kind": "num",
-                        "thresholds": thr,
-                        "intervals": intervals,
-                    }
-                )
-        else:
-            cats = np.unique(np.asarray(col, dtype=object)).tolist()
-            specs.append({"idx": fi, "kind": "cat", "categories": cats})
-    return specs
+    return build_native_feature_specs(
+        X,
+        max_thresholds=max_thresholds,
+        low_cardinality_threshold=low_cardinality_threshold,
+        strategy=atom_space_strategy,
+    )
 
 
 def _evaluate_fitness_rlcw2(
@@ -337,6 +298,7 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
         max_atoms_per_rule: int = 5,
         min_samples_leaf: int = 3,
         max_thresholds_per_feature: int | None = None,
+        atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
         random_state: int | None = None,
     ):
         self.f1_averaging = f1_averaging
@@ -355,6 +317,7 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
         self.max_atoms_per_rule = max_atoms_per_rule
         self.min_samples_leaf = min_samples_leaf
         self.max_thresholds_per_feature = max_thresholds_per_feature
+        self.atom_space_strategy = atom_space_strategy
         self.random_state = random_state
 
     def fit(self, X, y):
@@ -392,7 +355,11 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
             except ValueError:
                 pass
 
-        specs = _build_feature_specs(X_train, self.max_thresholds_per_feature)
+        specs = _build_feature_specs(
+            X_train,
+            self.max_thresholds_per_feature,
+            atom_space_strategy=self.atom_space_strategy,
+        )
         atom_pool = self._build_atom_pool(specs, X_train, y_train, n_classes)
         all_atoms = [a for atoms in atom_pool.values() for a in atoms]
         if not all_atoms:
@@ -908,6 +875,7 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
                 "max_atoms_per_rule": self.max_atoms_per_rule,
                 "max_model_size": self.max_model_size,
                 "min_max_weight": self.min_max_weight,
+                "atom_space_strategy": self.atom_space_strategy,
             },
         )
 

@@ -31,6 +31,8 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from .atom_space import NLNThresholdStrategy
+from .atom_space import binarize_with_thresholds, compute_nln_thresholds
 from .base import BaseRuleSetEstimator
 
 
@@ -130,6 +132,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         temperature: float = 1.0,
         random_state: int | None = None,
         max_thresholds_per_feature: int | None = None,
+        threshold_strategy: NLNThresholdStrategy = "quantile_midpoint",
     ):
         self.n_rules = n_rules
         self.n_bins = n_bins
@@ -144,6 +147,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         self.temperature = temperature
         self.random_state = random_state
         self.max_thresholds_per_feature = max_thresholds_per_feature
+        self.threshold_strategy = threshold_strategy
 
     # ------------------------------------------------------------------
     # fit
@@ -442,43 +446,12 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         Thresholds that would produce constant (always-true / always-false)
         propositions are removed.
         """
-        max_thr = self.max_thresholds_per_feature
-        thresholds: list[np.ndarray] = []
-        quantiles = np.linspace(0, 1, self.n_bins + 2)[1:-1]  # interior quantiles
-
-        for j in range(X.shape[1]):
-            col = X[:, j]
-            uniq = np.unique(col)
-
-            if len(uniq) <= max(self.n_bins, 2):
-                # Low-cardinality: use midpoints between consecutive values.
-                # E.g. binary {0,1} → single threshold 0.5
-                if len(uniq) <= 1:
-                    thr = np.array([float(uniq[0])]) if len(uniq) == 1 else np.array([0.0])
-                else:
-                    thr = (uniq[:-1] + uniq[1:]) / 2.0
-            else:
-                # Continuous: original quantile approach
-                thr = np.unique(np.quantile(col, quantiles))
-                if len(thr) == 0:
-                    thr = np.array([float(col[0])]) if len(col) > 0 else np.array([0.0])
-
-            # Remove thresholds that produce constant propositions
-            col_min, col_max = float(col.min()), float(col.max())
-            thr = np.array([t for t in thr
-                            if col_min <= t < col_max],  # <= t not always-false AND > t not always-false
-                           dtype=float)
-            if len(thr) == 0:
-                # Fallback: at least one threshold (midpoint)
-                thr = np.array([(col_min + col_max) / 2.0])
-
-            # Apply threshold cap
-            if max_thr is not None and len(thr) > max_thr:
-                idx = np.round(np.linspace(0, len(thr) - 1, max_thr)).astype(int)
-                thr = thr[idx]
-
-            thresholds.append(thr)
-        return thresholds
+        return compute_nln_thresholds(
+            X,
+            n_bins=self.n_bins,
+            max_thresholds_per_feature=self.max_thresholds_per_feature,
+            strategy=self.threshold_strategy,
+        )
 
     def _binarise(self, X: np.ndarray) -> np.ndarray:
         """Convert X → binary proposition matrix P.
@@ -492,14 +465,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         since both can be selected via positive weights (avoiding the need
         for negative-weight negation that L1 regularisation penalises).
         """
-        parts: list[np.ndarray] = []
-        for j, thr in enumerate(self._thresholds_):
-            col = X[:, j : j + 1]  # (N, 1)
-            leq = (col <= thr[np.newaxis, :]).astype(float)
-            gt = (col > thr[np.newaxis, :]).astype(float)
-            parts.append(leq)
-            parts.append(gt)
-        return np.hstack(parts)
+        return binarize_with_thresholds(X, self._thresholds_)
 
     def _proposition_meta(self) -> list[tuple[int, str, float]]:
         """Return (feature_index, op, threshold) for each proposition column.
@@ -647,6 +613,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
                 "n_rules_learned": self.n_rules,
                 "n_rules_extracted": len(rules),
                 "epochs": self.epochs,
+                "threshold_strategy": self.threshold_strategy,
             },
         )
         ruleset.validate()

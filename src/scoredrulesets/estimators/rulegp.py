@@ -30,6 +30,8 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from .atom_space import NativeAtomSpaceStrategy
+from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
 
 
@@ -188,6 +190,7 @@ def _build_feature_specs(
     X: np.ndarray,
     max_thresholds: int | None = None,
     low_cardinality_threshold: int = 10,
+    atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
 ) -> list[dict]:
     """Build per-feature specs describing the operators and values RuleGP may use.
 
@@ -200,47 +203,12 @@ def _build_feature_specs(
         for datasets where categorical features are integer-encoded (e.g.
         MONK, car_evaluation).
     """
-    specs: list[dict] = []
-    for fi in range(X.shape[1]):
-        col = X[:, fi]
-        arr = np.asarray(col)
-        if np.issubdtype(arr.dtype, np.number):
-            vals = np.unique(arr.astype(float))
-            if vals.size >= 2:
-                if vals.size <= 20:
-                    thr = ((vals[:-1] + vals[1:]) / 2.0).tolist()
-                else:
-                    q = np.unique(np.quantile(vals, np.linspace(0.05, 0.95, 10)))
-                    thr = q.astype(float).tolist()
-            else:
-                thr = []
-            if max_thresholds and len(thr) > max_thresholds:
-                idx = np.round(np.linspace(0, len(thr) - 1, max_thresholds)).astype(int)
-                thr = [thr[i] for i in idx]
-            # intervals
-            intervals = []
-            if vals.size >= 3:
-                qp = np.unique(np.quantile(vals, [0.15, 0.35, 0.5, 0.65, 0.85]))
-                for i in range(len(qp) - 1):
-                    if qp[i] < qp[i + 1]:
-                        intervals.append((float(qp[i]), float(qp[i + 1])))
-
-            # Low-cardinality detection: additionally provide equality splits
-            if vals.size <= low_cardinality_threshold:
-                cats = vals.tolist()
-                specs.append({
-                    "idx": fi,
-                    "kind": "both",
-                    "thresholds": thr,
-                    "intervals": intervals,
-                    "categories": cats,
-                })
-            else:
-                specs.append({"idx": fi, "kind": "num", "thresholds": thr, "intervals": intervals})
-        else:
-            cats = np.unique(np.asarray(col, dtype=object)).tolist()
-            specs.append({"idx": fi, "kind": "cat", "categories": cats})
-    return specs
+    return build_native_feature_specs(
+        X,
+        max_thresholds=max_thresholds,
+        low_cardinality_threshold=low_cardinality_threshold,
+        strategy=atom_space_strategy,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +271,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         max_fit_seconds: float | None = None,
         min_max_weight: float = 0.0,
         max_thresholds_per_feature: int | None = None,
+        atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
         random_state: int | None = None,
     ):
         self.population_size = population_size
@@ -319,6 +288,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         self.max_fit_seconds = max_fit_seconds
         self.min_max_weight = min_max_weight
         self.max_thresholds_per_feature = max_thresholds_per_feature
+        self.atom_space_strategy = atom_space_strategy
         self.random_state = random_state
         self._atom_pool_: dict[int, list[_AtomGene]] = {}
 
@@ -345,7 +315,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         X_eval = X[val_idx] if val_idx is not None else X_train
         y_eval = y_idx[val_idx] if val_idx is not None else y_train
 
-        specs = _build_feature_specs(X, self.max_thresholds_per_feature)
+        specs = _build_feature_specs(
+            X,
+            self.max_thresholds_per_feature,
+            atom_space_strategy=self.atom_space_strategy,
+        )
         self._atom_pool_ = self._build_atom_pool(specs, X_train, y_train, n_classes)
 
         # ---------- Initialise population ----------
@@ -1161,6 +1135,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                 "generations_ran": generations_ran,
                 "enable_compaction": self.enable_compaction,
                 "min_max_weight": self.min_max_weight,
+                "atom_space_strategy": self.atom_space_strategy,
                 "max_rules": self.max_rules,
                 "max_atoms_per_rule": self.max_atoms_per_rule,
             },

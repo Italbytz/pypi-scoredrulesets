@@ -35,6 +35,8 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from .atom_space import RuleLCSFeatureTypingStrategy
+from .atom_space import build_rulelcs_feature_info
 from .base import BaseRuleSetEstimator
 
 
@@ -694,6 +696,7 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
         n_strata: int = 1,
         default_class_policy: str = "major",
         low_cardinality_threshold: int = 10,
+        feature_typing_strategy: RuleLCSFeatureTypingStrategy = "auto_low_cardinality",
         include_default_rule: bool = True,
         random_state: int | None = None,
     ):
@@ -717,6 +720,7 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
         self.n_strata = n_strata
         self.default_class_policy = default_class_policy
         self.low_cardinality_threshold = low_cardinality_threshold
+        self.feature_typing_strategy = feature_typing_strategy
         self.include_default_rule = include_default_rule
         self.random_state = random_state
 
@@ -840,31 +844,11 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
     # ------------------------------------------------------------ internal
     def _build_feature_info(self, X: np.ndarray) -> list[dict]:
         """Analyse features: detect numeric vs categorical."""
-        info: list[dict] = []
-        for fi in range(X.shape[1]):
-            col = X[:, fi]
-            unique_vals = np.unique(col)
-            n_unique = len(unique_vals)
-            # Categorical heuristic: integer-valued and low cardinality
-            is_cat = (
-                n_unique <= self.low_cardinality_threshold
-                and np.all(col == np.round(col))
-            )
-            if is_cat:
-                info.append({
-                    "numeric": False,
-                    "values": set(int(v) for v in unique_vals),
-                    "min": float(col.min()),
-                    "max": float(col.max()),
-                })
-            else:
-                info.append({
-                    "numeric": True,
-                    "values": set(),
-                    "min": float(col.min()),
-                    "max": float(col.max()),
-                })
-        return info
+        return build_rulelcs_feature_info(
+            X,
+            low_cardinality_threshold=self.low_cardinality_threshold,
+            strategy=self.feature_typing_strategy,
+        )
 
     def _build_ruleset(
         self,
@@ -931,5 +915,6 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
                 "algorithm": "BioHEL-inspired IRL",
                 "n_rules": len(rules),
                 "default_class": int(default_class),
+                "feature_typing_strategy": self.feature_typing_strategy,
             },
         )

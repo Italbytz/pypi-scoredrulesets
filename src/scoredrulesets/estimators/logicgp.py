@@ -49,13 +49,14 @@ from typing import Any, Callable, Protocol, Union
 import numpy as np
 from sklearn.metrics import f1_score as _f1_score
 from sklearn.model_selection import StratifiedShuffleSplit
-from sklearn.preprocessing import KBinsDiscretizer
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from .atom_space import LogicGPEncodingStrategy
+from .atom_space import discretize_logicgp_features
 from .base import BaseRuleSetEstimator
 
 
@@ -659,6 +660,7 @@ def _discretize_features(
     n_bins: int = 5,
     fitted_binners: list | None = None,
     cat_masks: np.ndarray | None = None,
+    strategy: LogicGPEncodingStrategy = "auto_low_cardinality",
 ) -> tuple[np.ndarray, list, np.ndarray]:
     """
     Discretize continuous features into bin indices.
@@ -666,71 +668,13 @@ def _discretize_features(
     Returns (X_disc, fitted_binners, cat_mask).
     cat_mask[i] = True means feature i was treated as categorical (no binner).
     """
-    n_samples, n_features = X.shape
-    X_disc = np.empty((n_samples, n_features), dtype=object)
-
-    is_fit = fitted_binners is not None
-
-    if not is_fit:
-        fitted_binners = []
-        cat_masks_list = []
-    else:
-        cat_masks_list = None  # not needed when using pre-fitted binners
-
-    for f in range(n_features):
-        col = X[:, f]
-        arr = np.asarray(col, dtype=object)
-
-        is_numeric = False
-        float_col = None
-        try:
-            float_col = arr.astype(float)
-            is_numeric = True
-        except (ValueError, TypeError):
-            pass
-
-        if is_numeric and float_col is not None:
-            unique_vals = np.unique(float_col)
-            n_unique = len(unique_vals)
-            is_cat = n_unique <= n_bins
-        else:
-            is_cat = True
-            float_col = None
-            n_unique = len(np.unique(arr))
-
-        if not is_fit:
-            cat_masks_list.append(is_cat)
-
-        if is_cat or not is_numeric:
-            X_disc[:, f] = arr
-            if not is_fit:
-                fitted_binners.append(None)
-        else:
-            actual_bins = min(n_bins, n_unique)
-            if not is_fit:
-                binner = KBinsDiscretizer(
-                    n_bins=actual_bins,
-                    encode="ordinal",
-                    strategy="quantile",
-                    subsample=None,
-                )
-                binner.fit(float_col.reshape(-1, 1))
-                fitted_binners.append(binner)
-            else:
-                binner = fitted_binners[f]
-
-            if binner is not None:
-                binned = binner.transform(float_col.reshape(-1, 1)).ravel().astype(int)
-                X_disc[:, f] = binned
-            else:
-                X_disc[:, f] = arr
-
-    if not is_fit:
-        cat_masks_arr = np.array(cat_masks_list, dtype=bool)
-    else:
-        cat_masks_arr = cat_masks
-
-    return X_disc, fitted_binners, cat_masks_arr
+    return discretize_logicgp_features(
+        X,
+        n_bins=n_bins,
+        fitted_binners=fitted_binners,
+        cat_masks=cat_masks,
+        strategy=strategy,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -822,6 +766,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         model_selection: str | ModelSelector = "paper",
         fitness_evaluator: str | FitnessEvaluator | None = None,
         max_fit_seconds: float | None = None,
+        feature_encoding_strategy: LogicGPEncodingStrategy = "auto_low_cardinality",
         random_state: int | None = None,
     ):
         self.trainer = trainer
@@ -840,6 +785,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         self.model_selection = model_selection
         self.fitness_evaluator = fitness_evaluator
         self.max_fit_seconds = max_fit_seconds
+        self.feature_encoding_strategy = feature_encoding_strategy
         self.random_state = random_state
 
 
@@ -863,7 +809,9 @@ class LogicGPClassifier(BaseRuleSetEstimator):
 
         # Discretization
         X_disc, self._binners_, self._cat_masks_ = _discretize_features(
-            X_valid, n_bins=self.n_bins
+            X_valid,
+            n_bins=self.n_bins,
+            strategy=self.feature_encoding_strategy,
         )
 
         # ----- Validation split for improved final model selection -----
@@ -934,7 +882,10 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 f"X has {X_arr.shape[1]} features, expected {self.n_features_in_}."
             )
         X_disc, _, _ = _discretize_features(
-            X_arr, fitted_binners=self._binners_, cat_masks=self._cat_masks_
+            X_arr,
+            fitted_binners=self._binners_,
+            cat_masks=self._cat_masks_,
+            strategy=self.feature_encoding_strategy,
         )
         return predict_from_ruleset(self.ruleset_, X_disc)
 
@@ -946,7 +897,10 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 f"X has {X_arr.shape[1]} features, expected {self.n_features_in_}."
             )
         X_disc, _, _ = _discretize_features(
-            X_arr, fitted_binners=self._binners_, cat_masks=self._cat_masks_
+            X_arr,
+            fitted_binners=self._binners_,
+            cat_masks=self._cat_masks_,
+            strategy=self.feature_encoding_strategy,
         )
         return predict_proba_from_ruleset(self.ruleset_, X_disc)
 
@@ -1482,6 +1436,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 "model_size": poly.size,
                 "max_generations": self.max_generations,
                 "n_bins": self.n_bins,
+                "feature_encoding_strategy": self.feature_encoding_strategy,
                 "population_size": self.population_size,
                 "n_adaptations_per_gen": self.n_adaptations_per_gen,
                 "max_model_size": self.max_model_size,
