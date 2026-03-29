@@ -45,7 +45,7 @@ Source = "https://github.com/scoredrulesets/scoredrulesets"
 
 [project.optional-dependencies]
 hs = ["imodels>=1.4.0"]
-exstracs = ["scikit-ExSTraCS>=3.0"]
+exstracs = ["scikit-ExSTraCS>=1.1.1,<2"]
 rulekit = ["rulekit>=2.0", "jpype1>=1.4"]
 all = [
   "scoredrulesets[hs]",
