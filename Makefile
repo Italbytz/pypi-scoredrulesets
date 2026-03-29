@@ -127,7 +127,7 @@ benchmark-standard-status:
 # ---------------------------------------------------------------------------
 
 benchmark-paper:
-	python3 -u examples/benchmarks/benchmark_paper.py \
+	.venv/bin/python -u examples/benchmarks/benchmark_paper.py \
 		--checkpoint $(CHECKPOINT_PAPER) \
 		--output-dir $(OUTPUT_DIR_PAPER) \
 		--timeout $(TIMEOUT) \
