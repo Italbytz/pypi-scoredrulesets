@@ -7,13 +7,13 @@ Die Beispiele sind jetzt nach Zweck getrennt:
 
 ## Estimator-Demos
 
-Direkter RuleLCS-Schaetzer:
+Direkter RulePLCS-Schaetzer:
 
 ```bash
 python3 examples/estimators/example_ruleplcs_backend.py
 ```
 
-RuleLCS ueber Wrapper:
+RulePLCS ueber Wrapper:
 
 ```bash
 python3 examples/estimators/example_ruleplcs_wrapper.py

@@ -100,7 +100,7 @@ pip install "scoredrulesets[benchmark]"
 
 ## Quick Start
 
-### RuleLCS (no extra dependencies)
+### RulePLCS (no extra dependencies)
 
 ```python
 from sklearn.datasets import load_iris

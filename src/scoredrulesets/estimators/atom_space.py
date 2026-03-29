@@ -321,14 +321,14 @@ def build_ruleplcs_feature_info(
     low_cardinality_threshold: int,
     strategy: RulePLCSFeatureTypingStrategy = "auto_low_cardinality",
 ) -> list[dict[str, Any]]:
-    """Build RuleLCS feature metadata with low-cardinality category heuristic."""
+    """Build RulePLCS feature metadata with low-cardinality category heuristic."""
     if strategy not in (
         "auto_low_cardinality",
         "all_numeric",
         "all_integer_categorical",
     ):
         raise ValueError(
-            "Unknown RuleLCS feature typing strategy "
+            "Unknown RulePLCS feature typing strategy "
             f"'{strategy}'. Choose 'auto_low_cardinality', 'all_numeric', "
             "or 'all_integer_categorical'."
         )
