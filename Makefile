@@ -1,12 +1,15 @@
 .PHONY: help benchmark benchmark-resume benchmark-recover benchmark-clean benchmark-status \
        benchmark-standard benchmark-standard-resume benchmark-standard-clean benchmark-standard-status \
+	benchmark-paper benchmark-paper-clean benchmark-paper-status \
 	benchmark-normal benchmark-normal-resume benchmark-normal-clean benchmark-normal-status \
 	benchmark-normal-lite benchmark-normal-lite-resume benchmark-normal-lite-clean benchmark-normal-lite-status \
 	reports-normal reports-normal-lite reports-standard reports-full
 
 CHECKPOINT ?= benchmarks/checkpoint.jsonl
 CHECKPOINT_STANDARD ?= benchmarks/checkpoint_standard.jsonl
+CHECKPOINT_PAPER ?= benchmarks/checkpoint_paper.jsonl
 CHECKPOINT_NORMAL_LITE ?= benchmarks/checkpoint_normal_lite.jsonl
+OUTPUT_DIR_PAPER ?= benchmarks/paper
 TIMEOUT    ?= 300
 REPEATS    ?= 3
 MAX_ATTEMPTS ?= 5
@@ -27,6 +30,11 @@ help:
 	@echo "  make benchmark-standard-clean    - Loescht Standard-Checkpoint und startet von vorne"
 	@echo "  make benchmark-standard-status   - Zeigt Standard-Checkpoint-Status (fertige Laeufe)"
 	@echo ""
+	@echo "Paper-Benchmark-Targets (7 Schaetzer, 10 Datasets):"
+	@echo "  make benchmark-paper           - Einmaliger Paper-Benchmark (mit Checkpoint/Resume)"
+	@echo "  make benchmark-paper-clean     - Loescht Paper-Checkpoint"
+	@echo "  make benchmark-paper-status    - Zeigt Paper-Checkpoint-Status"
+	@echo ""
 	@echo "Normal-Lite-Benchmark-Targets (alle Schaetzer, 10 Datasets, reduzierte Repeats):"
 	@echo "  make benchmark-normal-lite        - Einmaliger Normal-Lite-Report"
 	@echo "  make benchmark-normal-lite-resume - Startet/setzt Normal-Lite-Benchmark fort"
@@ -42,6 +50,7 @@ help:
 	@echo ""
 	@echo "Optionen (als Variablen):"
 	@echo "  CHECKPOINT=path.jsonl  CHECKPOINT_STANDARD=path.jsonl  CHECKPOINT_NORMAL_LITE=path.jsonl"
+	@echo "  CHECKPOINT_PAPER=path.jsonl  OUTPUT_DIR_PAPER=path"
 	@echo "  TIMEOUT=300  REPEATS=3  MAX_ATTEMPTS=5"
 	@echo "  ARGS='--datasets cart_hard --estimators wrapper_cart,gp'"
 
@@ -111,6 +120,34 @@ benchmark-standard-status:
 		tail -3 $(CHECKPOINT_STANDARD) | python -m json.tool --compact 2>/dev/null || tail -3 $(CHECKPOINT_STANDARD); \
 	else \
 		echo "Kein Standard-Checkpoint vorhanden: $(CHECKPOINT_STANDARD)"; \
+	fi
+
+# ---------------------------------------------------------------------------
+# Paper-Benchmark (7 Schaetzer, 10 Datasets)
+# ---------------------------------------------------------------------------
+
+benchmark-paper:
+	python3 -u examples/benchmarks/benchmark_paper.py \
+		--checkpoint $(CHECKPOINT_PAPER) \
+		--output-dir $(OUTPUT_DIR_PAPER) \
+		--timeout $(TIMEOUT) \
+		--repeats $(REPEATS) \
+		$(ARGS)
+
+benchmark-paper-clean:
+	@echo "Loesche Paper-Checkpoint: $(CHECKPOINT_PAPER)"
+	rm -f $(CHECKPOINT_PAPER)
+	@echo "Fertig. Naechster 'make benchmark-paper' startet von vorne."
+
+benchmark-paper-status:
+	@if [ -f "$(CHECKPOINT_PAPER)" ]; then \
+		echo "Paper-Checkpoint: $(CHECKPOINT_PAPER)"; \
+		echo "Zeilen (fertige Laeufe): $$(wc -l < $(CHECKPOINT_PAPER))"; \
+		echo "Dateigroesse: $$(du -h $(CHECKPOINT_PAPER) | cut -f1)"; \
+		echo "Letzte 3 Laeufe:"; \
+		tail -3 $(CHECKPOINT_PAPER) | python -m json.tool --compact 2>/dev/null || tail -3 $(CHECKPOINT_PAPER); \
+	else \
+		echo "Kein Paper-Checkpoint vorhanden: $(CHECKPOINT_PAPER)"; \
 	fi
 
 benchmark-normal: benchmark-standard
