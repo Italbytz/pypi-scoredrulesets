@@ -622,3 +622,26 @@ def test_no_split_disables_validation_fraction():
     est_no_bp = ScoredRuleSetClassifier(backend="rulegp")
     _disable_validation_fraction(est_no_bp)
     assert est_no_bp.backend_params["validation_fraction"] == 0.0
+
+
+def test_rulegp_and_rulensga2_use_expected_parameter_families():
+    """Guard migration mapping: old ruleGP -> rulensga2, old ruleGP2 -> rulegp."""
+    from scoredrulesets.benchmarking.estimators import default_estimator_specs
+
+    specs = default_estimator_specs()
+
+    rulegp = specs["wrapper_rulegp_strong"].factory()
+    assert rulegp.backend == "rulegp"
+    assert "f1_averaging" in rulegp.backend_params
+    assert "max_generations" in rulegp.backend_params
+    assert "n_adaptations_per_gen" in rulegp.backend_params
+    assert "generations" not in rulegp.backend_params
+    assert "enable_compaction" not in rulegp.backend_params
+
+    rulensga2 = specs["wrapper_rulensga2_strong"].factory()
+    assert rulensga2.backend == "rulensga2"
+    assert "generations" in rulensga2.backend_params
+    assert "early_stopping_rounds" in rulensga2.backend_params
+    assert "enable_compaction" in rulensga2.backend_params
+    assert "f1_averaging" not in rulensga2.backend_params
+    assert "max_generations" not in rulensga2.backend_params

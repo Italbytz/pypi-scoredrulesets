@@ -13,6 +13,10 @@ Estimators (short name -> internal wrapper):
     ruleNLN         <- wrapper_rulenln_strong
     rulePLCS        <- wrapper_ruleplcs_strong
 
+Naming migration:
+    old ruleGP  -> rulensga2
+    old ruleGP2 -> ruleGP
+
 Datasets (10):
   Real-World (4): sklearn_breast_cancer, sklearn_wine, uci_car_evaluation,
                   uci_heart_disease
