@@ -60,7 +60,9 @@ from scoredrulesets.benchmarking import (
     plot_benchmark_results,
     plot_critical_difference_diagram,
     plot_combined_dot,
+    plot_dual_cd_diagram,
     plot_efficiency_summary,
+    plot_2d_rank_plot,
     plot_pareto_front,
     plot_win_tie_loss_pareto_matrix,
     plot_win_tie_loss_size_matrix,
@@ -383,6 +385,12 @@ def main(
     eff_png, eff_pdf = plot_efficiency_summary(
         results, output_base=out_dir / "benchmark_results_efficiency"
     )
+    dual_cd_png, dual_cd_pdf = plot_dual_cd_diagram(
+        results, output_base=out_dir / "benchmark_results_dual_cd"
+    )
+    rank2d_png, rank2d_pdf = plot_2d_rank_plot(
+        results, output_base=out_dir / "benchmark_results_rank2d"
+    )
 
     # Markdown-Report
     md_report = format_benchmark_report_markdown(
@@ -427,6 +435,10 @@ def main(
             "wtl_triangular_pdf": str(wtl_tri_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
+            "dual_cd_png": str(dual_cd_png.name),
+            "dual_cd_pdf": str(dual_cd_pdf.name),
+            "rank2d_png": str(rank2d_png.name),
+            "rank2d_pdf": str(rank2d_pdf.name),
         },
         notes=[
             "Paper Benchmark: 7 rule-based classifiers on 10 selected datasets.",
@@ -477,6 +489,10 @@ def main(
             "wtl_triangular_pdf": str(wtl_tri_pdf.name),
             "efficiency_png": str(eff_png.name),
             "efficiency_pdf": str(eff_pdf.name),
+            "dual_cd_png": str(dual_cd_png.name),
+            "dual_cd_pdf": str(dual_cd_pdf.name),
+            "rank2d_png": str(rank2d_png.name),
+            "rank2d_pdf": str(rank2d_pdf.name),
         },
         notes=[
             "Paper Benchmark: 7 rule-based classifiers on 10 selected datasets.",
@@ -500,6 +516,8 @@ def main(
     print(f"  {out_dir}/benchmark_results_wtl_pareto.png / .pdf (Pareto Win/Tie/Loss Matrix)")
     print(f"  {out_dir}/benchmark_results_wtl_triangular.png / .pdf (Triangular W/T/L Matrix)")
     print(f"  {out_dir}/benchmark_results_efficiency.png / .pdf (Executive Efficiency Summary)")
+    print(f"  {out_dir}/benchmark_results_dual_cd.png / .pdf (Dual CD Diagram: F1 + Complexity)")
+    print(f"  {out_dir}/benchmark_results_rank2d.png / .pdf (2D Rank Plot: Quality vs. Complexity)")
 
     print("\nLeaderboard (Top 10):")
     print(format_benchmark_leaderboard_table(leaderboard)[:3000])
