@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from itertools import combinations
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from sklearn.metrics import f1_score as _f1_score
@@ -26,6 +26,13 @@ from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
 from .atom_space import NativeAtomSpaceStrategy
 from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
+
+
+AtomPreselectionStrategy = Literal[
+    "none",
+    "logicgp_singleton",
+    "logicgp_binned_sets",
+]
 
 
 @dataclass(frozen=True)
@@ -123,7 +130,7 @@ class _FitnessRLCW2:
 
     @property
     def consolidated(self) -> float:
-        return self.max_recall
+        return (self.max_recall + self.mean_other_recall) / 2.0
 
     def dominates(self, other: "_FitnessRLCW2") -> bool:
         if self.best_class != other.best_class:
@@ -285,7 +292,7 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
         f1_averaging: str = "macro",
         max_generations: int = 500,
         stagnation_generations: int = 80,
-        early_stopping_metric: str = "f1",
+        early_stopping_metric: str = "consolidated",
         min_max_weight: float = 0.0,
         min_improvement_pct: float = 0.01,
         population_size: int | None = 120,
@@ -294,11 +301,12 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
         max_model_size: int | None = None,
         validation_fraction: float = 0.0,
         max_fit_seconds: float | None = None,
-        max_rules: int = 12,
-        max_atoms_per_rule: int = 5,
-        min_samples_leaf: int = 3,
+        max_rules: int | None = None,
+        max_atoms_per_rule: int | None = None,
+        min_samples_leaf: int = 1,
         max_thresholds_per_feature: int | None = None,
         atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
+        atom_preselection_strategy: AtomPreselectionStrategy = "none",
         random_state: int | None = None,
     ):
         self.f1_averaging = f1_averaging
@@ -318,6 +326,16 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
         self.min_samples_leaf = min_samples_leaf
         self.max_thresholds_per_feature = max_thresholds_per_feature
         self.atom_space_strategy = atom_space_strategy
+        if atom_preselection_strategy not in (
+            "none",
+            "logicgp_singleton",
+            "logicgp_binned_sets",
+        ):
+            raise ValueError(
+                "atom_preselection_strategy must be 'none', "
+                "'logicgp_singleton', or 'logicgp_binned_sets'."
+            )
+        self.atom_preselection_strategy = atom_preselection_strategy
         self.random_state = random_state
 
     def fit(self, X, y):
@@ -452,6 +470,36 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
                         mid = k // 2
                         candidates.append(_AtomGene2(fi, "in", sorted(cats[mid - 1:mid + 1])))
 
+            if self.atom_preselection_strategy == "logicgp_singleton":
+                candidates = [a for a in candidates if a.op == "=="]
+            elif self.atom_preselection_strategy == "logicgp_binned_sets":
+                # Keep logicGP-like set atoms and add contiguous interval atoms for
+                # ordered bin categories (e.g. bin indices 0..k-1).
+                candidates = [a for a in candidates if a.op in ("==", "in")]
+
+                cats = list(spec.get("categories", []))
+                if cats:
+                    numeric_cats: list[float] = []
+                    for c in cats:
+                        try:
+                            numeric_cats.append(float(c))
+                        except (TypeError, ValueError):
+                            numeric_cats = []
+                            break
+
+                    if numeric_cats:
+                        ordered = sorted(set(numeric_cats))
+                        if len(ordered) >= 3:
+                            for i in range(len(ordered) - 1):
+                                for j in range(i + 1, len(ordered)):
+                                    candidates.append(
+                                        _AtomGene2(
+                                            fi,
+                                            "between",
+                                            [float(ordered[i]), float(ordered[j])],
+                                        )
+                                    )
+
             scored: list[tuple[float, _AtomGene2]] = []
             for atom in candidates:
                 mask = self._atom_mask(atom, X)
@@ -481,6 +529,22 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
         atoms: list[_AtomGene2] = []
         for spec in specs:
             fi = int(spec["idx"])
+            if self.atom_preselection_strategy == "logicgp_singleton":
+                cats = list(spec.get("categories", []))
+                if cats:
+                    atoms.append(_AtomGene2(fi, "==", cats[0]))
+                continue
+            if self.atom_preselection_strategy == "logicgp_binned_sets":
+                cats = list(spec.get("categories", []))
+                if cats:
+                    atoms.append(_AtomGene2(fi, "==", cats[0]))
+                    if len(cats) >= 2:
+                        try:
+                            nums = sorted(set(float(c) for c in cats))
+                            atoms.append(_AtomGene2(fi, "between", [nums[0], nums[-1]]))
+                        except (TypeError, ValueError):
+                            pass
+                continue
             if spec["kind"] in ("num", "both") and spec.get("thresholds"):
                 thr = spec["thresholds"][0]
                 atoms.append(_AtomGene2(fi, "<=", float(thr)))
@@ -625,7 +689,7 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
             return rs
         out = rs.clone()
         ri = int(self._rng_.integers(0, len(out.rules)))
-        if len(out.rules[ri].atoms) >= self.max_atoms_per_rule:
+        if self.max_atoms_per_rule is not None and len(out.rules[ri].atoms) >= self.max_atoms_per_rule:
             return out
         atom = all_atoms[int(self._rng_.integers(0, len(all_atoms)))]
         out.rules[ri].atoms.append(atom)
@@ -656,7 +720,7 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
         if not all_atoms:
             return rs
         out = rs.clone()
-        if len(out.rules) >= self.max_rules:
+        if self.max_rules is not None and len(out.rules) >= self.max_rules:
             return out
         atom = all_atoms[int(self._rng_.integers(0, len(all_atoms)))]
         out.rules.append(
@@ -749,10 +813,10 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
 
                 if self.max_model_size is not None and child.size > self.max_model_size:
                     continue
-                if len(child.rules) > self.max_rules:
+                if self.max_rules is not None and len(child.rules) > self.max_rules:
                     child.rules = child.rules[: self.max_rules]
                 for rule in child.rules:
-                    if len(rule.atoms) > self.max_atoms_per_rule:
+                    if self.max_atoms_per_rule is not None and len(rule.atoms) > self.max_atoms_per_rule:
                         rule.atoms = rule.atoms[: self.max_atoms_per_rule]
                 if not child.rules:
                     continue
@@ -876,6 +940,7 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
                 "max_model_size": self.max_model_size,
                 "min_max_weight": self.min_max_weight,
                 "atom_space_strategy": self.atom_space_strategy,
+                "atom_preselection_strategy": self.atom_preselection_strategy,
             },
         )
 
