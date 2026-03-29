@@ -475,7 +475,9 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
             elif self.atom_preselection_strategy == "logicgp_binned_sets":
                 # Keep logicGP-like set atoms and add contiguous interval atoms for
                 # ordered bin categories (e.g. bin indices 0..k-1).
-                candidates = [a for a in candidates if a.op in ("==", "in")]
+                # For purely continuous features that have no categories, fall back
+                # to the full numeric-threshold candidates so the model stays usable.
+                binned = [a for a in candidates if a.op in ("==", "in")]
 
                 cats = list(spec.get("categories", []))
                 if cats:
@@ -492,13 +494,17 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
                         if len(ordered) >= 3:
                             for i in range(len(ordered) - 1):
                                 for j in range(i + 1, len(ordered)):
-                                    candidates.append(
+                                    binned.append(
                                         _AtomGene2(
                                             fi,
                                             "between",
                                             [float(ordered[i]), float(ordered[j])],
                                         )
                                     )
+
+                # If no categorical/binned atoms exist for this feature (e.g. purely
+                # numeric), fall back to the original threshold candidates.
+                candidates = binned if binned else candidates
 
             scored: list[tuple[float, _AtomGene2]] = []
             for atom in candidates:
@@ -544,6 +550,9 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
                             atoms.append(_AtomGene2(fi, "between", [nums[0], nums[-1]]))
                         except (TypeError, ValueError):
                             pass
+                elif spec["kind"] in ("num", "both") and spec.get("thresholds"):
+                    # No categories: fall back to a numeric threshold atom.
+                    atoms.append(_AtomGene2(fi, "<=", float(spec["thresholds"][0])))
                 continue
             if spec["kind"] in ("num", "both") and spec.get("thresholds"):
                 thr = spec["thresholds"][0]
