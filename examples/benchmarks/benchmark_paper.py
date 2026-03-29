@@ -10,6 +10,7 @@ Estimators (short name -> internal wrapper):
     ExSTraCS        <- wrapper_exstracs
     ExSTraCS (LRC)  <- wrapper_exstracs_compact (Lossy Rule Compaction)
     ruleGP          <- wrapper_rulegp_strong (logicGP mode)
+    ruleNSGA-II     <- wrapper_rulensga2_strong
     ruleNLN         <- wrapper_rulenln_strong
     rulePLCS        <- wrapper_ruleplcs_strong
 
@@ -183,6 +184,22 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
             random_state=0,
         ),
     ),
+    "paper_ruleNSGA2": EstimatorSpec(
+        name="ruleNSGA-II",
+        factory=lambda: ScoredRuleSetClassifier(
+            backend="rulensga2",
+            backend_params={
+                "population_size": 150,
+                "generations": 250,
+                "max_rules": 12,
+                "max_atoms_per_rule": 5,
+                "tournament_size": 4,
+                "early_stopping_rounds": 30,
+                "enable_compaction": True,
+            },
+            random_state=0,
+        ),
+    ),
 }
 
 # Register paper estimators globally so run_benchmarks() can find them
@@ -275,7 +292,7 @@ def main(
     timeout_seconds: float | None = 300.0,
     checkpoint_path: str | Path | None = "benchmarks/checkpoint_paper.jsonl",
     output_dir: str | Path = "benchmarks/paper",
-    console_title: str = "PAPER BENCHMARK: 7 methods, 10 datasets",
+    console_title: str = "PAPER BENCHMARK: 8 methods, 10 datasets",
     report_title: str = "ScoredRuleSets Paper Benchmark - Rule-Based Classifiers Comparison",
 ):
     """Run the paper benchmark and generate all reports."""
@@ -301,7 +318,7 @@ def main(
     print(f"  Repeats:    {repeats}")
     print(f"  Timeout per run:  {timeout_display}")
     print(f"  Checkpoint:        {ckpt_display}")
-    print(f"  Total runs:     {total_runs}")
+    print(f"  Total runs:        {total_runs}")
     print("=" * 70)
 
     out_dir = Path(output_dir)
@@ -402,7 +419,7 @@ def main(
             "repeats": repeats,
             "timeout_seconds": timeout_display,
             "design": (
-                f"7 Rule-Based Classifiers x {len(ds_names)} Datasets "
+                f"8 Rule-Based Classifiers x {len(ds_names)} Datasets "
                 f"({len([d for d in ds_names if d.startswith('sklearn_') or d.startswith('uci_')])} real-world, "
                 f"{len([d for d in ds_names if d.startswith('synth_')])} synthetic), "
                 f"{repeats} repeats"
@@ -534,7 +551,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Paper-Benchmark: 7 rule-based classifiers on 10 selected datasets.",
         epilog=(
-            "Estimators: HS, RuleKit, ExSTraCS, ExSTraCS (LRC), ruleGP, ruleNLN, rulePLCS. "
+            "Estimators: HS, RuleKit, ExSTraCS, ExSTraCS (LRC), ruleGP, ruleNSGA-II, ruleNLN, rulePLCS. "
             "10 Datasets: 4 real-world (sklearn/UCI) + 6 synthetic."
         ),
     )
