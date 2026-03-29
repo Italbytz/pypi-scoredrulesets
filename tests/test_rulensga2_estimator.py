@@ -1,13 +1,13 @@
 import numpy as np
 from sklearn.datasets import load_iris, load_breast_cancer
 
-from scoredrulesets import RuleGPClassifier, ScoredRuleSetClassifier
+from scoredrulesets import RuleNSGA2Classifier, ScoredRuleSetClassifier
 from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
 
-def test_rulegp_estimator_fit_predict_and_ruleset():
+def test_rulensga2_estimator_fit_predict_and_ruleset():
     X, y = load_iris(return_X_y=True)
-    clf = RuleGPClassifier(
+    clf = RuleNSGA2Classifier(
         population_size=20,
         generations=10,
         max_rules=6,
@@ -23,14 +23,14 @@ def test_rulegp_estimator_fit_predict_and_ruleset():
     assert pred.shape == (10,)
     assert proba.shape == (10, len(clf.classes_))
     assert np.allclose(proba.sum(axis=1), 1.0)
-    assert any(r.rule_id == "rulegp_default" for r in ruleset.rules)
-    assert any(r.rule_id and r.rule_id.startswith("rulegp_rule_") for r in ruleset.rules)
-    assert ruleset.metadata["source"] == "rulegp"
+    assert any(r.rule_id == "rulensga2_default" for r in ruleset.rules)
+    assert any(r.rule_id and r.rule_id.startswith("rulensga2_rule_") for r in ruleset.rules)
+    assert ruleset.metadata["source"] == "rulensga2"
 
 
-def test_rulegp_binary_classification():
+def test_rulensga2_binary_classification():
     X, y = load_breast_cancer(return_X_y=True)
-    clf = RuleGPClassifier(
+    clf = RuleNSGA2Classifier(
         population_size=20,
         generations=5,
         max_rules=4,
@@ -45,10 +45,10 @@ def test_rulegp_binary_classification():
     assert np.allclose(proba.sum(axis=1), 1.0)
 
 
-def test_rulegp_compaction_reduces_atoms():
+def test_rulensga2_compaction_reduces_atoms():
     X, y = load_iris(return_X_y=True)
 
-    clf_compact = RuleGPClassifier(
+    clf_compact = RuleNSGA2Classifier(
         population_size=30,
         generations=15,
         enable_compaction=True,
@@ -57,7 +57,7 @@ def test_rulegp_compaction_reduces_atoms():
     clf_compact.fit(X, y)
     rs_compact = clf_compact.to_ruleset()
 
-    clf_no_compact = RuleGPClassifier(
+    clf_no_compact = RuleNSGA2Classifier(
         population_size=30,
         generations=15,
         enable_compaction=False,
@@ -72,10 +72,10 @@ def test_rulegp_compaction_reduces_atoms():
     assert atoms_compact <= atoms_no_compact + 2  # allow small tolerance
 
 
-def test_sklearn_wrapper_rulegp_backend():
+def test_sklearn_wrapper_rulensga2_backend():
     X, y = load_iris(return_X_y=True)
     clf = ScoredRuleSetClassifier(
-        backend="rulegp",
+        backend="rulensga2",
         backend_params={
             "population_size": 20,
             "generations": 5,
@@ -89,26 +89,26 @@ def test_sklearn_wrapper_rulegp_backend():
     proba = clf.predict_proba(X[:6])
     assert pred.shape == (6,)
     assert proba.shape == (6, 3)
-    assert clf.to_ruleset().metadata["source"] == "rulegp"
+    assert clf.to_ruleset().metadata["source"] == "rulensga2"
 
 
-def test_benchmarking_estimator_specs_include_rulegp():
+def test_benchmarking_estimator_specs_include_rulensga2():
     specs = default_estimator_specs()
-    assert "wrapper_rulegp" in specs
+    assert "wrapper_rulensga2" in specs
 
 
-def test_rulegp_benchmark_spec_produces_valid_estimator():
+def test_rulensga2_benchmark_spec_produces_valid_estimator():
     specs = default_estimator_specs()
-    est = specs["wrapper_rulegp"].factory()
-    assert est.backend == "rulegp"
+    est = specs["wrapper_rulensga2"].factory()
+    assert est.backend == "rulensga2"
     assert est.backend_params["population_size"] >= 10
     assert est.backend_params["enable_compaction"] is True
 
 
-def test_rulegp_ruleset_atoms_use_correct_between_format():
+def test_rulensga2_ruleset_atoms_use_correct_between_format():
     """Ensure 'between' atoms are serialized as [low, high] lists, not dicts."""
     X, y = load_iris(return_X_y=True)
-    clf = RuleGPClassifier(
+    clf = RuleNSGA2Classifier(
         population_size=20,
         generations=10,
         random_state=0,

@@ -9,9 +9,9 @@ Estimators (short name -> internal wrapper):
     RuleKit         <- wrapper_rulekit_native
     ExSTraCS        <- wrapper_exstracs
     ExSTraCS (LRC)  <- wrapper_exstracs_compact (Lossy Rule Compaction)
-    ruleGP          <- wrapper_rulegp_strong
+    ruleGP          <- wrapper_rulensga2_strong
     ruleNLN         <- wrapper_rulenln_strong
-    ruleLCS         <- wrapper_rulelcs_strong
+    ruleLCS         <- wrapper_ruleplcs_strong
 
 Datasets (10):
   Real-World (4): sklearn_breast_cancer, sklearn_wine, uci_car_evaluation,
@@ -123,9 +123,9 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
         ),
     ),
     "paper_ruleGP": EstimatorSpec(
-        name="ruleGP",
+        name="ruleNSGA-II",
         factory=lambda: ScoredRuleSetClassifier(
-            backend="rulegp",
+            backend="rulensga2",
             backend_params={
                 "population_size": 150,
                 "generations": 250,
@@ -157,9 +157,9 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
         ),
     ),
     "paper_ruleLCS": EstimatorSpec(
-        name="ruleLCS",
+        name="rulePLCS",
         factory=lambda: ScoredRuleSetClassifier(
-            backend="rulelcs",
+            backend="ruleplcs",
             backend_params={
                 "population_size": 200,
                 "n_iterations": 50,

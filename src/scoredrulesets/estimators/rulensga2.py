@@ -215,7 +215,7 @@ def _build_feature_specs(
 # Main classifier
 # ---------------------------------------------------------------------------
 
-class RuleGPClassifier(BaseRuleSetEstimator):
+class RuleNSGA2Classifier(BaseRuleSetEstimator):
     """Genetic Programming on full Scored Rule Set individuals.
 
     Evolves a population of complete rule sets using NSGA-II multi-objective
@@ -1099,8 +1099,8 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             rules.append(Rule(
                 atoms=atoms,
                 scores=scores,
-                rule_id=f"rulegp_rule_{ri}",
-                metadata={"source": "rulegp", "support": int(mask.sum())},
+                rule_id=f"rulensga2_rule_{ri}",
+                metadata={"source": "rulensga2", "support": int(mask.sum())},
             ))
 
         # Default rule
@@ -1118,8 +1118,8 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         rules.append(Rule(
             atoms=[],
             scores=default_scores,
-            rule_id="rulegp_default",
-            metadata={"source": "rulegp", "kind": "default"},
+            rule_id="rulensga2_default",
+            metadata={"source": "rulensga2", "kind": "default"},
         ))
 
         return ScoredRuleSet(
@@ -1128,7 +1128,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
             rules=rules,
             metadata={
-                "source": "rulegp",
+                "source": "rulensga2",
                 "model_type": "genetic_programming_ruleset",
                 "population_size": self.population_size,
                 "generations": self.generations,

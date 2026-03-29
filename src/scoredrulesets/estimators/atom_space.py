@@ -18,7 +18,7 @@ FeatureKind = Literal["num", "cat", "both"]
 LogicGPEncodingStrategy = Literal["auto_low_cardinality", "force_numeric_bins"]
 NativeAtomSpaceStrategy = Literal["hybrid", "numeric_only", "categorical_low_cardinality_only"]
 NLNThresholdStrategy = Literal["quantile_midpoint", "quantile_only", "midpoint_only"]
-RuleLCSFeatureTypingStrategy = Literal[
+RulePLCSFeatureTypingStrategy = Literal[
     "auto_low_cardinality",
     "all_numeric",
     "all_integer_categorical",
@@ -316,10 +316,10 @@ def binarize_with_thresholds(X: np.ndarray, thresholds: list[np.ndarray]) -> np.
     return np.hstack(parts)
 
 
-def build_rulelcs_feature_info(
+def build_ruleplcs_feature_info(
     X: np.ndarray,
     low_cardinality_threshold: int,
-    strategy: RuleLCSFeatureTypingStrategy = "auto_low_cardinality",
+    strategy: RulePLCSFeatureTypingStrategy = "auto_low_cardinality",
 ) -> list[dict[str, Any]]:
     """Build RuleLCS feature metadata with low-cardinality category heuristic."""
     if strategy not in (

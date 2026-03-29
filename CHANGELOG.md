@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `ScoredRuleSetClassifier` wrapper converting scikit-learn rule learners to scored rule sets
-- `RuleGPClassifier` — NSGA-II genetic programming over rule populations
-- `RuleLCSClassifier` — Sequential covering with a genetic algorithm (LCS-style)
+- `RuleNSGA2Classifier` — NSGA-II genetic programming over rule populations
+- `RulePLCSClassifier` — Sequential covering with a genetic algorithm (LCS-style)
 - `RuleNLNClassifier` — Neural rule extraction via Neural Logic Networks
 - `AutoScoredRuleSetClassifier` — automatic estimator selection via cross-validation
 - `LogicGPClassifier` — wrapper for logicGP JSON model import

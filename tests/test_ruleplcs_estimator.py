@@ -1,13 +1,13 @@
 import numpy as np
 from sklearn.datasets import load_iris
 
-from scoredrulesets import RuleLCSClassifier, ScoredRuleSetClassifier
+from scoredrulesets import RulePLCSClassifier, ScoredRuleSetClassifier
 from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
 
-def test_rulelcs_estimator_fit_predict_and_ruleset():
+def test_ruleplcs_estimator_fit_predict_and_ruleset():
     X, y = load_iris(return_X_y=True)
-    clf = RuleLCSClassifier(
+    clf = RulePLCSClassifier(
         population_size=50,
         n_iterations=10,
         n_repetitions=1,
@@ -23,16 +23,16 @@ def test_rulelcs_estimator_fit_predict_and_ruleset():
     assert pred.shape == (10,)
     assert proba.shape == (10, len(clf.classes_))
     assert np.allclose(proba.sum(axis=1), 1.0)
-    assert ruleset.metadata["estimator"] == "RuleLCSClassifier"
+    assert ruleset.metadata["estimator"] == "RulePLCSClassifier"
     assert ruleset.metadata["algorithm"] == "BioHEL-inspired IRL"
     assert any(rule.rule_id == "default" for rule in ruleset.rules)
     assert len(ruleset.rules) >= 2  # at least one learned rule + default
 
 
-def test_sklearn_wrapper_rulelcs_backend():
+def test_sklearn_wrapper_ruleplcs_backend():
     X, y = load_iris(return_X_y=True)
     clf = ScoredRuleSetClassifier(
-        backend="rulelcs",
+        backend="ruleplcs",
         backend_params={
             "population_size": 50,
             "n_iterations": 10,
@@ -47,25 +47,25 @@ def test_sklearn_wrapper_rulelcs_backend():
     proba = clf.predict_proba(X[:6])
     assert pred.shape == (6,)
     assert proba.shape == (6, 3)
-    assert clf.to_ruleset().metadata["estimator"] == "RuleLCSClassifier"
+    assert clf.to_ruleset().metadata["estimator"] == "RulePLCSClassifier"
 
 
-def test_benchmarking_estimator_specs_include_rulelcs():
+def test_benchmarking_estimator_specs_include_ruleplcs():
     specs = default_estimator_specs()
-    assert "wrapper_rulelcs" in specs
-    assert "wrapper_rulelcs_strong" in specs
+    assert "wrapper_ruleplcs" in specs
+    assert "wrapper_ruleplcs_strong" in specs
 
 
-def test_rulelcs_benchmark_profiles_use_expected_backend_and_budget():
+def test_ruleplcs_benchmark_profiles_use_expected_backend_and_budget():
     specs = default_estimator_specs()
 
-    base = specs["wrapper_rulelcs"].factory()
-    strong = specs["wrapper_rulelcs_strong"].factory()
+    base = specs["wrapper_ruleplcs"].factory()
+    strong = specs["wrapper_ruleplcs_strong"].factory()
 
-    assert base.backend == "rulelcs"
+    assert base.backend == "ruleplcs"
     assert base.backend_params["max_rules"] >= 10
 
-    assert strong.backend == "rulelcs"
+    assert strong.backend == "ruleplcs"
     assert strong.backend_params["population_size"] >= 200
     assert strong.backend_params["max_rules"] >= 15
 

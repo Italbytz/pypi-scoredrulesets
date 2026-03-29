@@ -91,11 +91,11 @@ class TestThresholdBudget:
     """max_thresholds_per_feature for native backends."""
 
 
-    def test_rulelcs_fit(self, iris_data):
-        """RuleLCSClassifier (BioHEL) fits OK via wrapper."""
+    def test_ruleplcs_fit(self, iris_data):
+        """RulePLCSClassifier (BioHEL) fits OK via wrapper."""
         X, y = iris_data
         clf = ScoredRuleSetClassifier(
-            backend="rulelcs",
+            backend="ruleplcs",
             backend_params={
                 "population_size": 50,
                 "n_iterations": 10,
@@ -127,7 +127,7 @@ class TestThresholdBudget:
         """max_thresholds_per_feature set via preprocessing dict."""
         X, y = iris_data
         clf = ScoredRuleSetClassifier(
-            backend="rulelcs",
+            backend="ruleplcs",
             backend_params={"max_rules": 4},
             preprocessing={"max_thresholds_per_feature": 3},
             random_state=0,
@@ -147,7 +147,7 @@ class TestCombinedPreprocessing:
     def test_feature_selection_and_threshold_budget(self, iris_data):
         X, y = iris_data
         clf = ScoredRuleSetClassifier(
-            backend="rulelcs",
+            backend="ruleplcs",
             backend_params={"max_rules": 4},
             preprocessing={
                 "feature_selection": "kbest",

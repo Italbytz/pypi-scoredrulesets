@@ -1,4 +1,4 @@
-"""Tests for BioHEL-inspired enhancements in RuleLCSClassifier.
+"""Tests for BioHEL-inspired enhancements in RulePLCSClassifier.
 
 Covers:
 - Sequential Covering (IRL)
@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from sklearn.datasets import load_iris, make_classification
 
-from scoredrulesets import RuleLCSClassifier
+from scoredrulesets import RulePLCSClassifier
 
 
 # ── helpers ──────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ class TestSequentialCovering:
 
     def test_basic_fit_predict(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             sequential_covering=True,
             max_rules=4,
             random_state=0,
@@ -50,7 +50,7 @@ class TestSequentialCovering:
 
     def test_metadata_records_sequential_covering(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             sequential_covering=True,
             max_rules=3,
             random_state=0,
@@ -58,11 +58,11 @@ class TestSequentialCovering:
         clf.fit(X, y)
         meta = clf.to_ruleset().metadata
         assert meta["sequential_covering"] is True
-        assert meta["source"] == "rulelcs"
+        assert meta["source"] == "ruleplcs"
 
     def test_sequential_produces_rules(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             sequential_covering=True,
             max_rules=5,
             random_state=0,
@@ -74,7 +74,7 @@ class TestSequentialCovering:
 
     def test_sequential_binary(self):
         X, y = _synthetic_binary()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             sequential_covering=True,
             max_rules=3,
             min_samples_leaf=3,
@@ -91,7 +91,7 @@ class TestTokenCompetition:
 
     def test_fit_with_token_competition(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             token_competition_weight=0.15,
             max_rules=4,
             beam_width=5,
@@ -104,7 +104,7 @@ class TestTokenCompetition:
 
     def test_metadata_records_token_competition_weight(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             token_competition_weight=0.2,
             max_rules=3,
             random_state=0,
@@ -116,12 +116,12 @@ class TestTokenCompetition:
     def test_zero_weight_matches_baseline(self):
         """With weight=0 the token competition term is inactive."""
         X, y = _iris()
-        base = RuleLCSClassifier(
+        base = RulePLCSClassifier(
             max_rules=3, beam_width=4, max_iterations=6, random_state=0,
         )
         base.fit(X, y)
 
-        tc = RuleLCSClassifier(
+        tc = RulePLCSClassifier(
             token_competition_weight=0.0,
             max_rules=3, beam_width=4, max_iterations=6, random_state=0,
         )
@@ -139,7 +139,7 @@ class TestRuleCompaction:
 
     def test_compaction_reduces_or_keeps_rules(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             enable_compaction=True,
             max_rules=6,
             candidate_pool_size=24,
@@ -157,7 +157,7 @@ class TestRuleCompaction:
 
     def test_compaction_metadata(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             enable_compaction=True,
             max_rules=4,
             random_state=0,
@@ -168,14 +168,14 @@ class TestRuleCompaction:
     def test_compaction_preserves_accuracy(self):
         """Compaction should not significantly degrade accuracy."""
         X, y = _iris()
-        no_compact = RuleLCSClassifier(
+        no_compact = RulePLCSClassifier(
             enable_compaction=False,
             max_rules=5, random_state=0,
         )
         no_compact.fit(X, y)
         acc_before = (no_compact.predict(X) == y).mean()
 
-        compact = RuleLCSClassifier(
+        compact = RulePLCSClassifier(
             enable_compaction=True,
             max_rules=5, random_state=0,
         )
@@ -192,7 +192,7 @@ class TestWindowing:
 
     def test_windowing_runs_without_error(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             window_fraction=0.5,
             max_rules=4,
             beam_width=5,
@@ -205,7 +205,7 @@ class TestWindowing:
 
     def test_windowing_metadata(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             window_fraction=0.3,
             max_rules=3,
             random_state=0,
@@ -215,7 +215,7 @@ class TestWindowing:
 
     def test_full_window_is_default(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(max_rules=3, random_state=0)
+        clf = RulePLCSClassifier(max_rules=3, random_state=0)
         clf.fit(X, y)
         assert clf.to_ruleset().metadata["window_fraction"] == pytest.approx(1.0)
 
@@ -226,7 +226,7 @@ class TestCombinedFeatures:
 
     def test_all_biohel_features_together(self):
         X, y = _iris()
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             sequential_covering=True,
             token_competition_weight=0.1,
             enable_compaction=True,
@@ -243,7 +243,7 @@ class TestCombinedFeatures:
 
     def test_sequential_with_compaction_binary(self):
         X, y = _synthetic_binary(n=300, seed=123)
-        clf = RuleLCSClassifier(
+        clf = RulePLCSClassifier(
             sequential_covering=True,
             enable_compaction=True,
             max_rules=5,

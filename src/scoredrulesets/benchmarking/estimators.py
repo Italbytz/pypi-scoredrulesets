@@ -54,10 +54,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_rulelcs": EstimatorSpec(
-            name="wrapper_rulelcs",
+        "wrapper_ruleplcs": EstimatorSpec(
+            name="wrapper_ruleplcs",
             factory=lambda: ScoredRuleSetClassifier(
-                backend="rulelcs",
+                backend="ruleplcs",
                 backend_params={
                     "population_size": 150,
                     "n_iterations": 40,
@@ -68,10 +68,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_rulelcs_strong": EstimatorSpec(
-            name="wrapper_rulelcs_strong",
+        "wrapper_ruleplcs_strong": EstimatorSpec(
+            name="wrapper_ruleplcs_strong",
             factory=lambda: ScoredRuleSetClassifier(
-                backend="rulelcs",
+                backend="ruleplcs",
                 backend_params={
                     "population_size": 200,
                     "n_iterations": 50,
@@ -242,10 +242,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_rulegp": EstimatorSpec(
-            name="wrapper_rulegp",
+        "wrapper_rulensga2": EstimatorSpec(
+            name="wrapper_rulensga2",
             factory=lambda: ScoredRuleSetClassifier(
-                backend="rulegp",
+                backend="rulensga2",
                 backend_params={
                     "population_size": 60,
                     "generations": 100,
@@ -256,10 +256,10 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
-        "wrapper_rulegp_strong": EstimatorSpec(
-            name="wrapper_rulegp_strong",
+        "wrapper_rulensga2_strong": EstimatorSpec(
+            name="wrapper_rulensga2_strong",
             factory=lambda: ScoredRuleSetClassifier(
-                backend="rulegp",
+                backend="rulensga2",
                 backend_params={
                     "population_size": 150,
                     "generations": 250,

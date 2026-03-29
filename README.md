@@ -24,8 +24,8 @@ Each rule assigns a real-valued score to every class. At prediction time the sco
 | Estimator | Algorithm | Requires |
 |---|---|---|
 | `ScoredRuleSetClassifier` | Wrapper: converts any scikit-learn rule learner into a scored rule set | depends on `backend=` |
-| `RuleGPClassifier` | NSGA-II genetic programming over rule populations | – (pure Python) |
-| `RuleLCSClassifier` | Sequential covering with a genetic algorithm (LCS-style) | – (pure Python) |
+| `RuleNSGA2Classifier` | NSGA-II genetic programming over rule populations | – (pure Python) |
+| `RulePLCSClassifier` | Sequential covering with a genetic algorithm (LCS-style) | – (pure Python) |
 | `RuleNLNClassifier` | Neural rule extraction (Neural Logic Networks) | `torch` |
 | `AutoScoredRuleSetClassifier` | Auto-selects best estimator via cross-validation | – |
 
@@ -37,10 +37,10 @@ can control how non-categorical features are transformed into candidate atoms.
 | Estimator | Parameter | Options (default first) |
 |---|---|---|
 | `LogicGPClassifier` | `feature_encoding_strategy` | `"auto_low_cardinality"`, `"force_numeric_bins"` |
-| `RuleGPClassifier` | `atom_space_strategy` | `"hybrid"`, `"numeric_only"`, `"categorical_low_cardinality_only"` |
+| `RuleNSGA2Classifier` | `atom_space_strategy` | `"hybrid"`, `"numeric_only"`, `"categorical_low_cardinality_only"` |
 | `RuleGP2Classifier` | `atom_space_strategy` | `"hybrid"`, `"numeric_only"`, `"categorical_low_cardinality_only"` |
 | `RuleNLNClassifier` | `threshold_strategy` | `"quantile_midpoint"`, `"quantile_only"`, `"midpoint_only"` |
-| `RuleLCSClassifier` | `feature_typing_strategy` | `"auto_low_cardinality"`, `"all_numeric"`, `"all_integer_categorical"` |
+| `RulePLCSClassifier` | `feature_typing_strategy` | `"auto_low_cardinality"`, `"all_numeric"`, `"all_integer_categorical"` |
 
 Recommended starting points:
 
@@ -104,11 +104,11 @@ pip install "scoredrulesets[benchmark]"
 
 ```python
 from sklearn.datasets import load_iris
-from scoredrulesets import RuleLCSClassifier, format_ruleset_table
+from scoredrulesets import RulePLCSClassifier, format_ruleset_table
 
 X, y = load_iris(return_X_y=True)
 
-clf = RuleLCSClassifier(max_rules=6, random_state=42)
+clf = RulePLCSClassifier(max_rules=6, random_state=42)
 clf.fit(X, y)
 print(clf.predict(X[:3]))
 
@@ -135,11 +135,11 @@ dump_ruleset_json(ruleset, "iris_ruleset.json")
 
 ```python
 from sklearn.datasets import load_iris
-from scoredrulesets import RuleGPClassifier
+from scoredrulesets import RuleNSGA2Classifier
 
 X, y = load_iris(return_X_y=True)
 
-clf = RuleGPClassifier(max_rules=8, n_generations=50, random_state=42)
+clf = RuleNSGA2Classifier(max_rules=8, n_generations=50, random_state=42)
 clf.fit(X, y)
 print(clf.score(X, y))
 ```
@@ -208,8 +208,8 @@ pytest -q tests/test_estimator_checks.py
 
 See [`examples/`](examples/) for runnable demos:
 
-- `examples/estimators/example_rulelcs_backend.py` — RuleLCS direct estimator
-- `examples/estimators/example_rulelcs_wrapper.py` — RuleLCS via wrapper
+- `examples/estimators/example_ruleplcs_backend.py` — RulePLCS direct estimator
+- `examples/estimators/example_ruleplcs_wrapper.py` — RulePLCS via wrapper
 - `examples/estimators/example_rulenln_backend.py` — RuleNLN (neural)
 - `examples/estimators/example_rule_shrinking.py` — LRC rule compaction
 

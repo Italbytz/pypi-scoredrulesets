@@ -440,7 +440,7 @@ def build_pareto_per_dataset(
 
 # -- Backends that accept validation_fraction as constructor parameter --
 _BACKENDS_WITH_VALIDATION_FRACTION = frozenset(
-    {"rulegp", "rulenln", "rulekit_native", "logicgp"}
+    {"rulensga2", "rulenln", "rulekit_native", "logicgp"}
 )
 
 
@@ -462,7 +462,7 @@ def _disable_validation_fraction(estimator: object) -> None:
         estimator.backend_params = bp  # type: ignore[attr-defined]
         return
 
-    # Direct backend estimator (e.g. RuleLCSClassifier used without
+    # Direct backend estimator (e.g. RulePLCSClassifier used without
     # the wrapper): patch the attribute directly.
     if hasattr(estimator, "validation_fraction"):
         estimator.validation_fraction = 0.0  # type: ignore[attr-defined]

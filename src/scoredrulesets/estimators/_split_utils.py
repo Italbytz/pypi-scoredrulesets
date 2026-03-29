@@ -3,7 +3,7 @@ Shared Gini-based split functions for rule-based estimators.
 
 This module bundles logic for finding numeric and categorical splits
 (best threshold, interval splits, single-category splits, and group splits).
-The functions are used by ``RuleLCSClassifier`` and potentially other estimators.
+The functions are used by ``RulePLCSClassifier`` and potentially other estimators.
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ Usage:
     python examples/benchmarks/benchmark_standard.py
     python examples/benchmarks/benchmark_standard.py --repeats 5
     python examples/benchmarks/benchmark_standard.py --timeout 120
-    python examples/benchmarks/benchmark_standard.py --estimators wrapper_cart,gp,wrapper_rulegp
+    python examples/benchmarks/benchmark_standard.py --estimators wrapper_cart,gp,wrapper_rulensga2
 """
 from __future__ import annotations
 

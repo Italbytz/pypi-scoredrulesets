@@ -35,8 +35,8 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
-from .atom_space import RuleLCSFeatureTypingStrategy
-from .atom_space import build_rulelcs_feature_info
+from .atom_space import RulePLCSFeatureTypingStrategy
+from .atom_space import build_ruleplcs_feature_info
 from .base import BaseRuleSetEstimator
 
 
@@ -615,7 +615,7 @@ def _run_ga(
 # Public estimator
 # ---------------------------------------------------------------------------
 
-class RuleLCSClassifier(BaseRuleSetEstimator):
+class RulePLCSClassifier(BaseRuleSetEstimator):
     """BioHEL-inspired iterative rule learning classifier.
 
     Learns one rule at a time via a Genetic Algorithm, then removes covered
@@ -696,7 +696,7 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
         n_strata: int = 1,
         default_class_policy: str = "major",
         low_cardinality_threshold: int = 10,
-        feature_typing_strategy: RuleLCSFeatureTypingStrategy = "auto_low_cardinality",
+        feature_typing_strategy: RulePLCSFeatureTypingStrategy = "auto_low_cardinality",
         include_default_rule: bool = True,
         random_state: int | None = None,
     ):
@@ -844,7 +844,7 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
     # ------------------------------------------------------------ internal
     def _build_feature_info(self, X: np.ndarray) -> list[dict]:
         """Analyse features: detect numeric vs categorical."""
-        return build_rulelcs_feature_info(
+        return build_ruleplcs_feature_info(
             X,
             low_cardinality_threshold=self.low_cardinality_threshold,
             strategy=self.feature_typing_strategy,
@@ -911,7 +911,7 @@ class RuleLCSClassifier(BaseRuleSetEstimator):
             feature_names=list(self.feature_names_in_),
             aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
             metadata={
-                "estimator": "RuleLCSClassifier",
+                "estimator": "RulePLCSClassifier",
                 "algorithm": "BioHEL-inspired IRL",
                 "n_rules": len(rules),
                 "default_class": int(default_class),

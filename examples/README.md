@@ -10,13 +10,13 @@ Die Beispiele sind jetzt nach Zweck getrennt:
 Direkter RuleLCS-Schaetzer:
 
 ```bash
-python3 examples/estimators/example_rulelcs_backend.py
+python3 examples/estimators/example_ruleplcs_backend.py
 ```
 
 RuleLCS ueber Wrapper:
 
 ```bash
-python3 examples/estimators/example_rulelcs_wrapper.py
+python3 examples/estimators/example_ruleplcs_wrapper.py
 ```
 
 Weitere fachliche Demos:
