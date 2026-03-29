@@ -38,7 +38,7 @@ can control how non-categorical features are transformed into candidate atoms.
 |---|---|---|
 | `LogicGPClassifier` | `feature_encoding_strategy` | `"auto_low_cardinality"`, `"force_numeric_bins"` |
 | `RuleNSGA2Classifier` | `atom_space_strategy` | `"hybrid"`, `"numeric_only"`, `"categorical_low_cardinality_only"` |
-| `RuleGP2Classifier` | `atom_space_strategy` | `"hybrid"`, `"numeric_only"`, `"categorical_low_cardinality_only"` |
+| `RuleGPClassifier` | `atom_space_strategy` | `"hybrid"`, `"numeric_only"`, `"categorical_low_cardinality_only"` |
 | `RuleNLNClassifier` | `threshold_strategy` | `"quantile_midpoint"`, `"quantile_only"`, `"midpoint_only"` |
 | `RulePLCSClassifier` | `feature_typing_strategy` | `"auto_low_cardinality"`, `"all_numeric"`, `"all_integer_categorical"` |
 
@@ -47,15 +47,15 @@ Recommended starting points:
 | Data profile | Recommended strategy choices |
 |---|---|
 | Mixed continuous + encoded categoricals | Keep defaults (`auto_low_cardinality`, `hybrid`, `quantile_midpoint`) |
-| Mostly continuous signals | Use `force_numeric_bins` (LogicGP), `numeric_only` (RuleGP/RuleGP2), `quantile_only` (RuleNLN), `all_numeric` (RuleLCS) |
-| Mostly integer-coded symbolic features | Use `hybrid` or `categorical_low_cardinality_only` (RuleGP/RuleGP2), `midpoint_only` (RuleNLN), `all_integer_categorical` (RuleLCS) |
+| Mostly continuous signals | Use `force_numeric_bins` (LogicGP), `numeric_only` (RuleNSGA2/RuleGP), `quantile_only` (RuleNLN), `all_numeric` (RulePLCS) |
+| Mostly integer-coded symbolic features | Use `hybrid` or `categorical_low_cardinality_only` (RuleNSGA2/RuleGP), `midpoint_only` (RuleNLN), `all_integer_categorical` (RulePLCS) |
 
 Minimal example:
 
 ```python
-from scoredrulesets import RuleGP2Classifier
+from scoredrulesets import RuleGPClassifier
 
-clf = RuleGP2Classifier(
+clf = RuleGPClassifier(
   atom_space_strategy="numeric_only",
   random_state=42,
 )

@@ -272,6 +272,48 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
+        "wrapper_rulegp": EstimatorSpec(
+            name="wrapper_rulegp",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulegp",
+                backend_params={
+                    "f1_averaging": "macro",
+                    "atom_space_strategy": "hybrid",
+                    "atom_preselection_strategy": "logicgp_binned_sets",
+                    "max_generations": 200,
+                    "stagnation_generations": 40,
+                    "population_size": 50,
+                    "n_adaptations_per_gen": 12,
+                    "max_fit_seconds": 240,
+                },
+                preprocessing={
+                    "logicgp_discretize": True,
+                    "n_bins": 5,
+                },
+                random_state=0,
+            ),
+        ),
+        "wrapper_rulegp_strong": EstimatorSpec(
+            name="wrapper_rulegp_strong",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulegp",
+                backend_params={
+                    "f1_averaging": "macro",
+                    "atom_space_strategy": "hybrid",
+                    "atom_preselection_strategy": "logicgp_binned_sets",
+                    "max_generations": 500,
+                    "stagnation_generations": 80,
+                    "population_size": 120,
+                    "n_adaptations_per_gen": 20,
+                    "max_fit_seconds": 240,
+                },
+                preprocessing={
+                    "logicgp_discretize": True,
+                    "n_bins": 5,
+                },
+                random_state=0,
+            ),
+        ),
     }
 
     # Merge any dynamically registered specs (external benchmarks etc.)

@@ -232,16 +232,22 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return RuleNSGA2Classifier(**params)
 
-    if backend_key == "rulegp2":
-        from .rulegp2 import RuleGP2Classifier
+    if backend_key == "rulegp":
+        from .rulegp import RuleGPClassifier
         if random_state is not None:
             params.setdefault("random_state", random_state)
-        return RuleGP2Classifier(**params)
+        return RuleGPClassifier(**params)
+
+    if backend_key == "rulegp2":
+        from .rulegp import RuleGPClassifier
+        if random_state is not None:
+            params.setdefault("random_state", random_state)
+        return RuleGPClassifier(**params)
 
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: "
         f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', "
-        f"'ruleplcs', 'rulenln', 'rulensga2', 'rulegp2'."
+        f"'ruleplcs', 'rulenln', 'rulensga2', 'rulegp', 'rulegp2'."
     )
 
 

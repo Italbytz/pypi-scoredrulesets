@@ -9,9 +9,9 @@ Estimators (short name -> internal wrapper):
     RuleKit         <- wrapper_rulekit_native
     ExSTraCS        <- wrapper_exstracs
     ExSTraCS (LRC)  <- wrapper_exstracs_compact (Lossy Rule Compaction)
-    ruleGP          <- wrapper_rulensga2_strong
+    ruleGP          <- wrapper_rulegp_strong (logicGP mode)
     ruleNLN         <- wrapper_rulenln_strong
-    ruleLCS         <- wrapper_ruleplcs_strong
+    rulePLCS        <- wrapper_ruleplcs_strong
 
 Datasets (10):
   Real-World (4): sklearn_breast_cancer, sklearn_wine, uci_car_evaluation,
@@ -123,18 +123,22 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
         ),
     ),
     "paper_ruleGP": EstimatorSpec(
-        name="ruleNSGA-II",
+        name="ruleGP",
         factory=lambda: ScoredRuleSetClassifier(
-            backend="rulensga2",
+            backend="rulegp",
             backend_params={
-                "population_size": 150,
-                "generations": 250,
-                "max_rules": 12,
-                "max_atoms_per_rule": 5,
-                "tournament_size": 4,
-                "early_stopping_rounds": 30,
+                "f1_averaging": "macro",
+                "atom_space_strategy": "hybrid",
+                "atom_preselection_strategy": "logicgp_binned_sets",
+                "max_generations": 500,
+                "stagnation_generations": 80,
+                "population_size": 120,
+                "n_adaptations_per_gen": 20,
                 "max_fit_seconds": 240,
-                "enable_compaction": True,
+            },
+            preprocessing={
+                "logicgp_discretize": True,
+                "n_bins": 5,
             },
             random_state=0,
         ),
@@ -156,7 +160,7 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
             random_state=0,
         ),
     ),
-    "paper_ruleLCS": EstimatorSpec(
+    "paper_rulePLCS": EstimatorSpec(
         name="rulePLCS",
         factory=lambda: ScoredRuleSetClassifier(
             backend="ruleplcs",
@@ -508,7 +512,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Paper-Benchmark: 7 rule-based classifiers on 10 selected datasets.",
         epilog=(
-            "Estimators: HS, RuleKit, ExSTraCS, ExSTraCS (LRC), ruleGP, ruleNLN, ruleLCS. "
+            "Estimators: HS, RuleKit, ExSTraCS, ExSTraCS (LRC), ruleGP, ruleNLN, rulePLCS. "
             "10 Datasets: 4 real-world (sklearn/UCI) + 6 synthetic."
         ),
     )

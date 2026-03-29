@@ -1,6 +1,6 @@
 """
-ruleGP2 - logicGP-RLCW style evolution on native atom/rule/rule-set structures
-==============================================================================
+ruleGP - logicGP-RLCW style evolution on native atom/rule/rule-set structures
+=============================================================================
 
 This estimator is intentionally independent from logicGP internals.
 It mirrors the RLCW workflow (class-bound Pareto dominance + 3 objectives)
@@ -284,7 +284,7 @@ def _compute_weights2(
         rs.default_weights = np.ones(n_classes, dtype=float) / n_classes
 
 
-class RuleGP2Classifier(BaseRuleSetEstimator):
+class RuleGPClassifier(BaseRuleSetEstimator):
     """RLCW-style GP with atoms/rules/rule sets and native numeric handling."""
 
     def __init__(
@@ -905,8 +905,8 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
             Rule(
                 atoms=[],
                 scores=rs.default_weights.tolist(),
-                rule_id="rulegp2_default",
-                metadata={"source": "rulegp2", "kind": "default"},
+                rule_id="rulegp_default",
+                metadata={"source": "rulegp", "kind": "default"},
             )
         ]
 
@@ -927,8 +927,8 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
                 Rule(
                     atoms=atoms,
                     scores=rule.weights.tolist(),
-                    rule_id=f"rulegp2_rule_{i}",
-                    metadata={"source": "rulegp2", "kind": "rule"},
+                    rule_id=f"rulegp_rule_{i}",
+                    metadata={"source": "rulegp", "kind": "rule"},
                 )
             )
 
@@ -938,7 +938,7 @@ class RuleGP2Classifier(BaseRuleSetEstimator):
             aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
             rules=rules,
             metadata={
-                "source": "rulegp2",
+                "source": "rulegp",
                 "f1_averaging": self.f1_averaging,
                 "max_generations": self.max_generations,
                 "population_size": self.population_size,

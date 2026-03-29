@@ -1,9 +1,9 @@
 import numpy as np
 
 
-def test_rulegp2_logicgp_binned_sets_preselection_builds_eq_in_between_atoms():
-    from scoredrulesets.estimators.rulegp2 import RuleGP2Classifier
-    from scoredrulesets.estimators.rulegp2 import _build_feature_specs
+def test_rulegp_logicgp_binned_sets_preselection_builds_eq_in_between_atoms():
+    from scoredrulesets.estimators.rulegp import RuleGPClassifier
+    from scoredrulesets.estimators.rulegp import _build_feature_specs
 
     # Already binned-like data with ordered bin ids.
     X = np.array(
@@ -21,7 +21,7 @@ def test_rulegp2_logicgp_binned_sets_preselection_builds_eq_in_between_atoms():
     )
     y = np.array([0, 0, 1, 1, 0, 0, 1, 1], dtype=int)
 
-    clf = RuleGP2Classifier(
+    clf = RuleGPClassifier(
         atom_space_strategy="categorical_low_cardinality_only",
         atom_preselection_strategy="logicgp_binned_sets",
         min_samples_leaf=1,

@@ -25,9 +25,9 @@ from .benchmarking import (
 from .estimators.auto import AutoScoredRuleSetClassifier
 from .estimators.logicgp import LogicGPClassifier
 from .estimators.rulenln import RuleNLNClassifier
+from .estimators.rulegp import RuleGPClassifier
 from .estimators.ruleplcs import RulePLCSClassifier
 from .estimators.rulensga2 import RuleNSGA2Classifier
-from .estimators.rulegp2 import RuleGP2Classifier
 from .estimators.rulekit_native import RuleKitNativeClassifier
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
 from .formatting import format_ruleset_table
@@ -46,10 +46,10 @@ __all__ = [
     "BenchmarkConfig",
     "BenchmarkResult",
     "LogicGPClassifier",
+    "RuleGPClassifier",
     "RuleNLNClassifier",
     "RulePLCSClassifier",
     "RuleNSGA2Classifier",
-    "RuleGP2Classifier",
     "RuleKitNativeClassifier",
     "ScoredRuleSetClassifier",
     "aggregate_benchmark_results",

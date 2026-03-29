@@ -14,6 +14,7 @@ from ..io import dump_ruleset_json, load_ruleset_json
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import ScoredRuleSet
+from .atom_space import LogicGPDiscretizingEncoder
 from .backends import build_backend_estimator
 from .base import BaseRuleSetEstimator
 from .tree_transform import TreeTransformParams, estimator_to_scored_ruleset
@@ -26,7 +27,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     ----------
     backend : str
         Backend estimator to use (e.g. 'cart', 'hs', 'rulekit', 'exstracs',
-        'logicgp', 'ruleplcs', 'rulenln', 'rulensga2', 'rulegp2').
+        'logicgp', 'ruleplcs', 'rulenln', 'rulensga2', 'rulegp').
     backend_params : dict, optional
         Parameters forwarded to the backend estimator constructor.
     transform_params : dict, optional
@@ -42,7 +43,11 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         - ``"k"`` (int): number of features to keep (default 20).
         - ``"max_thresholds_per_feature"`` (int): cap on numeric thresholds
           for native backends that build their own atom candidates
-          (gp, ruleplcs, rulenln, logicgp).
+                    (gp, ruleplcs, rulenln, logicgp, rulensga2, rulegp).
+                - ``"logicgp_discretize"`` (bool): discretize continuous features into
+                    logicGP-style bin indices before the backend sees the data.
+                - ``"n_bins"`` (int): number of bins used when
+                    ``"logicgp_discretize"`` is enabled.
     estimator : object, optional
         A pre-built sklearn-compatible estimator; overrides *backend*.
     random_state : int, optional
@@ -50,7 +55,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     """
 
     # Backends whose estimator exposes `max_thresholds_per_feature` attribute
-    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "ruleplcs", "rulenln", "logicgp", "rulensga2", "rulegp2"})
+    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "ruleplcs", "rulenln", "logicgp", "rulensga2", "rulegp", "rulegp2"})
 
     def __init__(
         self,
@@ -101,6 +106,12 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
             # width so sklearn checks pass (predict validates against it).
             X_valid = X_reduced
             self.feature_names_in_ = list(selected_names)
+
+        self._input_encoder_: LogicGPDiscretizingEncoder | None = None
+        if preproc.get("logicgp_discretize"):
+            n_bins = int(preproc.get("n_bins", 5))
+            self._input_encoder_ = LogicGPDiscretizingEncoder(n_bins=n_bins)
+            X_valid = self._input_encoder_.fit_transform(np.asarray(X_valid, dtype=None))
 
         # ----- Build backend estimator -----
         if self.estimator is not None:
@@ -189,13 +200,13 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "RuleNSGA2Classifier has no 'ruleset_' after fit(). "
                     "Please check rulensga2.py for errors."
                 )
-        elif backend_lower == "rulegp2":
+        elif backend_lower in {"rulegp", "rulegp2"}:
             if hasattr(self.estimator_, "ruleset_"):
                 self.ruleset_ = self.estimator_.ruleset_
             else:
                 raise RuntimeError(
-                    "RuleGP2Classifier has no 'ruleset_' after fit(). "
-                    "Please check rulegp2.py for errors."
+                    "RuleGPClassifier has no 'ruleset_' after fit(). "
+                    "Please check rulegp.py for errors."
                 )
         elif backend_lower == "ruleplcs":
             if hasattr(self.estimator_, "ruleset_"):
@@ -273,6 +284,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         are defined over bin indices rather than raw values.
         """
         backend_lower = self.backend.lower()
+        encoder = getattr(self, "_input_encoder_", None)
+        if encoder is not None:
+            X_valid = encoder.transform(X_valid)
         if backend_lower == "logicgp" and hasattr(self.estimator_, "_binners_"):
             from .logicgp import _discretize_features
             X_disc, _, _ = _discretize_features(

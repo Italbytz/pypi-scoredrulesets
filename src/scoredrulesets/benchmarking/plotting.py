@@ -27,6 +27,7 @@ _PAPER_ESTIMATOR_DISPLAY_ORDER: tuple[str, ...] = (
     "ExSTraCS",
     "ExSTraCS (LRC)",
     "logicGP",
+    "ruleGP",
     "ruleNSGA-II",
     "ruleNLN",
     "rulePLCS",
@@ -341,7 +342,8 @@ def _estimator_color_map(estimator_names: Iterable[str]) -> dict[str, tuple[floa
         "ExSTraCS": "#009E73",        # green
         "ExSTraCS (LRC)": "#D55E00",  # vermillion
         "logicGP": "#56B4E9",         # sky blue
-        "ruleNSGA-II": "#CC79A7",          # purple
+        "ruleGP": "#CC79A7",          # purple
+        "ruleNSGA-II": "#D55E00",     # vermillion
         "ruleNLN": "#F0E442",         # yellow
         "rulePLCS": "#7F7F7F",         # gray
     }

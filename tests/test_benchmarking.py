@@ -609,9 +609,9 @@ def test_no_split_disables_validation_fraction():
     _disable_validation_fraction(est_cart)
     assert est_cart.backend_params == {"max_depth": 4}  # unchanged
 
-    # Wrapper with backend that supports validation_fraction (e.g. rulensga2)
+    # Wrapper with backend that supports validation_fraction (e.g. rulegp)
     est_gp = ScoredRuleSetClassifier(
-        backend="rulensga2",
+        backend="rulegp",
         backend_params={"validation_fraction": 0.25, "max_rules": 5},
     )
     _disable_validation_fraction(est_gp)
@@ -619,6 +619,6 @@ def test_no_split_disables_validation_fraction():
     assert est_gp.backend_params["max_rules"] == 5  # other params unchanged
 
     # Wrapper with no backend_params initially
-    est_no_bp = ScoredRuleSetClassifier(backend="rulensga2")
+    est_no_bp = ScoredRuleSetClassifier(backend="rulegp")
     _disable_validation_fraction(est_no_bp)
     assert est_no_bp.backend_params["validation_fraction"] == 0.0

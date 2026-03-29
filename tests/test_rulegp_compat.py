@@ -1,8 +1,10 @@
 import numpy as np
 
+from scoredrulesets import ScoredRuleSetClassifier
 
-def test_rulegp2_logicgp_singleton_preselection_emits_only_eq_atoms():
-    from scoredrulesets.estimators.rulegp2 import RuleGP2Classifier
+
+def test_rulegp_logicgp_singleton_preselection_emits_only_eq_atoms():
+    from scoredrulesets.estimators.rulegp import RuleGPClassifier
 
     # Low-cardinality integer features emulate discretized logicGP inputs.
     X = np.array(
@@ -20,7 +22,7 @@ def test_rulegp2_logicgp_singleton_preselection_emits_only_eq_atoms():
     )
     y = np.array([0, 0, 1, 1, 0, 1, 0, 1], dtype=int)
 
-    clf = RuleGP2Classifier(
+    clf = RuleGPClassifier(
         atom_space_strategy="categorical_low_cardinality_only",
         atom_preselection_strategy="logicgp_singleton",
         max_generations=30,
@@ -37,13 +39,13 @@ def test_rulegp2_logicgp_singleton_preselection_emits_only_eq_atoms():
             assert atom.op == "=="
 
 
-def test_rulegp2_logicgp_binned_sets_stays_close_to_logicgp_rlcw_macro_f1():
+def test_rulegp_logicgp_binned_sets_stays_close_to_logicgp_rlcw_macro_f1():
     from sklearn.datasets import load_wine
     from sklearn.metrics import f1_score
     from sklearn.model_selection import train_test_split
 
     from scoredrulesets.estimators.logicgp import LogicGPClassifier, _discretize_features
-    from scoredrulesets.estimators.rulegp2 import RuleGP2Classifier
+    from scoredrulesets.estimators.rulegp import RuleGPClassifier
 
     X, y = load_wine(return_X_y=True)
     seeds = [0, 1, 2, 3]
@@ -85,7 +87,7 @@ def test_rulegp2_logicgp_binned_sets_stays_close_to_logicgp_rlcw_macro_f1():
             strategy="auto_low_cardinality",
         )
 
-        rulegp2 = RuleGP2Classifier(
+        rulegp = RuleGPClassifier(
             f1_averaging="macro",
             atom_space_strategy="hybrid",
             atom_preselection_strategy="logicgp_binned_sets",
@@ -95,13 +97,42 @@ def test_rulegp2_logicgp_binned_sets_stays_close_to_logicgp_rlcw_macro_f1():
             population_size=90,
             random_state=seed,
         )
-        rulegp2.fit(X_train_disc, y_train)
-        f1_rulegp2 = f1_score(y_test, rulegp2.predict(X_test_disc), average="macro")
+        rulegp.fit(X_train_disc, y_train)
+        f1_rulegp = f1_score(y_test, rulegp.predict(X_test_disc), average="macro")
 
-        diffs.append(float(f1_logicgp - f1_rulegp2))
+        diffs.append(float(f1_logicgp - f1_rulegp))
 
     abs_diffs = np.abs(np.asarray(diffs, dtype=float))
     # Keep this guardrail tolerant to stochastic GP variance, but fail if
     # compatibility drifts strongly.
     assert float(abs_diffs.mean()) <= 0.10
     assert float(abs_diffs.max()) <= 0.16
+
+
+def test_wrapper_rulegp_logicgp_mode_smoke_runs_on_raw_numeric_data():
+    from sklearn.datasets import load_wine
+
+    X, y = load_wine(return_X_y=True)
+    clf = ScoredRuleSetClassifier(
+        backend="rulegp",
+        backend_params={
+            "atom_space_strategy": "hybrid",
+            "atom_preselection_strategy": "logicgp_binned_sets",
+            "max_generations": 40,
+            "stagnation_generations": 15,
+            "population_size": 40,
+            "n_adaptations_per_gen": 10,
+        },
+        preprocessing={
+            "logicgp_discretize": True,
+            "n_bins": 5,
+        },
+        random_state=0,
+    )
+    clf.fit(X, y)
+
+    pred = clf.predict(X[:12])
+    proba = clf.predict_proba(X[:12])
+    assert pred.shape == (12,)
+    assert proba.shape[0] == 12
+    assert clf.to_ruleset().metadata["source"] == "rulegp"

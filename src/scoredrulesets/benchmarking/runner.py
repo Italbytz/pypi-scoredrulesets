@@ -440,7 +440,7 @@ def build_pareto_per_dataset(
 
 # -- Backends that accept validation_fraction as constructor parameter --
 _BACKENDS_WITH_VALIDATION_FRACTION = frozenset(
-    {"rulensga2", "rulenln", "rulekit_native", "logicgp"}
+    {"rulensga2", "rulenln", "rulekit_native", "logicgp", "rulegp"}
 )
 
 
