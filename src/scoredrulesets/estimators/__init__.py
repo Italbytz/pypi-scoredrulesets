@@ -1,6 +1,6 @@
 from .auto import AutoScoredRuleSetClassifier
 from .base import BaseRuleSetEstimator
-from .logicgp import LogicGPClassifier
+from .logicgp import GPASClassifier, LogicGPClassifier
 from .rulenln import RuleNLNClassifier
 from .rulegp import RuleGPClassifier
 from .ruleplcs import RulePLCSClassifier
@@ -10,6 +10,7 @@ from .sklearn_wrapper import ScoredRuleSetClassifier
 __all__ = [
 	"AutoScoredRuleSetClassifier",
 	"BaseRuleSetEstimator",
+	"GPASClassifier",
 	"LogicGPClassifier",
 	"RuleGPClassifier",
 	"RuleNLNClassifier",
