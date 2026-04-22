@@ -23,7 +23,7 @@ from .benchmarking import (
     run_benchmarks,
 )
 from .estimators.auto import AutoScoredRuleSetClassifier
-from .estimators.logicgp import LogicGPClassifier
+from .estimators.logicgp import GPASClassifier, LogicGPClassifier
 from .estimators.rulenln import RuleNLNClassifier
 from .estimators.rulegp import RuleGPClassifier
 from .estimators.ruleplcs import RulePLCSClassifier
@@ -45,6 +45,7 @@ __all__ = [
     "BenchmarkComparisonRow",
     "BenchmarkConfig",
     "BenchmarkResult",
+    "GPASClassifier",
     "LogicGPClassifier",
     "RuleGPClassifier",
     "RuleNLNClassifier",
