@@ -1462,6 +1462,165 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         return atoms
 
 
+# ---------------------------------------------------------------------------
+# GPAS classifier (binary specialization of logicGP)
+# ---------------------------------------------------------------------------
+
+class GPASClassifier(LogicGPClassifier):
+    """
+    GPAS -- Genetic Programming for Association Studies.
+
+    Specialization of logicGP for binary classification of categorical
+    (e.g. SNP) data, based on:
+
+      Nunkesser et al. (2007): "Detecting high-order interactions of
+      single nucleotide polymorphisms using genetic programming"
+      Bioinformatics, 23(24):3280–3288.
+
+    Key differences to :class:`LogicGPClassifier`:
+
+    - **Binary classification only** -- ``fit`` raises ``ValueError`` for
+      more than 2 classes.
+    - **Size-2 initialization** -- initial population consists of monomials
+      with exactly 2 literals each, matching the
+      ``RandomInitialization { Size = 2 }`` strategy from the C# reference
+      implementation.
+    - **Fixed trainer**: ``trainer="flcw"`` and ``f1_averaging="micro"``
+      (binary micro-accuracy equals overall accuracy).
+
+    Parameters
+    ----------
+    max_generations : int
+        Maximum number of GP generations.
+    stagnation_generations : int
+        Stop after this many generations without improvement.
+    n_bins : int
+        Number of bins for discretizing continuous features.
+    min_improvement_pct : float
+        Minimum improvement percentage for model selection.
+    population_size : int or None
+        Maximum population size after Pareto selection. ``None`` keeps the
+        full Pareto front.
+    n_adaptations_per_gen : int
+        Number of new individuals per generation (1 crossover + mutations).
+    tournament_size : int
+        Tournament size for population trimming when ``population_size`` is set.
+    max_model_size : int or None
+        Maximum number of literals allowed in a model.
+    validation_fraction : float
+        Fraction of training data reserved for final model selection.
+        ``0`` (default) disables the split.
+    max_fit_seconds : float or None
+        Time budget for the GP loop in seconds. ``None`` = no limit.
+    feature_encoding_strategy : str
+        Encoding strategy for features; passed to the underlying discretizer.
+    random_state : int or None
+        Random seed for reproducibility.
+    """
+
+    def __init__(
+        self,
+        max_generations: int = 10_000,
+        stagnation_generations: int = 500,
+        n_bins: int = 5,
+        min_improvement_pct: float = 0.01,
+        population_size: int | None = None,
+        n_adaptations_per_gen: int = 6,
+        tournament_size: int = 5,
+        max_model_size: int | None = None,
+        validation_fraction: float = 0.0,
+        max_fit_seconds: float | None = None,
+        feature_encoding_strategy: LogicGPEncodingStrategy = "auto_low_cardinality",
+        random_state: int | None = None,
+    ):
+        super().__init__(
+            trainer="flcw",
+            f1_averaging="micro",
+            max_generations=max_generations,
+            stagnation_generations=stagnation_generations,
+            n_bins=n_bins,
+            min_max_weight=0.0,
+            min_improvement_pct=min_improvement_pct,
+            population_size=population_size,
+            n_adaptations_per_gen=n_adaptations_per_gen,
+            tournament_size=tournament_size,
+            max_model_size=max_model_size,
+            validation_fraction=validation_fraction,
+            literal_generator="full",
+            model_selection="paper",
+            fitness_evaluator=None,
+            max_fit_seconds=max_fit_seconds,
+            feature_encoding_strategy=feature_encoding_strategy,
+            random_state=random_state,
+        )
+
+    def fit(self, X, y):
+        labels = unique_labels(y)
+        if len(labels) != 2:
+            raise ValueError(
+                f"GPASClassifier requires exactly 2 classes, got {len(labels)}. "
+                "Use LogicGPClassifier for multi-class problems."
+            )
+        return super().fit(X, y)
+
+    def _init_population(
+        self,
+        all_literals: list[_SetLiteral],
+        n_classes: int,
+        X_disc: np.ndarray | None = None,
+        y_idx: np.ndarray | None = None,
+    ) -> list[_Polynomial]:
+        """
+        GPAS initialization: each individual is a single monomial with
+        exactly 2 literals (``RandomInitialization { Size = 2 }``).
+
+        For each literal ``l_i``, one polynomial is created whose monomial
+        pairs ``l_i`` with a randomly drawn literal from a *different*
+        feature (falling back to any other literal when unavoidable).
+        """
+        population: list[_Polynomial] = []
+        n_lits = len(all_literals)
+        if n_lits < 2:
+            # Degenerate case: fall back to the parent initializer.
+            return super()._init_population(all_literals, n_classes, X_disc, y_idx)
+
+        # Group literal indices by feature index for efficient sampling.
+        feature_to_lits: dict[int, list[int]] = {}
+        for idx, lit in enumerate(all_literals):
+            feature_to_lits.setdefault(lit.feature_idx, []).append(idx)
+
+        unif = np.ones(n_classes, dtype=float) / n_classes
+
+        for i, lit_i in enumerate(all_literals):
+            other_features = [f for f in feature_to_lits if f != lit_i.feature_idx]
+            if other_features:
+                feat_j = int(self._rng_.choice(other_features))
+                j = int(self._rng_.choice(feature_to_lits[feat_j]))
+            else:
+                candidates = [k for k in range(n_lits) if k != i]
+                j = int(self._rng_.choice(candidates))
+
+            mon = _Monomial(
+                literals=[lit_i, all_literals[j]],
+                weights=unif.copy(),
+            )
+            poly = _Polynomial(
+                monomials=[mon],
+                default_weights=unif.copy(),
+            )
+            population.append(poly)
+
+        # Class-discriminative seeding (inherited strategy).
+        if X_disc is not None and y_idx is not None:
+            population.extend(
+                self._seed_class_discriminative(
+                    all_literals, n_classes, X_disc, y_idx
+                )
+            )
+
+        return population
+
+
 
 
 
