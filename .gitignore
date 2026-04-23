@@ -64,3 +64,6 @@ coverage.xml
 # Ignore accidental nested repo copy at workspace root only
 /scoredrulesets/
 
+# Sensitive patient data – must never be committed
+**/genica63.csv
+
