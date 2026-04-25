@@ -460,6 +460,18 @@ def _mut_insert_literal(
     return result
 
 
+def _pick_literal_avoiding_features(
+    all_literals: list[_SetLiteral],
+    forbidden_features: set[int],
+    rng: np.random.Generator,
+) -> _SetLiteral | None:
+    """Pick a random literal whose feature is not in forbidden_features."""
+    candidates = [lit for lit in all_literals if lit.feature_idx not in forbidden_features]
+    if not candidates:
+        return None
+    return candidates[int(rng.integers(0, len(candidates)))]
+
+
 def _mut_delete_literal(
     poly: _Polynomial,
     rng: np.random.Generator,
@@ -468,6 +480,39 @@ def _mut_delete_literal(
     result = poly.clone()
     # Only monomials with more than one literal are eligible.
     candidates = [i for i, m in enumerate(result.monomials) if len(m.literals) > 1]
+    if not candidates:
+        return result
+    mon_idx = candidates[int(rng.integers(0, len(candidates)))]
+    lit_idx = int(rng.integers(0, len(result.monomials[mon_idx].literals)))
+    result.monomials[mon_idx].literals.pop(lit_idx)
+    return result
+
+
+def _mut_insert_literal_distinct_feature(
+    poly: _Polynomial,
+    all_literals: list[_SetLiteral],
+    rng: np.random.Generator,
+) -> _Polynomial:
+    """Insert a literal from a previously unused feature into a monomial."""
+    if not all_literals:
+        return poly
+    result = poly.clone()
+    mon_idx = int(rng.integers(0, len(result.monomials)))
+    used_features = {lit.feature_idx for lit in result.monomials[mon_idx].literals}
+    new_lit = _pick_literal_avoiding_features(all_literals, used_features, rng)
+    if new_lit is None:
+        return result
+    result.monomials[mon_idx].literals.append(new_lit)
+    return result
+
+
+def _mut_delete_literal_min2(
+    poly: _Polynomial,
+    rng: np.random.Generator,
+) -> _Polynomial:
+    """Delete a literal only when a monomial would still keep at least 2 literals."""
+    result = poly.clone()
+    candidates = [i for i, m in enumerate(result.monomials) if len(m.literals) > 2]
     if not candidates:
         return result
     mon_idx = candidates[int(rng.integers(0, len(candidates)))]
@@ -493,6 +538,30 @@ def _mut_replace_literal(
     return result
 
 
+def _mut_replace_literal_distinct_feature(
+    poly: _Polynomial,
+    all_literals: list[_SetLiteral],
+    rng: np.random.Generator,
+) -> _Polynomial:
+    """Replace a literal while preserving feature diversity within the monomial."""
+    if not all_literals:
+        return poly
+    result = poly.clone()
+    mon_idx = int(rng.integers(0, len(result.monomials)))
+    mon = result.monomials[mon_idx]
+    if not mon.literals:
+        return result
+    lit_idx = int(rng.integers(0, len(mon.literals)))
+    forbidden = {
+        lit.feature_idx for idx, lit in enumerate(mon.literals) if idx != lit_idx
+    }
+    new_lit = _pick_literal_avoiding_features(all_literals, forbidden, rng)
+    if new_lit is None:
+        return result
+    mon.literals[lit_idx] = new_lit
+    return result
+
+
 def _mut_insert_monomial(
     poly: _Polynomial,
     all_literals: list[_SetLiteral],
@@ -506,6 +575,28 @@ def _mut_insert_monomial(
     new_lit = all_literals[int(rng.integers(0, len(all_literals)))]
     new_mon = _Monomial(
         literals=[new_lit],
+        weights=np.ones(n_classes, dtype=float) / n_classes,
+    )
+    result.monomials.append(new_mon)
+    return result
+
+
+def _mut_insert_monomial_pair(
+    poly: _Polynomial,
+    all_literals: list[_SetLiteral],
+    n_classes: int,
+    rng: np.random.Generator,
+) -> _Polynomial:
+    """Add a new monomial with two literals from different features."""
+    if len(all_literals) < 2:
+        return poly
+    result = poly.clone()
+    lit_a = all_literals[int(rng.integers(0, len(all_literals)))]
+    lit_b = _pick_literal_avoiding_features(all_literals, {lit_a.feature_idx}, rng)
+    if lit_b is None:
+        return result
+    new_mon = _Monomial(
+        literals=[lit_a, lit_b],
         weights=np.ones(n_classes, dtype=float) / n_classes,
     )
     result.monomials.append(new_mon)
@@ -1036,6 +1127,20 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             f"fitness_evaluator must be a string, callable, or None, got {type(fe)}."
         )
 
+    def _build_mutation_ops(
+        self,
+        all_literals: list[_SetLiteral],
+        n_classes: int,
+    ) -> list[Callable[[_Polynomial], _Polynomial]]:
+        """Return the mutation operators used in the GP loop."""
+        return [
+            lambda p: _mut_insert_literal(p, all_literals, self._rng_),
+            lambda p: _mut_delete_literal(p, self._rng_),
+            lambda p: _mut_replace_literal(p, all_literals, self._rng_),
+            lambda p: _mut_insert_monomial(p, all_literals, n_classes, self._rng_),
+            lambda p: _mut_delete_monomial(p, self._rng_),
+        ]
+
     @staticmethod
     def _strategy_name(strategy) -> str:
         """Return a human-readable name for a strategy parameter."""
@@ -1287,13 +1392,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 elite_fit = fit
 
         # Mutation operators as a list for cyclic traversal.
-        _MUT_OPS = [
-            lambda p: _mut_insert_literal(p, all_literals, self._rng_),
-            lambda p: _mut_delete_literal(p, self._rng_),
-            lambda p: _mut_replace_literal(p, all_literals, self._rng_),
-            lambda p: _mut_insert_monomial(p, all_literals, n_classes, self._rng_),
-            lambda p: _mut_delete_monomial(p, self._rng_),
-        ]
+        _MUT_OPS = self._build_mutation_ops(all_literals, n_classes)
         n_adapt = max(1, self.n_adaptations_per_gen)
 
         # Time budget for early stopping (max_fit_seconds).
@@ -1657,6 +1756,20 @@ class GPASClassifier(LogicGPClassifier):
             )
 
         return population
+
+    def _build_mutation_ops(
+        self,
+        all_literals: list[_SetLiteral],
+        n_classes: int,
+    ) -> list[Callable[[_Polynomial], _Polynomial]]:
+        """GPAS mutations keep monomials interaction-capable across distinct features."""
+        return [
+            lambda p: _mut_insert_literal_distinct_feature(p, all_literals, self._rng_),
+            lambda p: _mut_delete_literal_min2(p, self._rng_),
+            lambda p: _mut_replace_literal_distinct_feature(p, all_literals, self._rng_),
+            lambda p: _mut_insert_monomial_pair(p, all_literals, n_classes, self._rng_),
+            lambda p: _mut_delete_monomial(p, self._rng_),
+        ]
 
 
 
