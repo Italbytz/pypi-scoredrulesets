@@ -860,10 +860,11 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         )
 
         # GP loop (on training split)
-        best_poly = self._run_gp(
+        best_poly, final_population = self._run_gp(
             population, all_literals, X_disc_train, y_idx_train, n_classes,
             X_val=X_disc_val, y_val=y_idx_val,
         )
+        self._final_population = final_population
 
         # Recompute weights on the full dataset.
         if use_val:
@@ -907,6 +908,43 @@ class LogicGPClassifier(BaseRuleSetEstimator):
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, "ruleset_")
         return self.ruleset_
+
+    def extract_interactions(
+        self,
+        *,
+        min_occurrences: int = 10,
+        min_ratio: float = 0.1,
+        out_dot=None,
+        out_csv=None,
+    ) -> dict:
+        """Extract pairwise feature interactions from the final GP population.
+
+        Delegates to :func:`scoredrulesets.analysis.extract_interactions`.
+        Must be called after :meth:`fit`.
+
+        Parameters
+        ----------
+        min_occurrences:
+            Minimum co-occurrence count to keep an interaction edge.
+        min_ratio:
+            Minimum ratio of pair count to individual feature count.
+        out_dot:
+            Optional path for a GraphViz DOT output file.
+        out_csv:
+            Optional path for a CSV output file.
+
+        Returns
+        -------
+        dict with keys ``edges``, ``feature_counts``, ``pair_counts``.
+        """
+        from scoredrulesets.analysis.logicgp_interactions import extract_interactions
+        return extract_interactions(
+            self,
+            min_occurrences=min_occurrences,
+            min_ratio=min_ratio,
+            out_dot=out_dot,
+            out_csv=out_csv,
+        )
 
     # ------------------------------------------------------------------
     # Interne Methoden
@@ -1179,7 +1217,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         *,
         X_val: np.ndarray | None = None,
         y_val: np.ndarray | None = None,
-    ) -> _Polynomial:
+    ) -> tuple[_Polynomial, list[tuple[_Polynomial, _Fitness | _FitnessRLCW]]]:
         """
         Run the main GP loop and return the best polynomial.
         Supports FLCW and RLCW variants based on ``self.trainer``.
@@ -1381,7 +1419,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             if n_extra >= 50:
                 break
 
-        return select_model_fn(f1_candidates, self.min_improvement_pct)
+        return select_model_fn(f1_candidates, self.min_improvement_pct), evaluated
 
     def _select_two_parents(self, evaluated: list) -> tuple[_Polynomial, _Polynomial]:
         """Select two parents via dominance tournament."""
