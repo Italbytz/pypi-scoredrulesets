@@ -35,7 +35,8 @@ classifiers = [
 ]
 dependencies = [
   "numpy>=1.23",
-  "scikit-learn>=1.2"
+  "scikit-learn>=1.2",
+  "catgen>=0.1",
 ]
 
 [project.urls]
