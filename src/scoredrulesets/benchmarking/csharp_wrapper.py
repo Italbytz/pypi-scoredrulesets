@@ -47,20 +47,20 @@ class CSharBenchmarkRunner:
     def _find_cli_tool(self) -> Optional[Path]:
         """Find the CLI tool in common output locations."""
         common_paths = [
-            Path("/Users/nunkesser/repos/work/artifacts/nuget-adapters-algorithms-ea")
-            / "Italbytz.Adapters.Algorithms.EA"
-            / "Italbytz.Adapters.Algorithms.EA.Benchmark.Cli"
+            Path("/Users/nunkesser/repos/work/artifacts/consumers/production/csharp-console-logicgp")
+            / "logicGP"
+            / "logicGP"
             / "bin"
             / "Release"
             / "net9.0"
-            / "Italbytz.Adapters.Algorithms.EA.Benchmark.Cli",
-            Path("/Users/nunkesser/repos/work/artifacts/nuget-adapters-algorithms-ea")
-            / "Italbytz.Adapters.Algorithms.EA"
-            / "Italbytz.Adapters.Algorithms.EA.Benchmark.Cli"
+            / "Italbytz.AI.ML.LogicGp.Benchmark.Cli",
+            Path("/Users/nunkesser/repos/work/artifacts/consumers/production/csharp-console-logicgp")
+            / "logicGP"
+            / "logicGP"
             / "bin"
             / "Debug"
             / "net9.0"
-            / "Italbytz.Adapters.Algorithms.EA.Benchmark.Cli",
+            / "Italbytz.AI.ML.LogicGp.Benchmark.Cli",
         ]
         
         for path in common_paths:

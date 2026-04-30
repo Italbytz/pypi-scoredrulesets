@@ -698,6 +698,33 @@ def _select_model_best_f1(
     return best[0]
 
 
+def _select_model_shortest_zero_train_mcr(
+    candidates: list[tuple],
+    min_improvement: float = 0.01,
+) -> _Polynomial:
+    """
+    Select the shortest model with training MCR == 0.0 if available.
+
+    Expected candidate shape:
+      (poly, fit, f1_score, train_mcr)
+
+    If no zero-training-MCR candidate exists, this falls back to the
+    paper selection strategy on (poly, fit, f1_score).
+    """
+    if not candidates:
+        raise ValueError("No candidates available.")
+
+    zero_mcr = [c for c in candidates if len(c) >= 4 and float(c[3]) <= 1e-12]
+    if zero_mcr:
+        # Primary criterion (paper-like): smallest model among perfect-train models.
+        # Tie-breakers: higher F1, then higher consolidated fitness.
+        best = min(zero_mcr, key=lambda x: (x[1].size, -x[2], -x[1].consolidated))
+        return best[0]
+
+    reduced = [(poly, fit, f1) for poly, fit, f1, *_ in candidates]
+    return _final_model_selection(reduced, min_improvement=min_improvement)
+
+
 # ---------------------------------------------------------------------------
 # Final model selection (from paper: Algorithm 1)
 # ---------------------------------------------------------------------------
@@ -806,6 +833,10 @@ class LogicGPClassifier(BaseRuleSetEstimator):
     min_max_weight : float
         Filter literals whose maximal class weight is <= this threshold.
         0.0 = no filter. Recommended for RLCW: 0.1-0.3.
+    model_selection : str or callable
+        Final model selection strategy.
+        Built-ins: ``"paper"``, ``"best_f1"``, ``"shortest_zero_train_mcr"``.
+        Custom callables are also supported.
     min_improvement_pct : float
         Minimum improvement percentage for model selection (default: 0.01 = 1%).
     population_size : int or None
@@ -1070,6 +1101,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             _SELECTORS: dict[str, ModelSelector] = {
                 "paper": _final_model_selection,
                 "best_f1": _select_model_best_f1,
+                "shortest_zero_train_mcr": _select_model_shortest_zero_train_mcr,
             }
             if sel in _SELECTORS:
                 return _SELECTORS[sel]
@@ -1518,6 +1550,15 @@ class LogicGPClassifier(BaseRuleSetEstimator):
             if n_extra >= 50:
                 break
 
+        selection_mode = self.model_selection if isinstance(self.model_selection, str) else None
+        if selection_mode == "shortest_zero_train_mcr":
+            mcr_candidates: list[tuple[_Polynomial, _Fitness | _FitnessRLCW, float, float]] = []
+            for poly, fit, f1 in f1_candidates:
+                train_preds = poly.predict_classes(X_disc)
+                train_mcr = float(np.mean(train_preds != y_idx))
+                mcr_candidates.append((poly, fit, f1, train_mcr))
+            return select_model_fn(mcr_candidates, self.min_improvement_pct), evaluated
+
         return select_model_fn(f1_candidates, self.min_improvement_pct), evaluated
 
     def _select_two_parents(self, evaluated: list) -> tuple[_Polynomial, _Polynomial]:
@@ -1649,6 +1690,9 @@ class GPASClassifier(LogicGPClassifier):
         ``0`` (default) disables the split.
     max_fit_seconds : float or None
         Time budget for the GP loop in seconds. ``None`` = no limit.
+    model_selection : str or callable
+        Final model selection strategy.
+        Built-ins include ``"paper"`` and ``"shortest_zero_train_mcr"``.
     feature_encoding_strategy : str
         Encoding strategy for features; passed to the underlying discretizer.
     random_state : int or None
@@ -1667,6 +1711,7 @@ class GPASClassifier(LogicGPClassifier):
         max_model_size: int | None = None,
         validation_fraction: float = 0.0,
         max_fit_seconds: float | None = None,
+        model_selection: str | ModelSelector = "paper",
         feature_encoding_strategy: LogicGPEncodingStrategy = "auto_low_cardinality",
         random_state: int | None = None,
     ):
@@ -1684,7 +1729,7 @@ class GPASClassifier(LogicGPClassifier):
             max_model_size=max_model_size,
             validation_fraction=validation_fraction,
             literal_generator="full",
-            model_selection="paper",
+            model_selection=model_selection,
             fitness_evaluator=None,
             max_fit_seconds=max_fit_seconds,
             feature_encoding_strategy=feature_encoding_strategy,

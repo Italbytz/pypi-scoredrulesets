@@ -120,3 +120,82 @@ def test_gpas_reproducible():
         return clf.predict(X).tolist()
 
     assert run() == run()
+
+
+def test_gpas_selector_shortest_zero_train_mcr_prefers_shortest_perfect_train_model():
+    from scoredrulesets.estimators.logicgp import (
+        _Fitness,
+        _Monomial,
+        _Polynomial,
+        _SetLiteral,
+        _select_model_shortest_zero_train_mcr,
+    )
+
+    lit_a = _SetLiteral(0, frozenset({0}), (0, 1))
+    lit_b = _SetLiteral(1, frozenset({1}), (0, 1))
+    unif = np.array([0.5, 0.5], dtype=float)
+
+    small = _Polynomial(monomials=[_Monomial([lit_a], unif.copy())], default_weights=unif.copy())
+    large = _Polynomial(
+        monomials=[_Monomial([lit_a, lit_b], unif.copy())],
+        default_weights=unif.copy(),
+    )
+
+    fit_small = _Fitness(objectives=np.array([1.0, 1.0]), size=small.size)
+    fit_large = _Fitness(objectives=np.array([1.0, 1.0]), size=large.size)
+
+    candidates = [
+        (large, fit_large, 0.95, 0.0),
+        (small, fit_small, 0.90, 0.0),
+    ]
+
+    selected = _select_model_shortest_zero_train_mcr(candidates)
+    assert selected is small
+
+
+def test_gpas_selector_shortest_zero_train_mcr_falls_back_when_no_perfect_train_model():
+    from scoredrulesets.estimators.logicgp import (
+        _Fitness,
+        _Monomial,
+        _Polynomial,
+        _SetLiteral,
+        _select_model_shortest_zero_train_mcr,
+    )
+
+    lit_a = _SetLiteral(0, frozenset({0}), (0, 1))
+    lit_b = _SetLiteral(1, frozenset({1}), (0, 1))
+    unif = np.array([0.5, 0.5], dtype=float)
+
+    small = _Polynomial(monomials=[_Monomial([lit_a], unif.copy())], default_weights=unif.copy())
+    large = _Polynomial(
+        monomials=[_Monomial([lit_a, lit_b], unif.copy())],
+        default_weights=unif.copy(),
+    )
+
+    fit_small = _Fitness(objectives=np.array([0.8, 0.8]), size=small.size)
+    fit_large = _Fitness(objectives=np.array([0.9, 0.9]), size=large.size)
+
+    candidates = [
+        (small, fit_small, 0.70, 0.10),
+        (large, fit_large, 0.85, 0.05),
+    ]
+
+    selected = _select_model_shortest_zero_train_mcr(candidates)
+    assert selected is large
+
+
+def test_gpas_accepts_shortest_zero_train_mcr_mode_and_exposes_metadata():
+    from scoredrulesets import GPASClassifier
+
+    X, y = _make_binary_data(n=40, n_features=4, seed=123)
+    clf = GPASClassifier(
+        max_generations=10,
+        stagnation_generations=3,
+        n_bins=3,
+        model_selection="shortest_zero_train_mcr",
+        random_state=11,
+    )
+    clf.fit(X, y)
+
+    meta = clf.to_ruleset().metadata
+    assert meta["model_selection"] == "shortest_zero_train_mcr"

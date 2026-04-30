@@ -390,10 +390,9 @@ def main():
     # Initialize runners
     py_runner = PythonBenchmarkRunner(pyrepo)
     cli_path = Path(
-        "/Users/nunkesser/repos/work/artifacts/nuget-adapters-algorithms-ea/"
-        "Italbytz.Adapters.Algorithms.EA/"
-        "Italbytz.Adapters.Algorithms.EA.Benchmark.Cli/bin/Debug/net9.0/"
-        "Italbytz.Adapters.Algorithms.EA.Benchmark.Cli"
+        "/Users/nunkesser/repos/work/artifacts/consumers/production/csharp-console-logicgp/"
+        "logicGP/logicGP/bin/Debug/net9.0/"
+        "Italbytz.AI.ML.LogicGp.Benchmark.Cli"
     )
     try:
         cs_runner = RealCSharpBenchmarkRunner(cli_path=cli_path)

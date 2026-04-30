@@ -67,3 +67,4 @@ coverage.xml
 # Sensitive patient data – must never be committed
 **/genica63.csv
 
+benchmarks/paper
