@@ -293,6 +293,28 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
                 random_state=0,
             ),
         ),
+        "wrapper_rulegp_f1obj": EstimatorSpec(
+            name="wrapper_rulegp_f1obj",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="rulegp",
+                backend_params={
+                    "f1_averaging": "macro",
+                    "objective_mode": "f1",
+                    "atom_space_strategy": "hybrid",
+                    "atom_preselection_strategy": "logicgp_binned_sets",
+                    "max_generations": 200,
+                    "stagnation_generations": 40,
+                    "population_size": 50,
+                    "n_adaptations_per_gen": 12,
+                    "max_fit_seconds": 240,
+                },
+                preprocessing={
+                    "logicgp_discretize": True,
+                    "n_bins": 5,
+                },
+                random_state=0,
+            ),
+        ),
         "wrapper_rulegp_strong": EstimatorSpec(
             name="wrapper_rulegp_strong",
             factory=lambda: ScoredRuleSetClassifier(
