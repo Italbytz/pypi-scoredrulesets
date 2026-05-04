@@ -34,6 +34,8 @@ AtomPreselectionStrategy = Literal[
     "logicgp_binned_sets",
 ]
 
+ObjectiveMode = Literal["recall", "f1"]
+
 
 @dataclass(frozen=True)
 class _AtomGene2:
@@ -167,22 +169,38 @@ def _evaluate_fitness_rlcw2(
     X: np.ndarray,
     y_idx: np.ndarray,
     n_classes: int,
+    objective_mode: ObjectiveMode,
 ) -> _FitnessRLCW2:
     pred = rs.predict_classes(X)
-    conf = np.zeros((n_classes, n_classes), dtype=float)
-    for yt, yp in zip(y_idx, pred):
-        conf[yt, yp] += 1.0
 
-    recalls = np.divide(
-        np.diag(conf),
-        conf.sum(axis=1),
-        out=np.zeros(n_classes, dtype=float),
-        where=conf.sum(axis=1) > 0,
-    )
-    best = int(np.argmax(recalls))
-    other = np.delete(recalls, best)
+    if objective_mode == "recall":
+        conf = np.zeros((n_classes, n_classes), dtype=float)
+        for yt, yp in zip(y_idx, pred):
+            conf[yt, yp] += 1.0
+        per_class_metric = np.divide(
+            np.diag(conf),
+            conf.sum(axis=1),
+            out=np.zeros(n_classes, dtype=float),
+            where=conf.sum(axis=1) > 0,
+        )
+    elif objective_mode == "f1":
+        per_class_metric = np.asarray(
+            _f1_score(
+                y_idx,
+                pred,
+                average=None,
+                labels=list(range(n_classes)),
+                zero_division=0,
+            ),
+            dtype=float,
+        )
+    else:
+        raise ValueError("objective_mode must be 'recall' or 'f1'.")
+
+    best = int(np.argmax(per_class_metric))
+    other = np.delete(per_class_metric, best)
     return _FitnessRLCW2(
-        max_recall=float(recalls[best]),
+        max_recall=float(per_class_metric[best]),
         mean_other_recall=float(np.mean(other)) if other.size else 0.0,
         size=rs.size,
         best_class=best,
@@ -290,6 +308,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
     def __init__(
         self,
         f1_averaging: str = "macro",
+        objective_mode: ObjectiveMode = "recall",
         max_generations: int = 500,
         stagnation_generations: int = 80,
         early_stopping_metric: str = "consolidated",
@@ -337,6 +356,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             )
         self.atom_preselection_strategy = atom_preselection_strategy
         self.random_state = random_state
+        if objective_mode not in ("recall", "f1"):
+            raise ValueError("objective_mode must be 'recall' or 'f1'.")
+        self.objective_mode = objective_mode
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
@@ -762,6 +784,8 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             raise ValueError("f1_averaging must be 'micro' or 'macro'.")
         if self.early_stopping_metric not in ("f1", "consolidated"):
             raise ValueError("early_stopping_metric must be 'f1' or 'consolidated'.")
+        if self.objective_mode not in ("recall", "f1"):
+            raise ValueError("objective_mode must be 'recall' or 'f1'.")
 
         has_val = X_val is not None and y_val is not None
         eval_X = X_val if has_val else X_train
@@ -771,7 +795,19 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         for rs in population:
             _compute_weights2(rs, X_train, y_train, n_classes)
 
-        evaluated = [(rs, _evaluate_fitness_rlcw2(rs, X_train, y_train, n_classes)) for rs in population]
+        evaluated = [
+            (
+                rs,
+                _evaluate_fitness_rlcw2(
+                    rs,
+                    X_train,
+                    y_train,
+                    n_classes,
+                    self.objective_mode,
+                ),
+            )
+            for rs in population
+        ]
         evaluated = _pareto_front_rlcw2(evaluated)
 
         if self.population_size is not None and len(evaluated) > self.population_size:
@@ -793,7 +829,13 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             all_candidates.append((rs, fit, f1))
 
         elite_rs = max(all_candidates, key=lambda x: x[2])[0].clone()
-        elite_fit = _evaluate_fitness_rlcw2(elite_rs, X_train, y_train, n_classes)
+        elite_fit = _evaluate_fitness_rlcw2(
+            elite_rs,
+            X_train,
+            y_train,
+            n_classes,
+            self.objective_mode,
+        )
         elite_f1 = max(c[2] for c in all_candidates)
 
         mut_ops = [
@@ -834,7 +876,13 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             new_eval: list[tuple[_RuleSet2, _FitnessRLCW2]] = []
             for rs in new_rs:
                 _compute_weights2(rs, X_train, y_train, n_classes)
-                fit = _evaluate_fitness_rlcw2(rs, X_train, y_train, n_classes)
+                fit = _evaluate_fitness_rlcw2(
+                    rs,
+                    X_train,
+                    y_train,
+                    n_classes,
+                    self.objective_mode,
+                )
                 new_eval.append((rs, fit))
 
             combined = evaluated + new_eval
@@ -940,6 +988,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             metadata={
                 "source": "rulegp",
                 "f1_averaging": self.f1_averaging,
+                "objective_mode": self.objective_mode,
                 "max_generations": self.max_generations,
                 "population_size": self.population_size,
                 "n_adaptations_per_gen": self.n_adaptations_per_gen,
