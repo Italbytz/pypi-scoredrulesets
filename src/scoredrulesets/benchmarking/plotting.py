@@ -1867,29 +1867,31 @@ def plot_pareto_front(
         for est in estimator_names
     ]
 
-    if style_handles:
-        fig.legend(
-            handles=style_handles,
-            loc="upper left",
-            bbox_to_anchor=(0.86, 0.86),
-            frameon=False,
-            title="Pareto Styling",
-            fontsize=8,
-            title_fontsize=9,
-        )
-
     if estimator_handles:
         fig.legend(
             handles=estimator_handles,
-            loc="center left",
-            bbox_to_anchor=(0.86, 0.5),
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.0),
             frameon=False,
             title="Estimator",
             fontsize=8,
             title_fontsize=9,
+            ncol=4,
         )
 
-    fig.subplots_adjust(top=0.88, right=0.83, wspace=0.30, hspace=0.40)
+    if style_handles:
+        fig.legend(
+            handles=style_handles,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.10),
+            frameon=False,
+            title="Pareto Styling",
+            fontsize=8,
+            title_fontsize=9,
+            ncol=2,
+        )
+
+    fig.subplots_adjust(top=0.92, wspace=0.30, hspace=0.40)
 
     base = Path(output_base)
     png_path = base.with_suffix(".png")
