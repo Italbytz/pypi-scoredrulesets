@@ -1213,7 +1213,6 @@ def plot_2d_rank_plot(
     ax.set_ylim(0.5, k + 1.4)
     ax.set_xlabel(f"Mean F1 rank across {valid_f1_count} datasets (1 = best F1)")
     ax.set_ylabel(f"Mean complexity rank across {valid_atoms_count} datasets (1 = fewest atoms)")
-    ax.set_title("2D Rank Plot: Quality vs. Complexity (Nemenyi CD, α=0.05)")
     ax.set_xticks(range(1, k + 1))
     ax.set_yticks(range(1, k + 1))
     ax.grid(True, alpha=0.3)
@@ -1735,7 +1734,6 @@ def plot_pareto_front(
     estimator_names = _estimator_display_order({r.estimator for r in aggregated})
     estimator_colors = _estimator_color_map(estimator_names)
     fig, axes = _build_dataset_axes(len(dataset_names))
-    fig.suptitle("Pareto front: F1 vs model size per dataset", fontsize=13)
 
     used_axes = []
     for ax, ds_name in zip(axes, dataset_names):
