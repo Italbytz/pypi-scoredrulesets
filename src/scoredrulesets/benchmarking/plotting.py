@@ -285,13 +285,11 @@ def _build_dataset_axes(n_datasets: int):
         raise ValueError("Expected at least one dataset for plotting")
     if n_datasets == 1:
         ncols = 1
-    elif n_datasets >= 5:
-        ncols = 3
     else:
         ncols = 2
     nrows = math.ceil(n_datasets / ncols)
-    col_width = 5.0 if ncols >= 3 else 7.0
-    row_height = 4.0 if ncols >= 3 else 4.8
+    col_width = 7.0
+    row_height = 3.6
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=ncols,
@@ -1830,29 +1828,6 @@ def plot_pareto_front(
     for ax in axes[len(dataset_names):]:
         ax.set_visible(False)
 
-    style_handles = [
-        Line2D(
-            [0], [0],
-            marker="o",
-            color="none",
-            markerfacecolor="#9ca3af",
-            markeredgecolor="none",
-            alpha=0.35,
-            markersize=6,
-            label="Non-Pareto",
-        ),
-        Line2D(
-            [0], [0],
-            marker="o",
-            color="none",
-            markerfacecolor="#9ca3af",
-            markeredgecolor="black",
-            markeredgewidth=1.0,
-            markersize=8,
-            label="Pareto-optimal",
-        ),
-    ]
-
     estimator_handles = [
         Line2D(
             [0], [0],
@@ -1871,24 +1846,12 @@ def plot_pareto_front(
         fig.legend(
             handles=estimator_handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.0),
+            bbox_to_anchor=(0.5, 0.04),
             frameon=False,
             title="Estimator",
             fontsize=8,
             title_fontsize=9,
             ncol=4,
-        )
-
-    if style_handles:
-        fig.legend(
-            handles=style_handles,
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.10),
-            frameon=False,
-            title="Pareto Styling",
-            fontsize=8,
-            title_fontsize=9,
-            ncol=2,
         )
 
     fig.subplots_adjust(top=0.92, wspace=0.30, hspace=0.40)
