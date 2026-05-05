@@ -283,12 +283,19 @@ def _plot_aggregated(
 def _build_dataset_axes(n_datasets: int):
     if n_datasets <= 0:
         raise ValueError("Expected at least one dataset for plotting")
-    ncols = 1 if n_datasets == 1 else 2
+    if n_datasets == 1:
+        ncols = 1
+    elif n_datasets >= 5:
+        ncols = 3
+    else:
+        ncols = 2
     nrows = math.ceil(n_datasets / ncols)
+    col_width = 5.0 if ncols >= 3 else 7.0
+    row_height = 4.0 if ncols >= 3 else 4.8
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=ncols,
-        figsize=(7 * ncols, 4.8 * nrows),
+        figsize=(col_width * ncols, row_height * nrows),
         squeeze=False,
     )
     return fig, list(axes.flatten())
@@ -1175,7 +1182,7 @@ def plot_2d_rank_plot(
                 _label_dy[ni] += _push
                 _label_dy[nj] -= _push
 
-    fig, ax = plt.subplots(figsize=(8.5, 7.5))
+    fig, ax = plt.subplots(figsize=(7.5, 6.5))
     for xr, yr, name in _pts:
         ax.scatter(xr, yr, s=110, color=estimator_colors[name], edgecolors="black", linewidths=0.8, zorder=3)
         ax.text(xr + 0.14, yr + _label_dy[name], name, va="center", ha="left", fontsize=8)
