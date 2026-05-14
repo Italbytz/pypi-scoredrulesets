@@ -29,7 +29,7 @@ from .estimators.rulegp import RuleGPClassifier
 from .estimators.ruleplcs import RulePLCSClassifier
 from .estimators.rulensga2 import RuleNSGA2Classifier
 from .estimators.rulekit_native import RuleKitNativeClassifier
-from .estimators.sklearn_wrapper import ScoredRuleSetClassifier
+from .estimators.sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 from .formatting import format_ruleset_latex, format_ruleset_markdown, format_ruleset_table
 from .io import dump_ruleset_json, dump_ruleset_latex, dump_ruleset_markdown, load_ruleset_json
 from .runtime import predict_regression
@@ -54,6 +54,7 @@ __all__ = [
     "RuleNSGA2Classifier",
     "RuleKitNativeClassifier",
     "ScoredRuleSetClassifier",
+    "ScoredRuleSetRegressor",
     "aggregate_benchmark_results",
     "aggregated_results_as_dicts",
     "build_benchmark_leaderboard",
