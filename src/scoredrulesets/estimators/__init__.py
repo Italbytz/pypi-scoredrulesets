@@ -5,7 +5,7 @@ from .rulenln import RuleNLNClassifier
 from .rulegp import RuleGPClassifier
 from .ruleplcs import RulePLCSClassifier
 from .rulensga2 import RuleNSGA2Classifier
-from .sklearn_wrapper import ScoredRuleSetClassifier
+from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 __all__ = [
 	"AutoScoredRuleSetClassifier",
@@ -17,5 +17,6 @@ __all__ = [
 	"RulePLCSClassifier",
 	"RuleNSGA2Classifier",
 	"ScoredRuleSetClassifier",
+	"ScoredRuleSetRegressor",
 ]
 
