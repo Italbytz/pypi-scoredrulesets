@@ -43,18 +43,29 @@ from .runner import (
 	load_checkpoint_results,
 	run_benchmarks,
 )
+from .clustering import (
+	ClusterApproxRunResult,
+	ClusterApproxSummary,
+	benchmark_cluster_approximation,
+	format_cluster_approximation_runs_markdown,
+	summarize_cluster_approximation_runs,
+)
 
 __all__ = [
 	"BenchmarkComparisonRow",
+	"ClusterApproxRunResult",
+	"ClusterApproxSummary",
 	"AggregatedBenchmarkResult",
 	"BenchmarkConfig",
 	"BenchmarkResult",
 	"aggregate_benchmark_results",
 	"aggregated_results_as_dicts",
+	"benchmark_cluster_approximation",
 	"build_benchmark_leaderboard",
 	"build_pareto_per_dataset",
 	"compare_benchmark_runs",
 	"compute_pareto_front",
+	"format_cluster_approximation_runs_markdown",
 	"format_benchmark_comparison_report_html",
 	"format_benchmark_comparison_report_markdown",
 	"format_benchmark_leaderboard_html",
@@ -82,5 +93,6 @@ __all__ = [
 	"plot_win_tie_loss_triangular_matrix",
 	"plot_win_tie_loss_matrix",
 	"run_benchmarks",
+	"summarize_cluster_approximation_runs",
 ]
 
