@@ -563,7 +563,7 @@ def _classification_ruleset_to_regression(
         task_type="regression",
         feature_names=ruleset.feature_names,
         rules=projected_rules,
-        aggregation=AggregationSpec(type="default_plus_sum"),
+        aggregation=AggregationSpec(type="mean_active"),
         metadata={
             "transform": "classification_ruleset_projection",
             "projection": "class_score_expectation",
