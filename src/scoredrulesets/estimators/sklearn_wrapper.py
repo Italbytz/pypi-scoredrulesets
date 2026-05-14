@@ -6,14 +6,16 @@ from typing import Any
 import warnings
 
 import numpy as np
-from sklearn.base import clone
+from sklearn.base import RegressorMixin, clone
 from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeRegressor
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
 from ..io import dump_ruleset_json, load_ruleset_json
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
-from ..schema import ScoredRuleSet
+from ..runtime import predict_regression as predict_regression_from_ruleset
+from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
 from .atom_space import LogicGPDiscretizingEncoder
 from .backends import build_backend_estimator
 from .base import BaseRuleSetEstimator
@@ -388,4 +390,157 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         if max_idx >= 0:
             return max_idx + 1
         return None
+
+
+class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
+    """Sklearn-compatible wrapper with post-hoc transformation into regression rule sets.
+
+    This first baseline wrapper supports CART-style regression trees and any
+    compatible pre-built regressor passed via ``estimator``.
+    """
+
+    def __init__(
+        self,
+        backend: str = "cart",
+        backend_params: dict[str, Any] | None = None,
+        estimator: Any | None = None,
+        random_state: int | None = None,
+    ):
+        self.backend = backend
+        self.backend_params = backend_params
+        self.estimator = estimator
+        self.random_state = random_state
+
+    def fit(self, X, y):
+        X_valid, y_valid = check_X_y(X, y, dtype=None, y_numeric=True)
+        self.n_features_in_ = X_valid.shape[1]
+        self.feature_names_in_ = ScoredRuleSetClassifier._infer_feature_names(X_valid)
+
+        if self.estimator is not None:
+            self.estimator_ = clone(self.estimator)
+        else:
+            backend_key = self.backend.lower()
+            if backend_key != "cart":
+                raise ValueError(
+                    "ScoredRuleSetRegressor currently supports backend='cart' "
+                    "or a custom estimator via 'estimator'."
+                )
+            params = dict(self.backend_params or {})
+            params.setdefault("random_state", self.random_state)
+            self.estimator_ = DecisionTreeRegressor(**params)
+
+        self.estimator_.fit(X_valid, y_valid)
+        self.ruleset_ = _regressor_to_scored_ruleset(
+            estimator=self.estimator_,
+            feature_names=self.feature_names_in_,
+        )
+        return self
+
+    def predict(self, X):
+        check_is_fitted(self, "ruleset_")
+        X_valid: np.ndarray = np.asarray(check_array(X, dtype=None))
+        if self.n_features_in_ is not None and X_valid.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
+                f"is expecting {self.n_features_in_} features as input"
+            )
+        return predict_regression_from_ruleset(self.ruleset_, X_valid)
+
+    def to_ruleset(self) -> ScoredRuleSet:
+        check_is_fitted(self, "ruleset_")
+        return self.ruleset_
+
+    def save_ruleset(self, path: str | Path) -> None:
+        check_is_fitted(self, "ruleset_")
+        dump_ruleset_json(self.ruleset_, path)
+
+    @classmethod
+    def from_ruleset_json(cls, path: str | Path) -> "ScoredRuleSetRegressor":
+        model = cls(backend="cart")
+        model.ruleset_ = load_ruleset_json(path)
+        if model.ruleset_.task_type != "regression":
+            raise ValueError("Ruleset is not a regression model (task_type != 'regression').")
+        model.feature_names_in_ = model.ruleset_.feature_names
+        model.n_features_in_ = ScoredRuleSetClassifier._infer_ruleset_n_features(model.ruleset_)
+        model.estimator_ = None
+        return model
+
+
+def _regressor_to_scored_ruleset(estimator: Any, feature_names: list[str]) -> ScoredRuleSet:
+    tree_estimator = _unwrap_tree_estimator(estimator)
+    if not hasattr(tree_estimator, "tree_"):
+        raise TypeError("Regressor could not be resolved to an object with tree_")
+
+    rules = _build_tree_rules_regression(tree_estimator=tree_estimator, feature_names=feature_names)
+    ruleset = ScoredRuleSet(
+        class_labels=[],
+        task_type="regression",
+        feature_names=feature_names,
+        rules=rules,
+        aggregation=AggregationSpec(type="weighted_sum"),
+        metadata={"transform": "tree_to_scored_ruleset_regression"},
+    )
+    ruleset.validate()
+    return ruleset
+
+
+def _build_tree_rules_regression(tree_estimator: Any, feature_names: list[str]) -> list[Rule]:
+    tree = tree_estimator.tree_
+    children_left = tree.children_left
+    children_right = tree.children_right
+    feature_arr = tree.feature
+    threshold = tree.threshold
+    leaf_values = tree.value
+
+    rules: list[Rule] = []
+
+    def _extract_leaf_value(node_id: int) -> float:
+        value = leaf_values[node_id]
+        flat = np.asarray(value, dtype=float).reshape(-1)
+        if flat.size == 0:
+            return 0.0
+        return float(flat[0])
+
+    def visit(node_id: int, path_atoms: list[Atom], depth: int) -> None:
+        is_leaf = children_left[node_id] == children_right[node_id]
+        if is_leaf:
+            rules.append(
+                Rule(
+                    atoms=list(path_atoms),
+                    scores=[_extract_leaf_value(node_id)],
+                    rule_id=f"leaf_{node_id}",
+                    metadata={"depth": depth, "source": "tree_path"},
+                )
+            )
+            return
+
+        split_feature_idx = int(feature_arr[node_id])
+        split_name = feature_names[split_feature_idx]
+        split_threshold = float(threshold[node_id])
+
+        visit(
+            children_left[node_id],
+            path_atoms + [Atom(feature=split_name, op="<=", value=split_threshold)],
+            depth + 1,
+        )
+        visit(
+            children_right[node_id],
+            path_atoms + [Atom(feature=split_name, op=">", value=split_threshold)],
+            depth + 1,
+        )
+
+    visit(0, [], 0)
+    return rules
+
+
+def _unwrap_tree_estimator(estimator: Any) -> Any:
+    if hasattr(estimator, "tree_"):
+        return estimator
+
+    for attr in ("estimator_", "model_", "best_estimator_", "tree_estimator_"):
+        inner = getattr(estimator, attr, None)
+        if inner is not None and hasattr(inner, "tree_"):
+            return inner
+
+    raise TypeError("Estimator could not be resolved to an object with tree_")
 
