@@ -56,7 +56,15 @@ def _rule_fires(row: np.ndarray, rule: Rule, feature_names: list[str]) -> bool:
     return True
 
 
+def _ensure_task_type(ruleset: ScoredRuleSet, expected: str) -> None:
+    if ruleset.task_type != expected:
+        raise ValueError(
+            f"Expected task_type='{expected}', got '{ruleset.task_type}'"
+        )
+
+
 def decision_function(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False) -> np.ndarray:
+    _ensure_task_type(ruleset, "classification")
     if X.ndim != 2:
         raise ValueError("X must be a 2D array")
     n_classes = len(ruleset.class_labels)
@@ -99,7 +107,48 @@ def decision_function(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False
     return scores
 
 
+def decision_function_regression(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False) -> np.ndarray:
+    _ensure_task_type(ruleset, "regression")
+    if X.ndim != 2:
+        raise ValueError("X must be a 2D array")
+
+    predictions = np.zeros(X.shape[0], dtype=float)
+    feature_names = ruleset.feature_names or [f"f{i}" for i in range(X.shape[1])]
+
+    default_value = 0.0
+    has_default = False
+    non_default_rules = []
+    for rule in ruleset.rules:
+        if not getattr(rule, "atoms", None):
+            default_value += float(rule.scores[0])
+            has_default = True
+        else:
+            non_default_rules.append(rule)
+
+    agg = ruleset.aggregation.type
+    for i, row in enumerate(X):
+        active_values: list[float] = []
+        for rule in non_default_rules:
+            if _rule_fires(row, rule, feature_names):
+                active_values.append(float(rule.scores[0]))
+
+        if agg == "weighted_sum":
+            predictions[i] = float(np.sum(active_values)) if active_values else (default_value if has_default else 0.0)
+        elif agg == "mean_active":
+            predictions[i] = float(np.mean(active_values)) if active_values else (default_value if has_default else 0.0)
+        elif agg == "default_plus_sum":
+            predictions[i] = default_value + float(np.sum(active_values))
+        else:
+            raise ValueError(f"Unsupported regression aggregation type: {agg}")
+
+        if debug:
+            print(f"[DEBUG regression] Sample {i}: active_values={active_values}, prediction={predictions[i]:.6f}")
+
+    return predictions
+
+
 def predict_proba(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False) -> np.ndarray:
+    _ensure_task_type(ruleset, "classification")
     scores = decision_function(ruleset, X, debug=debug)
     agg = ruleset.aggregation.type
     if agg == "argmax_sum":
@@ -117,12 +166,17 @@ def predict_proba(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False) ->
 
 
 def predict(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False) -> np.ndarray:
+    _ensure_task_type(ruleset, "classification")
     proba = predict_proba(ruleset, X, debug=debug)
     indices = np.argmax(proba, axis=1)
     # Infer a sensible dtype: let numpy decide (int, float, str, …)
     # instead of forcing dtype=object which confuses sklearn metrics.
     labels = np.asarray(ruleset.class_labels)
     return labels[indices]
+
+
+def predict_regression(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False) -> np.ndarray:
+    return decision_function_regression(ruleset, X, debug=debug)
 
 
 def consolidate_default_rules(ruleset: ScoredRuleSet) -> ScoredRuleSet:
@@ -149,6 +203,7 @@ def consolidate_default_rules(ruleset: ScoredRuleSet) -> ScoredRuleSet:
     new_rules = non_default_rules + [merged_default_rule]
     return ScoredRuleSet(
         class_labels=ruleset.class_labels,
+        task_type=ruleset.task_type,
         feature_names=ruleset.feature_names,
         rules=new_rules,
         aggregation=ruleset.aggregation,
