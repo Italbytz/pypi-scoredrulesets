@@ -3,10 +3,14 @@ from .benchmarking import (
     BenchmarkComparisonRow,
     BenchmarkConfig,
     BenchmarkResult,
+    ClusterApproxRunResult,
+    ClusterApproxSummary,
     aggregate_benchmark_results,
     aggregated_results_as_dicts,
+    benchmark_cluster_approximation,
     build_benchmark_leaderboard,
     compare_benchmark_runs,
+    format_cluster_approximation_runs_markdown,
     format_benchmark_comparison_report_html,
     format_benchmark_comparison_report_markdown,
     format_benchmark_leaderboard_html,
@@ -21,6 +25,7 @@ from .benchmarking import (
     plot_benchmark_heatmap_combined,
     plot_benchmark_results,
     run_benchmarks,
+    summarize_cluster_approximation_runs,
 )
 from .estimators.auto import AutoScoredRuleSetClassifier
 from .estimators.cluster_wrapper import ScoredRuleSetClusterer
@@ -48,6 +53,8 @@ __all__ = [
     "BenchmarkComparisonRow",
     "BenchmarkConfig",
     "BenchmarkResult",
+    "ClusterApproxRunResult",
+    "ClusterApproxSummary",
     "GPASClassifier",
     "LogicGPClassifier",
     "RuleGPClassifier",
@@ -59,6 +66,7 @@ __all__ = [
     "ScoredRuleSetRegressor",
     "aggregate_benchmark_results",
     "aggregated_results_as_dicts",
+    "benchmark_cluster_approximation",
     "build_benchmark_leaderboard",
     "compare_benchmark_runs",
     "dump_ruleset_json",
@@ -73,6 +81,7 @@ __all__ = [
     "format_benchmark_meta_report_markdown",
     "format_benchmark_report_html",
     "format_benchmark_report_markdown",
+    "format_cluster_approximation_runs_markdown",
     "format_ruleset_latex",
     "format_ruleset_markdown",
     "format_ruleset_table",
@@ -84,5 +93,6 @@ __all__ = [
     "plot_benchmark_results",
     "predict_regression",
     "run_benchmarks",
+    "summarize_cluster_approximation_runs",
 ]
 
