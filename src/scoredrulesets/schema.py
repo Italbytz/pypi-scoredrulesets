@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Literal, Sequence
 
 
 SUPPORTED_OPS = {"==", "!=", "<=", ">", "<", ">=", "in", "not_in", "between"}
+SUPPORTED_TASK_TYPES = {"classification", "regression"}
+TaskType = Literal["classification", "regression"]
 
 
 @dataclass
@@ -89,18 +91,36 @@ class Rule:
 class ScoredRuleSet:
     class_labels: List[Any]
     rules: List[Rule]
+    task_type: TaskType = "classification"
     feature_names: List[str] = field(default_factory=list)
     aggregation: AggregationSpec = field(default_factory=AggregationSpec)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
-        if not self.class_labels:
-            raise ValueError("class_labels must not be empty")
-        n_classes = len(self.class_labels)
+        if self.task_type not in SUPPORTED_TASK_TYPES:
+            raise ValueError(
+                f"Unsupported task_type '{self.task_type}'. "
+                f"Expected one of {sorted(SUPPORTED_TASK_TYPES)}"
+            )
+
+        if self.task_type == "classification":
+            if not self.class_labels:
+                raise ValueError("class_labels must not be empty for classification")
+            n_classes = len(self.class_labels)
+            for idx, rule in enumerate(self.rules):
+                if len(rule.scores) != n_classes:
+                    raise ValueError(
+                        f"Rule at index {idx} has {len(rule.scores)} scores; expected {n_classes}"
+                    )
+            return
+
+        # Regression: one scalar output per rule.
+        if self.class_labels:
+            raise ValueError("class_labels must be empty for regression")
         for idx, rule in enumerate(self.rules):
-            if len(rule.scores) != n_classes:
+            if len(rule.scores) != 1:
                 raise ValueError(
-                    f"Rule at index {idx} has {len(rule.scores)} scores; expected {n_classes}"
+                    f"Rule at index {idx} has {len(rule.scores)} scores; expected 1"
                 )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -108,6 +128,7 @@ class ScoredRuleSet:
         return {
             "format": "scoredrulesets",
             "version": "0.1",
+            "task_type": self.task_type,
             "class_labels": list(self.class_labels),
             "feature_names": list(self.feature_names),
             "aggregation": self.aggregation.to_dict(),
@@ -120,8 +141,16 @@ class ScoredRuleSet:
         if payload.get("format") != "scoredrulesets":
             raise ValueError("Unsupported format. Expected format='scoredrulesets'")
 
+        if "task_type" in payload:
+            task_type = str(payload["task_type"])
+        elif "class_labels" in payload:
+            task_type = "classification"
+        else:
+            task_type = "regression"
+
         ruleset = cls(
-            class_labels=list(payload["class_labels"]),
+            class_labels=list(payload.get("class_labels", [])),
+            task_type=task_type,  # type: ignore[arg-type]
             feature_names=list(payload.get("feature_names", [])),
             aggregation=AggregationSpec.from_dict(payload.get("aggregation", {})),
             rules=[Rule.from_dict(r) for r in payload.get("rules", [])],
