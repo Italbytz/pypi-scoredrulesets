@@ -395,8 +395,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     """Sklearn-compatible wrapper with post-hoc transformation into regression rule sets.
 
-    This first baseline wrapper supports CART-style regression trees and any
-    compatible pre-built regressor passed via ``estimator``.
+    This baseline wrapper supports CART-style regression trees and an
+    experimental regression projection path for rule-based classification
+    backends (currently ``rulegp`` and ``rulensga2``) via target binning.
     """
 
     def __init__(
@@ -405,11 +406,13 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         backend_params: dict[str, Any] | None = None,
         estimator: Any | None = None,
         random_state: int | None = None,
+        target_bins: int = 8,
     ):
         self.backend = backend
         self.backend_params = backend_params
         self.estimator = estimator
         self.random_state = random_state
+        self.target_bins = target_bins
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None, y_numeric=True)
@@ -418,22 +421,51 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
 
         if self.estimator is not None:
             self.estimator_ = clone(self.estimator)
+            self.estimator_.fit(X_valid, y_valid)
+            self.ruleset_ = _regressor_to_scored_ruleset(
+                estimator=self.estimator_,
+                feature_names=self.feature_names_in_,
+            )
         else:
             backend_key = self.backend.lower()
-            if backend_key != "cart":
-                raise ValueError(
-                    "ScoredRuleSetRegressor currently supports backend='cart' "
-                    "or a custom estimator via 'estimator'."
+            if backend_key == "cart":
+                params = dict(self.backend_params or {})
+                params.setdefault("random_state", self.random_state)
+                self.estimator_ = DecisionTreeRegressor(**params)
+                self.estimator_.fit(X_valid, y_valid)
+                self.ruleset_ = _regressor_to_scored_ruleset(
+                    estimator=self.estimator_,
+                    feature_names=self.feature_names_in_,
                 )
-            params = dict(self.backend_params or {})
-            params.setdefault("random_state", self.random_state)
-            self.estimator_ = DecisionTreeRegressor(**params)
+            elif backend_key in {"rulegp", "rulensga2"}:
+                y_encoded, bin_edges, bin_centers = _encode_regression_targets(
+                    y_valid, n_bins=max(int(self.target_bins), 2)
+                )
+                self._target_bin_edges_ = bin_edges
+                self._target_bin_centers_ = bin_centers
 
-        self.estimator_.fit(X_valid, y_valid)
-        self.ruleset_ = _regressor_to_scored_ruleset(
-            estimator=self.estimator_,
-            feature_names=self.feature_names_in_,
-        )
+                self.estimator_ = build_backend_estimator(
+                    backend=backend_key,
+                    backend_params=self.backend_params,
+                    random_state=self.random_state,
+                )
+                self.estimator_.fit(X_valid, y_encoded)
+
+                cls_ruleset = getattr(self.estimator_, "ruleset_", None)
+                if cls_ruleset is None:
+                    raise RuntimeError(
+                        f"Backend '{backend_key}' has no ruleset_ after fit()."
+                    )
+                self.ruleset_ = _classification_ruleset_to_regression(
+                    ruleset=cls_ruleset,
+                    target_values=bin_centers,
+                    source_backend=backend_key,
+                )
+            else:
+                raise ValueError(
+                    "ScoredRuleSetRegressor currently supports backend='cart', "
+                    "'rulegp', 'rulensga2', or a custom estimator via 'estimator'."
+                )
         return self
 
     def predict(self, X):
@@ -482,6 +514,82 @@ def _regressor_to_scored_ruleset(estimator: Any, feature_names: list[str]) -> Sc
     )
     ruleset.validate()
     return ruleset
+
+
+def _encode_regression_targets(y: np.ndarray, n_bins: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    y_arr = np.asarray(y, dtype=float)
+    if y_arr.ndim != 1:
+        raise ValueError("Regression target y must be one-dimensional")
+
+    quantiles = np.linspace(0.0, 1.0, n_bins + 1)
+    edges = np.quantile(y_arr, quantiles)
+    edges = np.unique(edges)
+
+    if edges.size < 3:
+        # Degenerate case: almost-constant targets. Keep a single central bin.
+        center = float(np.mean(y_arr))
+        encoded = np.zeros_like(y_arr, dtype=int)
+        return encoded, np.array([center - 0.5, center + 0.5], dtype=float), np.array([center], dtype=float)
+
+    interior = edges[1:-1]
+    encoded = np.digitize(y_arr, interior, right=False)
+    centers = (edges[:-1] + edges[1:]) / 2.0
+    return encoded.astype(int), edges.astype(float), centers.astype(float)
+
+
+def _classification_ruleset_to_regression(
+    ruleset: ScoredRuleSet,
+    target_values: np.ndarray,
+    source_backend: str,
+) -> ScoredRuleSet:
+    projected_rules: list[Rule] = []
+
+    for idx, rule in enumerate(ruleset.rules):
+        value = _project_class_scores_to_scalar(rule.scores, target_values)
+        metadata = dict(rule.metadata or {})
+        metadata["regression_projection"] = "class_score_expectation"
+        metadata["source_backend"] = source_backend
+        projected_rules.append(
+            Rule(
+                atoms=list(rule.atoms),
+                scores=[value],
+                rule_id=rule.rule_id or f"proj_{idx}",
+                metadata=metadata,
+            )
+        )
+
+    reg_ruleset = ScoredRuleSet(
+        class_labels=[],
+        task_type="regression",
+        feature_names=ruleset.feature_names,
+        rules=projected_rules,
+        aggregation=AggregationSpec(type="default_plus_sum"),
+        metadata={
+            "transform": "classification_ruleset_projection",
+            "projection": "class_score_expectation",
+            "source_backend": source_backend,
+            "target_bin_centers": target_values.tolist(),
+        },
+    )
+    reg_ruleset.validate()
+    return reg_ruleset
+
+
+def _project_class_scores_to_scalar(scores: list[float], target_values: np.ndarray) -> float:
+    arr = np.asarray(scores, dtype=float)
+    if arr.size != target_values.size:
+        raise ValueError(
+            "Rule score length does not match number of target bins "
+            f"({arr.size} != {target_values.size})."
+        )
+
+    positive = np.clip(arr, a_min=0.0, a_max=None)
+    denom = float(np.sum(positive))
+    if denom <= 0.0:
+        return float(target_values[int(np.argmax(arr))])
+
+    weights = positive / denom
+    return float(np.dot(weights, target_values))
 
 
 def _build_tree_rules_regression(tree_estimator: Any, feature_names: list[str]) -> list[Rule]:
