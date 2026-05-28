@@ -46,10 +46,12 @@ def test_cart_backend_prints_ruleset_table(capsys):
     # Print the final model as a table (visible in pytest with -s).
     print(format_ruleset_table(clf.to_ruleset()))
     captured = capsys.readouterr()
-    assert "| idx " in captured.out
-    assert "| rule_id " in captured.out
-    assert "| condition " in captured.out
-    assert "| scores " in captured.out
+    assert "| 0" in captured.out
+    assert "| 1" in captured.out
+    assert "| 2" in captured.out
+    assert "S_r" in captured.out
+    assert "{ f3" in captured.out
+    assert "0.25" in captured.out
 
 
 def test_cart_backend_writes_ruleset_output_file(tmp_path: Path):

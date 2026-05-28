@@ -83,6 +83,10 @@ class _RuleSet2:
         col = X[:, atom.feature_idx]
         if atom.op == "<=":
             return np.asarray(col, dtype=float) <= float(atom.value)
+        if atom.op == "<":
+            return np.asarray(col, dtype=float) < float(atom.value)
+        if atom.op == ">=":
+            return np.asarray(col, dtype=float) >= float(atom.value)
         if atom.op == ">":
             return np.asarray(col, dtype=float) > float(atom.value)
         if atom.op == "between":
@@ -91,11 +95,11 @@ class _RuleSet2:
             return (c >= float(lo)) & (c <= float(hi))
         if atom.op == "==":
             try:
-                return np.asarray(col, dtype=float) == float(atom.value)
+                return (np.asarray(col, dtype=float) == float(atom.value)).astype(bool)
             except (TypeError, ValueError):
-                return np.asarray(col, dtype=object) == atom.value
+                return (np.asarray(col, dtype=object) == atom.value).astype(bool)
         if atom.op == "in":
-            return np.isin(np.asarray(col, dtype=object), list(atom.value))
+            return np.isin(np.asarray(col, dtype=object), list(atom.value)).astype(bool)
         return np.ones(X.shape[0], dtype=bool)
 
     def _rule_mask(self, rule: _Rule2, X: np.ndarray) -> np.ndarray:
@@ -319,6 +323,8 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         tournament_size: int = 5,
         max_model_size: int | None = None,
         validation_fraction: float = 0.0,
+        model_selection: str = "paper",
+        zero_mcr_followup_ratio: float = 0.0,
         max_fit_seconds: float | None = None,
         max_rules: int | None = None,
         max_atoms_per_rule: int | None = None,
@@ -326,6 +332,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         max_thresholds_per_feature: int | None = None,
         atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
         atom_preselection_strategy: AtomPreselectionStrategy = "none",
+        feature_names: list[str] | None = None,
         random_state: int | None = None,
     ):
         self.f1_averaging = f1_averaging
@@ -339,6 +346,14 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         self.tournament_size = tournament_size
         self.max_model_size = max_model_size
         self.validation_fraction = validation_fraction
+        if model_selection not in ("paper", "best_f1", "shortest_zero_train_mcr"):
+            raise ValueError(
+                "model_selection must be 'paper', 'best_f1', or 'shortest_zero_train_mcr'."
+            )
+        self.model_selection = model_selection
+        self.zero_mcr_followup_ratio = float(zero_mcr_followup_ratio)
+        if self.zero_mcr_followup_ratio < 0.0:
+            raise ValueError("zero_mcr_followup_ratio must be >= 0.0.")
         self.max_fit_seconds = max_fit_seconds
         self.max_rules = max_rules
         self.max_atoms_per_rule = max_atoms_per_rule
@@ -355,6 +370,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                 "'logicgp_singleton', or 'logicgp_binned_sets'."
             )
         self.atom_preselection_strategy = atom_preselection_strategy
+        self.feature_names = feature_names
         self.random_state = random_state
         if objective_mode not in ("recall", "f1"):
             raise ValueError("objective_mode must be 'recall' or 'f1'.")
@@ -363,9 +379,16 @@ class RuleGPClassifier(BaseRuleSetEstimator):
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
         self.n_features_in_ = X_valid.shape[1]
-        self.feature_names_in_ = np.asarray(
-            [f"f{i}" for i in range(self.n_features_in_)], dtype=object
-        )
+        if self.feature_names is not None:
+            if len(self.feature_names) != self.n_features_in_:
+                raise ValueError(
+                    f"feature_names has length {len(self.feature_names)}; expected {self.n_features_in_}."
+                )
+            self.feature_names_in_ = np.asarray([str(name) for name in self.feature_names], dtype=object)
+        else:
+            self.feature_names_in_ = np.asarray(
+                [f"f{i}" for i in range(self.n_features_in_)], dtype=object
+            )
         self.classes_ = unique_labels(y_valid)
         n_classes = len(self.classes_)
 
@@ -427,7 +450,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         if X_val is not None and y_val is not None:
             _compute_weights2(best_rs, X_valid, y_idx, n_classes)
 
-        self.ruleset_ = self._to_ruleset(best_rs, n_classes)
+        self.ruleset_ = _to_ruleset_rulegp(self, best_rs, n_classes)
         self.ruleset_.validate()
         return self
 
@@ -683,11 +706,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             return (c >= float(lo)) & (c <= float(hi))
         if atom.op == "==":
             try:
-                return np.asarray(col, dtype=float) == float(atom.value)
+                return (np.asarray(col, dtype=float) == float(atom.value)).astype(bool)
             except (TypeError, ValueError):
-                return np.asarray(col, dtype=object) == atom.value
+                return (np.asarray(col, dtype=object) == atom.value).astype(bool)
         if atom.op == "in":
-            return np.isin(np.asarray(col, dtype=object), list(atom.value))
+            return np.isin(np.asarray(col, dtype=object), list(atom.value)).astype(bool)
         return np.ones(X.shape[0], dtype=bool)
 
     def _select_two_parents(
@@ -821,12 +844,14 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         else:
             best_signal = max(fit.consolidated for _, fit in evaluated)
         stagnation = 0
-        all_candidates: list[tuple[_RuleSet2, _FitnessRLCW2, float]] = []
+        all_candidates: list[tuple[_RuleSet2, _FitnessRLCW2, float, float]] = []
 
         for rs, fit in evaluated:
             pred = rs.predict_classes(eval_X)
             f1 = float(_f1_score(eval_y, pred, average=self.f1_averaging, labels=labels))
-            all_candidates.append((rs, fit, f1))
+            train_preds = rs.predict_classes(X_train)
+            train_mcr = float(np.mean(train_preds != y_train))
+            all_candidates.append((rs, fit, f1, train_mcr))
 
         elite_rs = max(all_candidates, key=lambda x: x[2])[0].clone()
         elite_fit = _evaluate_fitness_rlcw2(
@@ -848,8 +873,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
 
         n_adapt = max(1, self.n_adaptations_per_gen)
         t0 = time.monotonic()
+        zero_mcr_target_generation: int | None = None
 
-        for _ in range(self.max_generations):
+        for generation_idx in range(self.max_generations):
             if self.max_fit_seconds is not None and (time.monotonic() - t0) >= self.max_fit_seconds:
                 break
 
@@ -898,11 +924,27 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             for rs, fit in new_eval:
                 pred = rs.predict_classes(eval_X)
                 f1 = float(_f1_score(eval_y, pred, average=self.f1_averaging, labels=labels))
-                all_candidates.append((rs, fit, f1))
+                train_preds = rs.predict_classes(X_train)
+                train_mcr = float(np.mean(train_preds != y_train))
+                all_candidates.append((rs, fit, f1, train_mcr))
                 if f1 > elite_f1:
                     elite_f1 = f1
                     elite_rs = rs.clone()
                     elite_fit = fit
+
+            if (
+                self.model_selection == "shortest_zero_train_mcr"
+                and self.zero_mcr_followup_ratio > 0.0
+                and zero_mcr_target_generation is None
+            ):
+                has_zero_mcr = any(float(train_mcr) <= 1e-12 for _rs, _fit, _f1, train_mcr in all_candidates)
+                if has_zero_mcr:
+                    generations_until_zero = generation_idx + 1
+                    extra_generations = int(np.ceil(generations_until_zero * self.zero_mcr_followup_ratio))
+                    zero_mcr_target_generation = min(
+                        self.max_generations,
+                        generations_until_zero + extra_generations,
+                    )
 
             if self.early_stopping_metric == "f1":
                 current_signal = max(
@@ -917,92 +959,83 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                 stagnation = 0
             else:
                 stagnation += 1
+
+            # If a perfect-fit candidate appears, optionally keep exploring for
+            # a fixed follow-up budget to find a shorter zero-MCR model.
+            if zero_mcr_target_generation is not None:
+                if (generation_idx + 1) >= zero_mcr_target_generation:
+                    break
+                continue
+
             if stagnation >= self.stagnation_generations:
                 break
 
-        best = self._final_model_selection(all_candidates)
+        if self.model_selection == "best_f1":
+            best = _select_model_best_f1(all_candidates)
+        elif self.model_selection == "shortest_zero_train_mcr":
+            best = _select_model_shortest_zero_train_mcr(
+                all_candidates,
+                min_improvement=self.min_improvement_pct,
+            )
+        else:
+            best = _select_model_paper(
+                [(rs, fit, f1) for rs, fit, f1, _train_mcr in all_candidates]
+            )
         return best
 
-    def _final_model_selection(
-        self,
-        candidates: list[tuple[_RuleSet2, _FitnessRLCW2, float]],
-    ) -> _RuleSet2:
-        if not candidates:
-            raise ValueError("No rule-set candidates available.")
 
-        best_per_size: dict[int, tuple[_RuleSet2, _FitnessRLCW2, float]] = {}
-        for rs, fit, f1 in candidates:
-            s = fit.size
-            if s not in best_per_size or f1 > best_per_size[s][2]:
-                best_per_size[s] = (rs, fit, f1)
+def _select_model_best_f1(
+    candidates: list[tuple[_RuleSet2, _FitnessRLCW2, float, float]],
+) -> _RuleSet2:
+    if not candidates:
+        raise ValueError("No rule-set candidates available.")
+    best = max(candidates, key=lambda x: (x[2], -x[1].size))
+    return best[0]
 
-        sorted_by_size = sorted(best_per_size.values(), key=lambda x: x[1].size)
-        filtered: list[tuple[_RuleSet2, _FitnessRLCW2, float]] = []
-        for rs, fit, f1 in sorted_by_size:
-            smaller_max = max((cf1 for _, cfit, cf1 in filtered if cfit.size < fit.size), default=0.0)
-            if not filtered or f1 >= smaller_max * (1.0 + self.min_improvement_pct):
-                filtered.append((rs, fit, f1))
 
-        if not filtered:
-            filtered = sorted_by_size
+def _select_model_shortest_zero_train_mcr(
+    candidates: list[tuple[_RuleSet2, _FitnessRLCW2, float, float]],
+    min_improvement: float = 0.01,
+) -> _RuleSet2:
+    # Select the shortest candidate with zero training MCR if available.
+    if not candidates:
+        raise ValueError("No rule-set candidates available.")
 
-        return max(filtered, key=lambda x: (x[2], x[1].size))[0]
+    zero_mcr = [c for c in candidates if float(c[3]) <= 1e-12]
+    if zero_mcr:
+        best = min(zero_mcr, key=lambda x: (x[1].size, -x[2], -x[1].consolidated))
+        return best[0]
 
-    def _to_ruleset(self, rs: _RuleSet2, n_classes: int) -> ScoredRuleSet:
-        rules: list[Rule] = [
-            Rule(
-                atoms=[],
-                scores=rs.default_weights.tolist(),
-                rule_id="rulegp_default",
-                metadata={"source": "rulegp", "kind": "default"},
-            )
-        ]
+    reduced = [(rs, fit, f1) for rs, fit, f1, _train_mcr in candidates]
+    return _select_model_paper(reduced, min_improvement=min_improvement)
 
-        for i, rule in enumerate(rs.rules):
-            atoms = [
-                Atom(
-                    feature=(
-                        str(self.feature_names_in_[a.feature_idx])
-                        if a.feature_idx < len(self.feature_names_in_)
-                        else f"f{a.feature_idx}"
-                    ),
-                    op=a.op,
-                    value=self._serialize_atom_value(a),
-                )
-                for a in rule.atoms
-            ]
-            rules.append(
-                Rule(
-                    atoms=atoms,
-                    scores=rule.weights.tolist(),
-                    rule_id=f"rulegp_rule_{i}",
-                    metadata={"source": "rulegp", "kind": "rule"},
-                )
-            )
 
-        return ScoredRuleSet(
-            class_labels=self.classes_.tolist(),
-            feature_names=self.feature_names_in_.tolist(),
-            aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
-            rules=rules,
-            metadata={
-                "source": "rulegp",
-                "f1_averaging": self.f1_averaging,
-                "objective_mode": self.objective_mode,
-                "max_generations": self.max_generations,
-                "population_size": self.population_size,
-                "n_adaptations_per_gen": self.n_adaptations_per_gen,
-                "early_stopping_metric": self.early_stopping_metric,
-                "max_rules": self.max_rules,
-                "max_atoms_per_rule": self.max_atoms_per_rule,
-                "max_model_size": self.max_model_size,
-                "min_max_weight": self.min_max_weight,
-                "atom_space_strategy": self.atom_space_strategy,
-                "atom_preselection_strategy": self.atom_preselection_strategy,
-            },
-        )
+def _select_model_paper(
+    candidates: list[tuple[_RuleSet2, _FitnessRLCW2, float]],
+    min_improvement: float = 0.01,
+) -> _RuleSet2:
+    if not candidates:
+        raise ValueError("No rule-set candidates available.")
 
-    @staticmethod
+    best_per_size: dict[int, tuple[_RuleSet2, _FitnessRLCW2, float]] = {}
+    for rs, fit, f1 in candidates:
+        s = fit.size
+        if s not in best_per_size or f1 > best_per_size[s][2]:
+            best_per_size[s] = (rs, fit, f1)
+
+    sorted_by_size = sorted(best_per_size.values(), key=lambda x: x[1].size)
+    filtered: list[tuple[_RuleSet2, _FitnessRLCW2, float]] = []
+    for rs, fit, f1 in sorted_by_size:
+        smaller_max = max((cf1 for _, cfit, cf1 in filtered if cfit.size < fit.size), default=0.0)
+        if not filtered or f1 >= smaller_max * (1.0 + min_improvement):
+            filtered.append((rs, fit, f1))
+
+    if not filtered:
+        filtered = sorted_by_size
+
+    return max(filtered, key=lambda x: (x[2], x[1].size))[0]
+
+def _to_ruleset_rulegp(classifier: RuleGPClassifier, rs: _RuleSet2, n_classes: int) -> ScoredRuleSet:
     def _serialize_atom_value(atom: _AtomGene2) -> object:
         if atom.op == "between":
             return [float(atom.value[0]), float(atom.value[1])]
@@ -1011,3 +1044,58 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         if isinstance(atom.value, (int, float, np.integer, np.floating)):
             return float(atom.value)
         return atom.value
+
+    rules: list[Rule] = [
+        Rule(
+            atoms=[],
+            scores=rs.default_weights.tolist(),
+            rule_id="rulegp_default",
+            metadata={"source": "rulegp", "kind": "default"},
+        )
+    ]
+
+    for i, rule in enumerate(rs.rules):
+        atoms = [
+            Atom(
+                feature=(
+                    str(classifier.feature_names_in_[a.feature_idx])
+                    if a.feature_idx < len(classifier.feature_names_in_)
+                    else f"f{a.feature_idx}"
+                ),
+                op=a.op,
+                value=_serialize_atom_value(a),
+            )
+            for a in rule.atoms
+        ]
+        rules.append(
+            Rule(
+                atoms=atoms,
+                scores=rule.weights.tolist(),
+                rule_id=f"rulegp_rule_{i}",
+                metadata={"source": "rulegp", "kind": "rule"},
+            )
+        )
+
+    return ScoredRuleSet(
+        class_labels=classifier.classes_.tolist(),
+        feature_names=classifier.feature_names_in_.tolist(),
+        aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
+        rules=rules,
+        metadata={
+            "source": "rulegp",
+            "f1_averaging": classifier.f1_averaging,
+            "objective_mode": classifier.objective_mode,
+            "max_generations": classifier.max_generations,
+            "population_size": classifier.population_size,
+            "n_adaptations_per_gen": classifier.n_adaptations_per_gen,
+            "early_stopping_metric": classifier.early_stopping_metric,
+            "model_selection": classifier.model_selection,
+            "zero_mcr_followup_ratio": classifier.zero_mcr_followup_ratio,
+            "max_rules": classifier.max_rules,
+            "max_atoms_per_rule": classifier.max_atoms_per_rule,
+            "max_model_size": classifier.max_model_size,
+            "min_max_weight": classifier.min_max_weight,
+            "atom_space_strategy": classifier.atom_space_strategy,
+            "atom_preselection_strategy": classifier.atom_preselection_strategy,
+        },
+    )

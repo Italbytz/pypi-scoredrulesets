@@ -136,3 +136,35 @@ def test_wrapper_rulegp_logicgp_mode_smoke_runs_on_raw_numeric_data():
     assert pred.shape == (12,)
     assert proba.shape[0] == 12
     assert clf.to_ruleset().metadata["source"] == "rulegp"
+
+
+def test_rulegp_supports_shortest_zero_train_mcr_mode():
+    from scoredrulesets.estimators.rulegp import RuleGPClassifier
+
+    X = np.array(
+        [
+            [0, 0],
+            [0, 1],
+            [1, 0],
+            [1, 1],
+            [0, 0],
+            [1, 1],
+            [0, 1],
+            [1, 0],
+        ],
+        dtype=float,
+    )
+    y = np.array([0, 0, 1, 1, 0, 1, 0, 1], dtype=int)
+
+    clf = RuleGPClassifier(
+        model_selection="shortest_zero_train_mcr",
+        validation_fraction=0.0,
+        max_generations=20,
+        stagnation_generations=5,
+        population_size=30,
+        n_adaptations_per_gen=8,
+        random_state=3,
+    )
+    clf.fit(X, y)
+
+    assert clf.to_ruleset().metadata["model_selection"] == "shortest_zero_train_mcr"

@@ -154,6 +154,19 @@ clf = ScoredRuleSetClassifier.from_ruleset(ruleset)
 print(clf.predict(X[:3]))
 ```
 
+### Exporting a learned model as Markdown / LaTeX
+
+```python
+from scoredrulesets import dump_ruleset_latex, dump_ruleset_markdown
+
+ruleset = clf.to_ruleset()
+dump_ruleset_markdown(ruleset, "restaurant_ruleset.md")
+dump_ruleset_latex(ruleset, "restaurant_ruleset.tex")
+```
+
+This is useful for lecture material, papers, and documentation where the
+same learned model should be shown in different output formats.
+
 ## Rule Set JSON Format
 
 Rule sets can be serialised to a human-readable JSON format:
