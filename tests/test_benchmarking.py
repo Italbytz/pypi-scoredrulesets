@@ -149,6 +149,34 @@ def test_benchmarking_smoke_compare_ruleplcs_profiles():
     assert all(result.n_rules is not None and result.n_rules > 0 for result in results)
 
 
+def test_benchmark_profiles_use_wrapper_level_max_fit_seconds_for_supported_backends():
+    from scoredrulesets.benchmarking.estimators import default_estimator_specs
+
+    specs = default_estimator_specs()
+
+    for name in [
+        "wrapper_ruleplcs",
+        "wrapper_ruleplcs_strong",
+        "wrapper_logicgp",
+        "wrapper_logicgp_strong",
+        "wrapper_logicgp_mux",
+        "wrapper_logicgp_mux_rlcw_macro",
+        "wrapper_rulenln_strong",
+        "wrapper_rulekit_native",
+        "wrapper_rulensga2",
+        "wrapper_rulensga2_strong",
+        "wrapper_rulegp",
+        "wrapper_rulegp_f1obj",
+        "wrapper_rulegp_strong",
+    ]:
+        clf = specs[name].factory()
+        assert clf.max_fit_seconds == 240
+
+    assert "max_fit_seconds" not in (specs["wrapper_logicgp"].factory().backend_params or {})
+    assert "max_fit_seconds" not in (specs["wrapper_ruleplcs"].factory().backend_params or {})
+    assert "max_fit_seconds" not in (specs["wrapper_rulegp"].factory().backend_params or {})
+
+
 def test_benchmarking_progress_output_is_emitted(capsys):
     config = BenchmarkConfig(
         dataset_names=["sklearn_iris"],
@@ -625,7 +653,7 @@ def test_no_split_disables_validation_fraction():
 
 
 def test_rulegp_and_rulensga2_use_expected_parameter_families():
-    """Guard migration mapping: old ruleGP -> rulensga2, old ruleGP2 -> rulegp."""
+    """Guard parameter-family separation between rulegp and rulensga2."""
     from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
     specs = default_estimator_specs()

@@ -26,6 +26,7 @@ Key elements from BioHEL:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 from typing import Any
 
 import numpy as np
@@ -35,6 +36,11 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from .atom_selection import (
+    available_atom_selection_strategies,
+    is_atom_selection_strategy_available,
+    select_signatures_by_strategy,
+)
 from .atom_space import RulePLCSFeatureTypingStrategy
 from .atom_space import build_ruleplcs_feature_info
 from .base import BaseRuleSetEstimator
@@ -96,6 +102,69 @@ def _matches_mask(ind: _Individual, X: np.ndarray) -> np.ndarray:
     return mask
 
 
+def _select_ruleplcs_features_by_top_c2_atoms(
+    X: np.ndarray,
+    y: np.ndarray,
+    feature_info: list[dict],
+    classes: np.ndarray,
+    strategy: str,
+    top_k: int,
+    max_thresholds_per_feature: int,
+) -> np.ndarray:
+    """Select feature indices whose atoms have the highest C2 quality."""
+    n_features = X.shape[1]
+    if n_features == 0:
+        return np.array([], dtype=np.intp)
+
+    candidates: list[tuple[tuple[int, str, object], np.ndarray]] = []
+    for fi in range(n_features):
+        col = X[:, fi]
+        info = feature_info[fi]
+
+        if info["numeric"]:
+            unique_vals = np.unique(col.astype(float))
+            if unique_vals.size < 2:
+                continue
+            thresholds = (unique_vals[:-1] + unique_vals[1:]) / 2.0
+            if thresholds.size > max_thresholds_per_feature:
+                idx = np.round(
+                    np.linspace(0, thresholds.size - 1, max_thresholds_per_feature)
+                ).astype(int)
+                thresholds = thresholds[idx]
+
+            for thr in thresholds:
+                mask_le = col <= thr
+                mask_gt = col > thr
+                if not (mask_le.any() and (~mask_le).any()):
+                    continue
+                candidates.append(((fi, "<=", float(thr)), mask_le))
+                candidates.append(((fi, ">", float(thr)), mask_gt))
+        else:
+            values = sorted(info["values"])
+            col_int = np.rint(col).astype(np.intp)
+            for v in values:
+                mask_eq = col_int == int(v)
+                if not (mask_eq.any() and (~mask_eq).any()):
+                    continue
+                candidates.append(((fi, "==", int(v)), mask_eq))
+
+    if not candidates:
+        return np.arange(n_features, dtype=np.intp)
+
+    class_to_idx = {int(c): idx for idx, c in enumerate(classes.tolist())}
+    y_idx = np.asarray([class_to_idx[int(v)] for v in y], dtype=int)
+    selected = select_signatures_by_strategy(
+        strategy=strategy,
+        candidates=candidates,
+        y_idx=y_idx,
+        n_classes=len(classes),
+        min_samples_leaf=1,
+        top_k=int(max(1, top_k)),
+    )
+    feature_indices = sorted({int(sig[0]) for sig in selected})
+    return np.asarray(feature_indices, dtype=np.intp)
+
+
 # ---------------------------------------------------------------------------
 # BioHEL GA core
 # ---------------------------------------------------------------------------
@@ -109,6 +178,7 @@ def _smart_init(
     target_class: int,
     prob_include: float,
     prob_one: float,
+    allowed_feature_indices: np.ndarray | None = None,
 ) -> _Individual:
     """Create one individual seeded around a random training instance."""
     # Pick a random instance of the target class
@@ -120,7 +190,12 @@ def _smart_init(
     inst = X[idx]
 
     predicates: list[_Predicate] = []
-    for fi in range(n_features):
+    if allowed_feature_indices is None:
+        feature_iter = range(n_features)
+    else:
+        feature_iter = (int(i) for i in allowed_feature_indices.tolist())
+
+    for fi in feature_iter:
         if rng.random() > prob_include:
             continue  # don't-care
         info = feature_info[fi]
@@ -361,6 +436,7 @@ def _generalize_specialize(
     feature_info: list[dict],
     prob_generalize: float,
     prob_specialize: float,
+    allowed_feature_indices: np.ndarray | None = None,
 ) -> None:
     """Apply BioHEL's generalize/specialize structural operators."""
     # Generalize: remove a random attribute (make it don't-care)
@@ -371,7 +447,11 @@ def _generalize_specialize(
     # Specialize: add a new random attribute
     if rng.random() < prob_specialize:
         expressed = {p.feature_idx for p in ind.predicates}
-        unexpressed = [fi for fi in range(len(feature_info)) if fi not in expressed]
+        if allowed_feature_indices is None:
+            candidate_indices = range(len(feature_info))
+        else:
+            candidate_indices = (int(i) for i in allowed_feature_indices.tolist())
+        unexpressed = [fi for fi in candidate_indices if fi not in expressed]
         if unexpressed:
             fi = int(rng.choice(unexpressed))
             info = feature_info[fi]
@@ -490,6 +570,8 @@ def _run_ga(
     mdl_activate_iter: int,
     mdl_relax_factor: float,
     n_strata: int,
+    allowed_feature_indices: np.ndarray | None,
+    fit_deadline: float | None,
 ) -> _Individual:
     """Run one GA to find a single rule."""
     # Determine target classes (exclude default class)
@@ -507,7 +589,8 @@ def _run_ga(
     for _ in range(population_size):
         tc = int(rng.choice(target_classes))
         ind = _smart_init(rng, X, y, len(feature_info), feature_info,
-                          tc, prob_include, prob_one)
+                          tc, prob_include, prob_one,
+                          allowed_feature_indices=allowed_feature_indices)
         population.append(ind)
 
     # Evaluate on first stratum
@@ -527,6 +610,9 @@ def _run_ga(
     mdl_active = False
 
     for iteration in range(n_iterations):
+        if fit_deadline is not None and time.monotonic() >= fit_deadline:
+            break
+
         # Windowing: pick stratum
         stratum_idx = strata[iteration % len(strata)]
         if iteration == n_iterations - 1:
@@ -553,7 +639,8 @@ def _run_ga(
             if rng.random() < mutation_prob:
                 _mutate(rng, ind, feature_info, classes, default_class)
             _generalize_specialize(rng, ind, feature_info,
-                                   prob_generalize, prob_specialize)
+                                   prob_generalize, prob_specialize,
+                                   allowed_feature_indices=allowed_feature_indices)
 
         # Evaluate offspring
         for ind in offspring:
@@ -668,6 +755,18 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
     low_cardinality_threshold : int
         Numeric features with ≤ this many unique values are additionally
         treated as categorical.
+    atom_preselection_strategy : str
+        Optional pre-fit atom preselection. ``"none"`` keeps the full search
+        space, otherwise a registered plugin strategy preselects features via
+        candidate atoms.
+    atom_preselection_top_k : int | None
+        Number of top atoms considered when a preselection strategy is used.
+    atom_preselection_max_thresholds_per_feature : int
+        Threshold budget per numeric feature used during preselection.
+    max_fit_seconds : float | None
+        Maximum wall-clock runtime for the complete fit in seconds.
+        If set, iterative rule learning and inner GA loops stop cleanly once
+        the budget is exhausted and the best rule set found so far is returned.
     include_default_rule : bool
         Whether to append a default (catch-all) rule to the rule set.
     random_state : int or None
@@ -697,6 +796,10 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         default_class_policy: str = "major",
         low_cardinality_threshold: int = 10,
         feature_typing_strategy: RulePLCSFeatureTypingStrategy = "auto_low_cardinality",
+        atom_preselection_strategy: str = "none",
+        atom_preselection_top_k: int | None = None,
+        atom_preselection_max_thresholds_per_feature: int = 16,
+        max_fit_seconds: float | None = None,
         include_default_rule: bool = True,
         random_state: int | None = None,
     ):
@@ -721,8 +824,31 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         self.default_class_policy = default_class_policy
         self.low_cardinality_threshold = low_cardinality_threshold
         self.feature_typing_strategy = feature_typing_strategy
+        self.atom_preselection_strategy = atom_preselection_strategy
+        self.atom_preselection_top_k = atom_preselection_top_k
+        self.atom_preselection_max_thresholds_per_feature = atom_preselection_max_thresholds_per_feature
+        self.max_fit_seconds = max_fit_seconds
         self.include_default_rule = include_default_rule
         self.random_state = random_state
+
+        if self.atom_preselection_strategy != "none" and not is_atom_selection_strategy_available(
+            self.atom_preselection_strategy
+        ):
+            available = ", ".join(available_atom_selection_strategies())
+            raise ValueError(
+                "atom_preselection_strategy must be 'none' or a registered "
+                f"atom-selection strategy. Available registered strategies: [{available}]"
+            )
+        if self.atom_preselection_strategy != "none":
+            if self.atom_preselection_top_k is None or int(self.atom_preselection_top_k) <= 0:
+                raise ValueError(
+                    "atom_preselection_top_k must be a positive integer when "
+                    "atom_preselection_strategy != 'none'."
+                )
+        if int(self.atom_preselection_max_thresholds_per_feature) <= 0:
+            raise ValueError(
+                "atom_preselection_max_thresholds_per_feature must be > 0."
+            )
 
     # ------------------------------------------------------------------ fit
     def fit(self, X, y):
@@ -736,6 +862,19 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
 
         # Build feature info
         feature_info = self._build_feature_info(X)
+
+        if self.atom_preselection_strategy != "none":
+            allowed_feature_indices = _select_ruleplcs_features_by_top_c2_atoms(
+                X,
+                y,
+                feature_info,
+                self.classes_,
+                strategy=self.atom_preselection_strategy,
+                top_k=int(self.atom_preselection_top_k),
+                max_thresholds_per_feature=int(self.atom_preselection_max_thresholds_per_feature),
+            )
+        else:
+            allowed_feature_indices = None
 
         # Default class
         default_class: int | None = None
@@ -754,8 +893,14 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         rules: list[_Individual] = []
         remaining_mask = np.ones(len(y), dtype=bool)
         fail_count = 0
+        fit_deadline = None
+        if self.max_fit_seconds is not None:
+            fit_deadline = time.monotonic() + float(self.max_fit_seconds)
 
         for _rule_idx in range(self.max_rules):
+            if fit_deadline is not None and time.monotonic() >= fit_deadline:
+                break
+
             if np.sum(remaining_mask) == 0:
                 break
 
@@ -769,6 +914,9 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
 
             best_rule: _Individual | None = None
             for _rep in range(self.n_repetitions):
+                if fit_deadline is not None and time.monotonic() >= fit_deadline:
+                    break
+
                 rule = _run_ga(
                     rng, X_rem, y_rem, feature_info, self.classes_,
                     default_class,
@@ -787,6 +935,8 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
                     mdl_activate_iter=self.mdl_activate_iter,
                     mdl_relax_factor=self.mdl_relax_factor,
                     n_strata=self.n_strata,
+                    allowed_feature_indices=allowed_feature_indices,
+                    fit_deadline=fit_deadline,
                 )
                 if best_rule is None or rule.fitness < best_rule.fitness:
                     best_rule = rule
@@ -916,5 +1066,9 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
                 "n_rules": len(rules),
                 "default_class": int(default_class),
                 "feature_typing_strategy": self.feature_typing_strategy,
+                "atom_preselection_strategy": self.atom_preselection_strategy,
+                "atom_preselection_top_k": self.atom_preselection_top_k,
+                "atom_preselection_max_thresholds_per_feature": self.atom_preselection_max_thresholds_per_feature,
+                "max_fit_seconds": self.max_fit_seconds,
             },
         )

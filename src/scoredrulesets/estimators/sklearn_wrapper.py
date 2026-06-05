@@ -16,7 +16,8 @@ from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..runtime import predict_regression as predict_regression_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
-from .atom_space import LogicGPDiscretizingEncoder
+from ..preprocessing.feature_selection import build_feature_selector, get_selected_feature_names
+from ..preprocessing.pipeline import build_preprocessing_pipeline
 from .backends import build_backend_estimator
 from .base import BaseRuleSetEstimator
 from .tree_transform import TreeTransformParams, estimator_to_scored_ruleset
@@ -40,24 +41,32 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         Preprocessing configuration applied *before* the backend sees the data.
         Supported keys:
 
+                - ``"pipeline_steps"`` (list): sequence of sklearn-compatible
+                    preprocessing steps (or declarative step configs) executed before
+                    feature selection.
+
         - ``"feature_selection"`` (str): method name for :func:`select_features`
           (``"kbest"``, ``"rfe"``, ``"boruta"``).
+                - ``"feature_selection_params"`` (dict): additional kwargs for the
+                    selected strategy.
+                - ``"feature_selector"``: a pre-built sklearn-compatible selector
+                    object with ``fit_transform`` and ``transform``.
         - ``"k"`` (int): number of features to keep (default 20).
         - ``"max_thresholds_per_feature"`` (int): cap on numeric thresholds
           for native backends that build their own atom candidates
                     (gp, ruleplcs, rulenln, logicgp, rulensga2, rulegp).
-                - ``"logicgp_discretize"`` (bool): discretize continuous features into
-                    logicGP-style bin indices before the backend sees the data.
-                - ``"n_bins"`` (int): number of bins used when
-                    ``"logicgp_discretize"`` is enabled.
     estimator : object, optional
         A pre-built sklearn-compatible estimator; overrides *backend*.
+    max_fit_seconds : float | None, optional
+        Uniform fit-time budget forwarded to backends that expose a
+        ``max_fit_seconds`` parameter/attribute. Backends without cooperative
+        timeout support ignore this setting.
     random_state : int, optional
         Random seed for reproducibility.
     """
 
     # Backends whose estimator exposes `max_thresholds_per_feature` attribute
-    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "ruleplcs", "rulenln", "logicgp", "rulensga2", "rulegp", "rulegp2"})
+    _NATIVE_THRESHOLD_BACKENDS = frozenset({"gp", "ruleplcs", "rulenln", "logicgp", "rulensga2", "rulegp"})
 
     def __init__(
         self,
@@ -67,6 +76,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         exstracs_params: dict[str, Any] | None = None,
         preprocessing: dict[str, Any] | None = None,
         estimator: Any | None = None,
+        max_fit_seconds: float | None = None,
         random_state: int | None = None,
     ):
         self.backend = backend
@@ -75,6 +85,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         self.exstracs_params = exstracs_params
         self.preprocessing = preprocessing
         self.estimator = estimator
+        self.max_fit_seconds = max_fit_seconds
         self.random_state = random_state
 
     # ------------------------------------------------------------------
@@ -82,38 +93,68 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     # ------------------------------------------------------------------
 
     def fit(self, X, y):
-        X_valid, y_valid = check_X_y(X, y, dtype=None)
+        preproc = self.preprocessing or {}
+        allow_nan_input = self._config_allows_nan(preproc)
+        self.allow_nan_input_ = allow_nan_input
+        X_valid, y_valid = self._check_X_y_optional_nan(X, y, allow_nan=allow_nan_input)
         self.n_features_in_ = X_valid.shape[1]
         self.feature_names_in_ = self._infer_feature_names(X_valid)
 
+        if "logicgp_discretize" in preproc or "n_bins" in preproc:
+            raise ValueError(
+                "preprocessing keys 'logicgp_discretize' and 'n_bins' were removed. "
+                "Use backend-specific atomization/discretization parameters instead."
+            )
+
         # ----- Preprocessing: feature selection (Step 1) -----
         self.selected_feature_indices_: np.ndarray | None = None
-        preproc = self.preprocessing or {}
-        fs_method = preproc.get("feature_selection")
-        if fs_method is not None:
-            from ..utils_feature_selection import select_features
-
-            k = preproc.get("k", min(20, X_valid.shape[1]))
-            X_reduced, selected_names = select_features(
-                X_valid,
-                y_valid,
-                feature_names=list(self.feature_names_in_),
-                method=fs_method,
-                k=int(k),
+        self.feature_selector_ = None
+        self.preprocess_pipeline_ = None
+        pipeline_steps = preproc.get("pipeline_steps")
+        if pipeline_steps is not None:
+            self.preprocess_pipeline_ = build_preprocessing_pipeline(
+                pipeline_steps,
+                random_state=self.random_state,
             )
-            # Store boolean mask for predict-time slicing
-            mask = np.isin(self.feature_names_in_, selected_names)
-            self.selected_feature_indices_ = np.where(mask)[0]
-            # Update working data – but keep n_features_in_ as the ORIGINAL
-            # width so sklearn checks pass (predict validates against it).
+            X_pipeline = self.preprocess_pipeline_.fit_transform(X_valid, y_valid)
+            X_valid = np.asarray(X_pipeline, dtype=None)
+            self.feature_names_in_ = self._infer_pipeline_feature_names(
+                self.preprocess_pipeline_,
+                list(self.feature_names_in_),
+                transformed_width=int(X_valid.shape[1]),
+            )
+
+        fs_method = preproc.get("feature_selection")
+        fs_selector = preproc.get("feature_selector")
+        if fs_method is not None and fs_selector is not None:
+            raise ValueError(
+                "Use either preprocessing['feature_selection'] or "
+                "preprocessing['feature_selector'], not both."
+            )
+        if fs_method is not None or fs_selector is not None:
+            k = int(preproc.get("k", min(20, X_valid.shape[1])))
+            selector_params = preproc.get("feature_selection_params") or {}
+            if fs_selector is not None:
+                self.feature_selector_ = clone(fs_selector)
+            else:
+                self.feature_selector_ = build_feature_selector(
+                    method=str(fs_method),
+                    k=k,
+                    random_state=self.random_state,
+                    params=selector_params,
+                )
+
+            X_reduced = self.feature_selector_.fit_transform(X_valid, y_valid)
+            selected_names, selected_indices = get_selected_feature_names(
+                self.feature_selector_,
+                list(self.feature_names_in_),
+                transformed_width=int(np.asarray(X_reduced).shape[1]),
+            )
+            self.selected_feature_indices_ = selected_indices
+
+            # Keep original n_features_in_ for sklearn checks at predict time.
             X_valid = X_reduced
             self.feature_names_in_ = list(selected_names)
-
-        self._input_encoder_: LogicGPDiscretizingEncoder | None = None
-        if preproc.get("logicgp_discretize"):
-            n_bins = int(preproc.get("n_bins", 5))
-            self._input_encoder_ = LogicGPDiscretizingEncoder(n_bins=n_bins)
-            X_valid = self._input_encoder_.fit_transform(np.asarray(X_valid, dtype=None))
 
         # ----- Build backend estimator -----
         if self.estimator is not None:
@@ -124,6 +165,15 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 backend_params=self.backend_params,
                 random_state=self.random_state,
             )
+
+        if self.max_fit_seconds is not None:
+            if hasattr(self.estimator_, "max_fit_seconds"):
+                self.estimator_.max_fit_seconds = float(self.max_fit_seconds)
+            else:
+                try:
+                    self.estimator_.set_params(max_fit_seconds=float(self.max_fit_seconds))
+                except (ValueError, TypeError, AttributeError):
+                    pass
 
         # ----- Preprocessing: threshold budget (Step 2) -----
         max_thr = preproc.get("max_thresholds_per_feature")
@@ -202,7 +252,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "RuleNSGA2Classifier has no 'ruleset_' after fit(). "
                     "Please check rulensga2.py for errors."
                 )
-        elif backend_lower in {"rulegp", "rulegp2"}:
+        elif backend_lower == "rulegp":
             if hasattr(self.estimator_, "ruleset_"):
                 self.ruleset_ = self.estimator_.ruleset_
             else:
@@ -286,9 +336,6 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         are defined over bin indices rather than raw values.
         """
         backend_lower = self.backend.lower()
-        encoder = getattr(self, "_input_encoder_", None)
-        if encoder is not None:
-            X_valid = encoder.transform(X_valid)
         if backend_lower == "logicgp" and hasattr(self.estimator_, "_binners_"):
             from .logicgp import _discretize_features
             X_disc, _, _ = _discretize_features(
@@ -301,6 +348,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     def _apply_feature_selection(self, X: np.ndarray) -> np.ndarray:
         """Slice X to the features selected during fit(), if applicable."""
+        selector = getattr(self, "feature_selector_", None)
+        if selector is not None:
+            return selector.transform(X)
         indices = getattr(self, "selected_feature_indices_", None)
         if indices is not None:
             return X[:, indices]
@@ -308,12 +358,17 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
-        X_valid: np.ndarray = np.asarray(check_array(X, dtype=None))
+        allow_nan_input = bool(getattr(self, "allow_nan_input_", False))
+        X_valid: np.ndarray = np.asarray(self._check_array_optional_nan(X, allow_nan=allow_nan_input))
         if self.n_features_in_ is not None and X_valid.shape[1] != self.n_features_in_:
             raise ValueError(
                 f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
                 f"is expecting {self.n_features_in_} features as input"
             )
+
+        pipeline = getattr(self, "preprocess_pipeline_", None)
+        if pipeline is not None:
+            X_valid = np.asarray(pipeline.transform(X_valid), dtype=None)
 
         # Apply feature selection if it was used during fit()
         X_valid = self._apply_feature_selection(X_valid)
@@ -327,12 +382,17 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
     def predict_proba(self, X):
         check_is_fitted(self, "ruleset_")
-        X_valid: np.ndarray = np.asarray(check_array(X, dtype=None))
+        allow_nan_input = bool(getattr(self, "allow_nan_input_", False))
+        X_valid: np.ndarray = np.asarray(self._check_array_optional_nan(X, allow_nan=allow_nan_input))
         if self.n_features_in_ is not None and X_valid.shape[1] != self.n_features_in_:
             raise ValueError(
                 f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
                 f"is expecting {self.n_features_in_} features as input"
             )
+
+        pipeline = getattr(self, "preprocess_pipeline_", None)
+        if pipeline is not None:
+            X_valid = np.asarray(pipeline.transform(X_valid), dtype=None)
 
         # Apply feature selection if it was used during fit()
         X_valid = self._apply_feature_selection(X_valid)
@@ -379,6 +439,29 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         return [f"f{i}" for i in range(X.shape[1])]
 
     @staticmethod
+    def _infer_pipeline_feature_names(
+        pipeline,
+        input_feature_names: list[str],
+        transformed_width: int,
+    ) -> list[str]:
+        if hasattr(pipeline, "get_feature_names_out"):
+            try:
+                out = pipeline.get_feature_names_out(input_feature_names)
+                out_names = [str(name) for name in out]
+                if len(out_names) == transformed_width:
+                    return out_names
+            except Exception:
+                pass
+            try:
+                out = pipeline.get_feature_names_out()
+                out_names = [str(name) for name in out]
+                if len(out_names) == transformed_width:
+                    return out_names
+            except Exception:
+                pass
+        return [f"pp_f{i}" for i in range(transformed_width)]
+
+    @staticmethod
     def _infer_ruleset_n_features(ruleset: ScoredRuleSet) -> int | None:
         if ruleset.feature_names:
             return len(ruleset.feature_names)
@@ -390,6 +473,45 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         if max_idx >= 0:
             return max_idx + 1
         return None
+
+    @staticmethod
+    def _config_allows_nan(preproc: dict[str, Any]) -> bool:
+        steps = preproc.get("pipeline_steps")
+        if not isinstance(steps, list):
+            return False
+        for step in steps:
+            if isinstance(step, dict):
+                name = str(step.get("name", "")).strip().lower()
+                if name == "impute":
+                    return True
+                transformer = step.get("transformer")
+                if transformer is not None:
+                    cls_name = transformer.__class__.__name__.lower()
+                    if "imputer" in cls_name:
+                        return True
+            else:
+                cls_name = step.__class__.__name__.lower()
+                if "imputer" in cls_name:
+                    return True
+        return False
+
+    @staticmethod
+    def _check_X_y_optional_nan(X, y, allow_nan: bool):
+        if not allow_nan:
+            return check_X_y(X, y, dtype=None)
+        try:
+            return check_X_y(X, y, dtype=None, ensure_all_finite="allow-nan")
+        except TypeError:
+            return check_X_y(X, y, dtype=None, force_all_finite="allow-nan")
+
+    @staticmethod
+    def _check_array_optional_nan(X, allow_nan: bool):
+        if not allow_nan:
+            return check_array(X, dtype=None)
+        try:
+            return check_array(X, dtype=None, ensure_all_finite="allow-nan")
+        except TypeError:
+            return check_array(X, dtype=None, force_all_finite="allow-nan")
 
 
 class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):

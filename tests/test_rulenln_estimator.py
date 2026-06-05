@@ -8,6 +8,7 @@ from sklearn.datasets import load_iris, load_wine, load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 
+import scoredrulesets.estimators.rulenln as rulenln_module
 from scoredrulesets.estimators.rulenln import RuleNLNClassifier
 from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 from scoredrulesets.schema import ScoredRuleSet
@@ -122,6 +123,22 @@ class TestRuleNLNClassifier:
         f1 = f1_score(y_test, y_pred, average="macro")
         print(f"\n[NLN native] Breast Cancer F1={f1:.4f}")
         assert f1 > 0.3, f"F1 too low on breast cancer: {f1:.4f}"
+
+    def test_max_fit_seconds_stops_cleanly(self, monkeypatch):
+        X_train, _, y_train, _ = _iris_split()
+        ticks = iter(float(i) for i in range(2000))
+        monkeypatch.setattr(rulenln_module.time, "monotonic", lambda: next(ticks))
+
+        clf = RuleNLNClassifier(
+            n_rules=8,
+            epochs=100,
+            max_fit_seconds=0.5,
+            random_state=0,
+        )
+        clf.fit(X_train, y_train)
+
+        ruleset = clf.to_ruleset()
+        assert ruleset.metadata["max_fit_seconds"] == 0.5
 
 
 # ---------------------------------------------------------------------------

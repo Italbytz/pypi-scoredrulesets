@@ -1,7 +1,9 @@
 import numpy as np
+import pytest
 from sklearn.datasets import load_iris
 
-from scoredrulesets import RulePLCSClassifier, ScoredRuleSetClassifier
+import scoredrulesets.estimators.ruleplcs as ruleplcs_module
+from scoredrulesets import RulePLCSClassifier, ScoredRuleSetClassifier, register_atom_selection_strategy
 from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
 
@@ -54,6 +56,7 @@ def test_benchmarking_estimator_specs_include_ruleplcs():
     specs = default_estimator_specs()
     assert "wrapper_ruleplcs" in specs
     assert "wrapper_ruleplcs_strong" in specs
+    assert "wrapper_ruleplcs_topc2" not in specs
 
 
 def test_ruleplcs_benchmark_profiles_use_expected_backend_and_budget():
@@ -61,11 +64,75 @@ def test_ruleplcs_benchmark_profiles_use_expected_backend_and_budget():
 
     base = specs["wrapper_ruleplcs"].factory()
     strong = specs["wrapper_ruleplcs_strong"].factory()
-
     assert base.backend == "ruleplcs"
     assert base.backend_params["max_rules"] >= 10
+    assert base.max_fit_seconds == 240
 
     assert strong.backend == "ruleplcs"
     assert strong.backend_params["population_size"] >= 200
     assert strong.backend_params["max_rules"] >= 15
+    assert strong.max_fit_seconds == 240
+
+
+def test_ruleplcs_registered_strategy_is_optional_and_recorded_in_metadata():
+    X, y = load_iris(return_X_y=True)
+
+    def _first_k_strategy(candidates, _y_idx, _n_classes, min_samples_leaf, top_k):
+        selected = set()
+        for signature, mask in candidates:
+            if int(np.sum(mask)) < int(min_samples_leaf):
+                continue
+            selected.add(signature)
+            if len(selected) >= int(top_k):
+                break
+        return selected
+
+    register_atom_selection_strategy("top_c2_private_ut", _first_k_strategy, overwrite=True)
+
+    clf = RulePLCSClassifier(
+        population_size=40,
+        n_iterations=8,
+        n_repetitions=1,
+        max_rules=4,
+        atom_preselection_strategy="top_c2_private_ut",
+        atom_preselection_top_k=32,
+        random_state=0,
+    )
+    clf.fit(X, y)
+    ruleset = clf.to_ruleset()
+
+    assert ruleset.metadata["atom_preselection_strategy"] == "top_c2_private_ut"
+    assert ruleset.metadata["atom_preselection_top_k"] == 32
+
+
+def test_ruleplcs_registered_strategy_requires_positive_top_k():
+    register_atom_selection_strategy(
+        "top_c2_private_ut",
+        lambda candidates, y_idx, n_classes, min_samples_leaf, top_k: set(),
+        overwrite=True,
+    )
+    with pytest.raises(ValueError, match="atom_preselection_top_k"):
+        RulePLCSClassifier(atom_preselection_strategy="top_c2_private_ut")
+
+
+def test_ruleplcs_max_fit_seconds_stops_cleanly(monkeypatch):
+    X, y = load_iris(return_X_y=True)
+
+    ticks = iter(float(i) for i in range(1000))
+    monkeypatch.setattr(ruleplcs_module.time, "monotonic", lambda: next(ticks))
+
+    clf = RulePLCSClassifier(
+        population_size=30,
+        n_iterations=20,
+        n_repetitions=2,
+        max_rules=5,
+        max_fit_seconds=0.5,
+        random_state=0,
+    )
+    clf.fit(X, y)
+
+    ruleset = clf.to_ruleset()
+    assert ruleset.metadata["max_fit_seconds"] == 0.5
+    assert ruleset.metadata["n_rules"] == 0
+    assert any(rule.rule_id == "default" for rule in ruleset.rules)
 

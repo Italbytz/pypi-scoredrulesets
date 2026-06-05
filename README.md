@@ -38,9 +38,52 @@ can control how non-categorical features are transformed into candidate atoms.
 |---|---|---|
 | `LogicGPClassifier` | `feature_encoding_strategy` | `"auto_low_cardinality"`, `"force_numeric_bins"` |
 | `RuleNSGA2Classifier` | `atom_space_strategy` | `"hybrid"`, `"numeric_only"`, `"categorical_low_cardinality_only"` |
+| `RuleNSGA2Classifier` | `atom_preselection_strategy` | `"none"`, any registered atom-selection strategy (e.g. `"top_c2_private"`) |
 | `RuleGPClassifier` | `atom_space_strategy` | `"hybrid"`, `"numeric_only"`, `"categorical_low_cardinality_only"` |
+| `RuleGPClassifier` | `atom_preselection_strategy` | `"none"`, `"logicgp_singleton"`, `"logicgp_binned_sets"`, any registered atom-selection strategy (e.g. `"top_c2_private"`) |
 | `RuleNLNClassifier` | `threshold_strategy` | `"quantile_midpoint"`, `"quantile_only"`, `"midpoint_only"` |
+| `RuleKitNativeClassifier` | `atom_preselection_strategy` | `"none"`, any registered atom-selection strategy (e.g. `"top_c2_private"`) |
 | `RulePLCSClassifier` | `feature_typing_strategy` | `"auto_low_cardinality"`, `"all_numeric"`, `"all_integer_categorical"` |
+| `RulePLCSClassifier` | `atom_preselection_strategy` | `"none"`, any registered atom-selection strategy (e.g. `"top_c2_private"`) |
+
+### Atom-Selection Plugins
+
+Atom-selection strategies can be extended without shipping the implementation
+inside the public core package. This is useful for private or embargoed
+research variants.
+
+Built-in strategy names are available via:
+
+```python
+from scoredrulesets import available_atom_selection_strategies
+
+print(available_atom_selection_strategies())
+```
+
+You can register strategies at runtime:
+
+```python
+from scoredrulesets import register_atom_selection_strategy
+
+def my_selector(candidates, y_idx, n_classes, min_samples_leaf, top_k):
+  selected = set()
+  for signature, mask in candidates:
+    if mask.sum() < min_samples_leaf:
+      continue
+    selected.add(signature)
+    if len(selected) >= top_k:
+      break
+  return selected
+
+register_atom_selection_strategy("my_selector", my_selector)
+```
+
+Or via package entry points (recommended for separate private packages):
+
+```toml
+[project.entry-points."scoredrulesets.atom_selection"]
+my_selector = "my_private_pkg.atomsel:my_selector"
+```
 
 Recommended starting points:
 
@@ -71,7 +114,48 @@ clf = RuleGPClassifier(
 | `"cart"` | scikit-learn `DecisionTreeClassifier` |
 | `"exstracs"` | `scikit-ExSTraCS` |
 | `"rulekit"` | `rulekit` + `jpype1` (Java) |
+| `"rulekit_native"` | native RuleKit-style learner (pure Python) |
 | `"logicgp"` | logicGP JSON import |
+
+## Fit-Time Budgets
+
+Several native or integrated estimators support cooperative wall-clock limits
+via `max_fit_seconds`. When the budget is exhausted, training stops cleanly and
+the best model found so far is returned.
+
+Supported backends currently include:
+
+- `LogicGPClassifier`
+- `RuleGPClassifier`
+- `RuleNSGA2Classifier`
+- `RulePLCSClassifier`
+- `RuleNLNClassifier`
+- `RuleKitNativeClassifier`
+
+You can set the budget directly on a native estimator:
+
+```python
+from scoredrulesets import RulePLCSClassifier
+
+clf = RulePLCSClassifier(max_rules=8, max_fit_seconds=120, random_state=42)
+```
+
+Or uniformly through the wrapper:
+
+```python
+from scoredrulesets import ScoredRuleSetClassifier
+
+clf = ScoredRuleSetClassifier(
+  backend="ruleplcs",
+  backend_params={"max_rules": 8},
+  max_fit_seconds=120,
+  random_state=42,
+)
+```
+
+Backends without cooperative timeout support ignore `max_fit_seconds`; for
+hard per-run stopping in experiments, the benchmarking runner provides an
+additional external timeout layer.
 
 ## Installation
 

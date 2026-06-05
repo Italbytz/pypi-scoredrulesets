@@ -22,6 +22,7 @@ Only numpy is required (no PyTorch / TensorFlow dependency).
 
 from __future__ import annotations
 
+import time
 import numpy as np
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
@@ -113,6 +114,10 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         Fraction of training data used for early-stopping evaluation.
     temperature : float
         Scaling factor for class logits during training (lower → sharper).
+    max_fit_seconds : float | None
+        Maximum wall-clock runtime for training in seconds. If set, training
+        stops cleanly once the budget is exhausted and keeps the best
+        validation parameters found so far.
     random_state : int | None
         Seed for reproducibility.
     """
@@ -130,6 +135,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         early_stopping_rounds: int = 30,
         validation_fraction: float = 0.2,
         temperature: float = 1.0,
+        max_fit_seconds: float | None = None,
         random_state: int | None = None,
         max_thresholds_per_feature: int | None = None,
         threshold_strategy: NLNThresholdStrategy = "quantile_midpoint",
@@ -145,6 +151,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         self.early_stopping_rounds = early_stopping_rounds
         self.validation_fraction = validation_fraction
         self.temperature = temperature
+        self.max_fit_seconds = max_fit_seconds
         self.random_state = random_state
         self.max_thresholds_per_feature = max_thresholds_per_feature
         self.threshold_strategy = threshold_strategy
@@ -259,14 +266,23 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         # complex conjunctions (needed for MUX-like and overlapping-rule
         # problems) can establish before sparsification kicks in.
         warmup_epochs = max(1, int(self.epochs * 0.4))
+        fit_deadline = None
+        if self.max_fit_seconds is not None:
+            fit_deadline = time.monotonic() + float(self.max_fit_seconds)
 
         for epoch in range(self.epochs):
+            if fit_deadline is not None and time.monotonic() >= fit_deadline:
+                break
+
             perm = rng.permutation(N_train)
 
             # L1 warmup factor: 0→1 over warmup_epochs, then 1.0
             l1_factor = min(1.0, epoch / warmup_epochs)
 
             for start in range(0, N_train, bs):
+                if fit_deadline is not None and time.monotonic() >= fit_deadline:
+                    break
+
                 idx = perm[start : start + bs]
                 P_b = P_train[idx]  # (B, D)
                 Y_b = Y_train[idx]  # (B, C)
@@ -614,6 +630,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
                 "n_rules_extracted": len(rules),
                 "epochs": self.epochs,
                 "threshold_strategy": self.threshold_strategy,
+                "max_fit_seconds": self.max_fit_seconds,
             },
         )
         ruleset.validate()

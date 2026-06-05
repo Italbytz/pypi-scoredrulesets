@@ -3,6 +3,9 @@
 import numpy as np
 import pytest
 from sklearn.datasets import load_iris
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import FunctionTransformer
 
 from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 
@@ -81,6 +84,51 @@ class TestFeatureSelection:
         assert proba.shape == (len(y), 3)
         assert np.allclose(proba.sum(axis=1), 1.0, atol=0.01)
 
+    def test_custom_feature_selector_object(self, iris_data):
+        X, y = iris_data
+        selector = SelectKBest(score_func=f_classif, k=2)
+        clf = ScoredRuleSetClassifier(
+            backend="cart",
+            backend_params={"max_depth": 3},
+            preprocessing={"feature_selector": selector},
+            random_state=0,
+        )
+        clf.fit(X, y)
+
+        assert clf.feature_selector_ is not None
+        assert len(clf.feature_names_in_) == 2
+        preds = clf.predict(X)
+        assert len(preds) == len(y)
+
+    def test_feature_selection_params_are_applied(self, iris_data):
+        X, y = iris_data
+        clf = ScoredRuleSetClassifier(
+            backend="cart",
+            backend_params={"max_depth": 3},
+            preprocessing={
+                "feature_selection": "rfe",
+                "k": 2,
+                "feature_selection_params": {"step": 2},
+            },
+            random_state=0,
+        )
+        clf.fit(X, y)
+        assert len(clf.feature_names_in_) == 2
+
+    def test_feature_selection_and_feature_selector_are_mutually_exclusive(self, iris_data):
+        X, y = iris_data
+        with pytest.raises(ValueError, match="Use either"):
+            ScoredRuleSetClassifier(
+                backend="cart",
+                backend_params={"max_depth": 3},
+                preprocessing={
+                    "feature_selection": "kbest",
+                    "k": 2,
+                    "feature_selector": SelectKBest(score_func=f_classif, k=2),
+                },
+                random_state=0,
+            ).fit(X, y)
+
 
 # ---------------------------------------------------------------------------
 # Threshold Budget (Step 2)
@@ -137,6 +185,25 @@ class TestThresholdBudget:
         preds = clf.predict(X)
         assert len(preds) == len(y)
 
+    def test_wrapper_max_fit_seconds_is_forwarded_to_ruleplcs(self, iris_data):
+        X, y = iris_data
+        clf = ScoredRuleSetClassifier(
+            backend="ruleplcs",
+            backend_params={
+                "population_size": 20,
+                "n_iterations": 5,
+                "n_repetitions": 1,
+                "max_rules": 3,
+            },
+            max_fit_seconds=1.25,
+            random_state=0,
+        )
+        clf.fit(X, y)
+
+        assert hasattr(clf.estimator_, "max_fit_seconds")
+        assert clf.estimator_.max_fit_seconds == 1.25
+        assert clf.to_ruleset().metadata["max_fit_seconds"] == 1.25
+
 
 # ---------------------------------------------------------------------------
 # Combined: Feature Selection + Threshold Budget
@@ -161,4 +228,63 @@ class TestCombinedPreprocessing:
         assert len(clf.selected_feature_indices_) == 2
         preds = clf.predict(X)
         assert len(preds) == len(y)
+
+
+class TestPipelineSteps:
+    def test_pipeline_steps_impute_and_scale(self, iris_data):
+        X, y = iris_data
+        X_nan = X.copy().astype(float)
+        X_nan[:10, 0] = np.nan
+
+        clf = ScoredRuleSetClassifier(
+            backend="cart",
+            backend_params={"max_depth": 3},
+            preprocessing={
+                "pipeline_steps": [
+                    {"name": "impute", "params": {"strategy": "median"}},
+                    {"name": "standard_scale"},
+                ]
+            },
+            random_state=0,
+        )
+        clf.fit(X_nan, y)
+        assert clf.preprocess_pipeline_ is not None
+        pred = clf.predict(X_nan)
+        assert pred.shape == y.shape
+
+    def test_pipeline_steps_support_custom_transformer(self, iris_data):
+        X, y = iris_data
+        clf = ScoredRuleSetClassifier(
+            backend="cart",
+            backend_params={"max_depth": 3},
+            preprocessing={
+                "pipeline_steps": [
+                    {
+                        "id": "identity",
+                        "transformer": FunctionTransformer(lambda x: x, validate=False),
+                    }
+                ]
+            },
+            random_state=0,
+        )
+        clf.fit(X, y)
+        pred = clf.predict(X)
+        assert pred.shape == y.shape
+
+    def test_pipeline_steps_allow_feature_count_changes(self, iris_data):
+        X, y = iris_data
+        clf = ScoredRuleSetClassifier(
+            backend="cart",
+            backend_params={"max_depth": 3},
+            preprocessing={
+                "pipeline_steps": [
+                    {"transformer": PCA(n_components=2, random_state=0)}
+                ]
+            },
+            random_state=0,
+        )
+        clf.fit(X, y)
+        pred = clf.predict(X)
+        assert pred.shape == y.shape
+        assert len(clf.feature_names_in_) == 2
 

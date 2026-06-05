@@ -34,6 +34,7 @@ that requires no JVM.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any
 
 import numpy as np
@@ -44,6 +45,11 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from .atom_selection import (
+    available_atom_selection_strategies,
+    is_atom_selection_strategy_available,
+    select_signatures_by_strategy,
+)
 from .base import BaseRuleSetEstimator
 from ._split_utils import distribution_to_scores
 
@@ -91,6 +97,7 @@ class _InducedRule:
     quality: float       # C2 quality
     coverage: int        # number of examples covered
     precision: float     # p / (p + n) on covered examples
+    preselected_atoms: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +142,149 @@ def _compute_covered_pn(
     return p, n
 
 
+def _condition_signature(cond: _ElementaryCondition) -> tuple[int, str, Any]:
+    """Create a hashable signature for a condition."""
+    value: Any
+    if cond.op == "in":
+        lo, hi = cond.value
+        value = (float(lo), float(hi))
+    else:
+        value = cond.value.item() if isinstance(cond.value, np.generic) else cond.value
+    return (cond.feature_idx, cond.op, value)
+
+
+def _iter_candidate_conditions(
+    X: np.ndarray,
+    active_mask: np.ndarray,
+    feature_names: list[str],
+    max_thresholds: int | None,
+    enable_intervals: bool,
+    feature_indices: np.ndarray | None,
+):
+    """Yield candidate conditions and their boolean masks on X."""
+    if feature_indices is None:
+        feature_iter = range(X.shape[1])
+    else:
+        feature_iter = (int(i) for i in feature_indices.tolist())
+
+    for feat_idx in feature_iter:
+        col = X[:, feat_idx]
+        is_numeric = np.issubdtype(col.dtype, np.number)
+
+        if is_numeric:
+            vals = col.astype(float)
+            active_vals = vals[active_mask]
+            unique_vals = np.unique(active_vals)
+            if unique_vals.size < 2:
+                continue
+            thresholds = (unique_vals[:-1] + unique_vals[1:]) / 2.0
+            if max_thresholds is not None and len(thresholds) > max_thresholds:
+                idx = np.round(
+                    np.linspace(0, len(thresholds) - 1, max_thresholds)
+                ).astype(int)
+                thresholds = thresholds[idx]
+
+            for thr in thresholds:
+                for op in ("<=", ">"):
+                    cand_mask = (vals <= thr) if op == "<=" else (vals > thr)
+                    yield _ElementaryCondition(
+                        feat_idx,
+                        feature_names[feat_idx],
+                        op,
+                        float(thr),
+                    ), cand_mask
+
+            if enable_intervals and len(thresholds) >= 2:
+                if len(thresholds) > 30:
+                    iv_idx = np.round(
+                        np.linspace(0, len(thresholds) - 1, 30)
+                    ).astype(int)
+                    iv_thresholds = thresholds[iv_idx]
+                else:
+                    iv_thresholds = thresholds
+
+                for i_lo in range(len(iv_thresholds)):
+                    lo = float(iv_thresholds[i_lo])
+                    for i_hi in range(i_lo + 1, len(iv_thresholds)):
+                        hi = float(iv_thresholds[i_hi])
+                        cand_mask = (vals >= lo) & (vals < hi)
+                        yield _ElementaryCondition(
+                            feat_idx,
+                            feature_names[feat_idx],
+                            "in",
+                            (lo, hi),
+                        ), cand_mask
+        else:
+            active_col = col[active_mask]
+            categories = np.unique(active_col)
+            if categories.size < 2:
+                continue
+            for cat in categories:
+                cand_mask = np.asarray(col == cat, dtype=bool)
+                value = cat.item() if isinstance(cat, np.generic) else cat
+                yield _ElementaryCondition(
+                    feat_idx,
+                    feature_names[feat_idx],
+                    "==",
+                    value,
+                ), cand_mask
+
+
+def _preselect_atom_signatures(
+    X: np.ndarray,
+    y_idx: np.ndarray,
+    n_classes: int,
+    class_idx: int,
+    feature_names: list[str],
+    min_samples_leaf: int,
+    max_thresholds: int | None,
+    P: float,
+    N: float,
+    enable_intervals: bool,
+    strategy: str,
+    top_k: int | None,
+) -> set[tuple[int, str, Any]] | None:
+    """Select candidate atoms once per grown rule and return their signatures."""
+    if strategy == "none":
+        return None
+
+    if not is_atom_selection_strategy_available(strategy):
+        available = ", ".join(available_atom_selection_strategies())
+        raise ValueError(
+            "atom_preselection_strategy must be 'none' or a registered "
+            f"atom-selection strategy. Available registered strategies: [{available}]"
+        )
+    if top_k is None or int(top_k) <= 0:
+        raise ValueError(
+            "atom_preselection_top_k must be a positive integer when "
+            "atom_preselection_strategy != 'none'."
+        )
+
+    active_mask = np.ones(X.shape[0], dtype=bool)
+    candidates: list[tuple[tuple[int, str, Any], np.ndarray]] = []
+    for cond, cand_mask in _iter_candidate_conditions(
+        X,
+        active_mask,
+        feature_names,
+        max_thresholds,
+        enable_intervals,
+        feature_indices=None,
+    ):
+        candidates.append((_condition_signature(cond), cand_mask))
+
+    if not candidates:
+        return None
+
+    return select_signatures_by_strategy(
+        strategy=strategy,
+        candidates=candidates,
+        y_idx=y_idx,
+        n_classes=n_classes,
+        min_samples_leaf=min_samples_leaf,
+        top_k=int(top_k),
+    )
+
+
 def _grow_rule(
     X: np.ndarray,
     y_idx: np.ndarray,
@@ -147,6 +297,10 @@ def _grow_rule(
     P: float,
     N: float,
     enable_intervals: bool = True,
+    atom_preselection_strategy: str = "none",
+    atom_preselection_top_k: int | None = None,
+    allowed_condition_signatures: set[tuple[int, str, Any]] | None = None,
+    fit_deadline: float | None = None,
 ) -> _InducedRule | None:
     """Grow a single rule by greedy condition addition.
 
@@ -174,8 +328,27 @@ def _grow_rule(
 
     p_cur, n_cur = _compute_covered_pn(y_idx, active_mask, class_idx, n_classes)
     current_quality = -np.inf
+    if allowed_condition_signatures is not None:
+        allowed_signatures = allowed_condition_signatures
+    else:
+        allowed_signatures = _preselect_atom_signatures(
+            X,
+            y_idx,
+            n_classes,
+            class_idx,
+            feature_names,
+            min_samples_leaf,
+            max_thresholds,
+            P,
+            N,
+            enable_intervals,
+            atom_preselection_strategy,
+            atom_preselection_top_k,
+        )
 
     for step in range(max_conditions):
+        if fit_deadline is not None and time.monotonic() >= fit_deadline:
+            break
         if active_mask.sum() < min_samples_leaf:
             break
         if n_cur <= 0:
@@ -202,66 +375,19 @@ def _grow_rule(
                 best_cov = n_cov
                 best_cond = cand
 
-        for feat_idx in range(X.shape[1]):
-            col = X[:, feat_idx]
-            is_numeric = np.issubdtype(col.dtype, np.number)
-
-            if is_numeric:
-                vals = col.astype(float)
-                active_vals = vals[active_mask]
-                unique_vals = np.unique(active_vals)
-                if unique_vals.size < 2:
+        for cond, cand_mask in _iter_candidate_conditions(
+            X,
+            active_mask,
+            feature_names,
+            max_thresholds,
+            enable_intervals,
+            feature_indices=None,
+        ):
+            if allowed_signatures is not None:
+                if _condition_signature(cond) not in allowed_signatures:
                     continue
-                thresholds = (unique_vals[:-1] + unique_vals[1:]) / 2.0
-                if max_thresholds is not None and len(thresholds) > max_thresholds:
-                    idx = np.round(
-                        np.linspace(0, len(thresholds) - 1, max_thresholds)
-                    ).astype(int)
-                    thresholds = thresholds[idx]
-
-                # --- Single-threshold conditions (<=, >) ---
-                for thr in thresholds:
-                    for op in ("<=", ">"):
-                        cand_mask = (vals <= thr) if op == "<=" else (vals > thr)
-                        new_mask = active_mask & cand_mask
-                        _evaluate_candidate(
-                            _ElementaryCondition(feat_idx, feature_names[feat_idx], op, float(thr)),
-                            new_mask,
-                        )
-
-                # --- Interval conditions [lower, upper) ---
-                if enable_intervals and len(thresholds) >= 2:
-                    if len(thresholds) > 30:
-                        iv_idx = np.round(
-                            np.linspace(0, len(thresholds) - 1, 30)
-                        ).astype(int)
-                        iv_thresholds = thresholds[iv_idx]
-                    else:
-                        iv_thresholds = thresholds
-
-                    for i_lo in range(len(iv_thresholds)):
-                        lo = float(iv_thresholds[i_lo])
-                        for i_hi in range(i_lo + 1, len(iv_thresholds)):
-                            hi = float(iv_thresholds[i_hi])
-                            cand_mask = (vals >= lo) & (vals < hi)
-                            new_mask = active_mask & cand_mask
-                            _evaluate_candidate(
-                                _ElementaryCondition(feat_idx, feature_names[feat_idx], "in", (lo, hi)),
-                                new_mask,
-                            )
-            else:
-                # Categorical
-                active_col = col[active_mask]
-                categories = np.unique(active_col)
-                if categories.size < 2:
-                    continue
-                for cat in categories:
-                    cand_mask = np.asarray(col == cat, dtype=bool)
-                    new_mask = active_mask & cand_mask
-                    _evaluate_candidate(
-                        _ElementaryCondition(feat_idx, feature_names[feat_idx], "==", cat),
-                        new_mask,
-                    )
+            new_mask = active_mask & cand_mask
+            _evaluate_candidate(cond, new_mask)
 
         if best_cond is None:
             break
@@ -283,6 +409,9 @@ def _grow_rule(
         quality=current_quality,
         coverage=coverage,
         precision=precision,
+        preselected_atoms=(
+            len(allowed_signatures) if allowed_signatures is not None else None
+        ),
     )
 
 
@@ -346,6 +475,7 @@ def _prune_rule(
         quality=current_quality,
         coverage=coverage,
         precision=precision,
+        preselected_atoms=rule.preselected_atoms,
     )
 
 
@@ -391,6 +521,7 @@ def _induced_rule_to_scored_rule(
             "precision": rule.precision,
             "coverage": rule.coverage,
             "n_conditions": len(rule.conditions),
+            "preselected_atoms": rule.preselected_atoms,
         },
     )
 
@@ -434,11 +565,20 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         Fraction of training data used as validation set for overall stopping.
     max_thresholds_per_feature : int | None
         Cap the number of candidate thresholds per numeric feature.
+    atom_preselection_strategy : str
+        Candidate-atom preselection strategy. ``"none"`` evaluates all atoms,
+        otherwise a registered plugin strategy preselects atoms before growing.
+    atom_preselection_top_k : int | None
+        Number of atoms kept when a preselection strategy is used.
     aggregation : str
         Aggregation type for the ScoredRuleSet (``"argmax_sum"`` or
         ``"softmax_sum"``).
     temperature : float
         Temperature for softmax aggregation.
+    max_fit_seconds : float | None
+        Maximum wall-clock runtime for the complete fit in seconds. If set,
+        sequential covering stops cleanly once the budget is exhausted and the
+        induced rules so far are returned.
     random_state : int | None
         Random seed for reproducibility.
     """
@@ -455,8 +595,11 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         enable_intervals: bool = True,
         validation_fraction: float = 0.0,
         max_thresholds_per_feature: int | None = None,
+        atom_preselection_strategy: str = "none",
+        atom_preselection_top_k: int | None = None,
         aggregation: str = "argmax_sum",
         temperature: float = 1.0,
+        max_fit_seconds: float | None = None,
         random_state: int | None = None,
     ):
         self.max_rules = max_rules
@@ -469,9 +612,27 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         self.enable_intervals = enable_intervals
         self.validation_fraction = validation_fraction
         self.max_thresholds_per_feature = max_thresholds_per_feature
+        self.atom_preselection_strategy = atom_preselection_strategy
+        self.atom_preselection_top_k = atom_preselection_top_k
         self.aggregation = aggregation
         self.temperature = temperature
+        self.max_fit_seconds = max_fit_seconds
         self.random_state = random_state
+
+        if self.atom_preselection_strategy != "none" and not is_atom_selection_strategy_available(
+            self.atom_preselection_strategy
+        ):
+            available = ", ".join(available_atom_selection_strategies())
+            raise ValueError(
+                "atom_preselection_strategy must be 'none' or a registered "
+                f"atom-selection strategy. Available registered strategies: [{available}]"
+            )
+        if self.atom_preselection_strategy != "none":
+            if self.atom_preselection_top_k is None or int(self.atom_preselection_top_k) <= 0:
+                raise ValueError(
+                    "atom_preselection_top_k must be a positive integer when "
+                    "atom_preselection_strategy != 'none'."
+                )
 
     # ------------------------------------------------------------------
     # fit
@@ -511,6 +672,29 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         # Full-dataset class counts (constant for C2 quality measure)
         full_counts = np.bincount(y_work, minlength=n_classes).astype(float)
 
+        preselected_signatures: set[tuple[int, str, Any]] | None = None
+        if self.atom_preselection_strategy != "none":
+            candidates: list[tuple[tuple[int, str, Any], np.ndarray]] = []
+            all_active = np.ones(X_work.shape[0], dtype=bool)
+            for cond, cand_mask in _iter_candidate_conditions(
+                X_work,
+                all_active,
+                feature_names,
+                self.max_thresholds_per_feature,
+                self.enable_intervals,
+                feature_indices=None,
+            ):
+                candidates.append((_condition_signature(cond), cand_mask))
+
+            preselected_signatures = select_signatures_by_strategy(
+                strategy=self.atom_preselection_strategy,
+                candidates=candidates,
+                y_idx=y_work,
+                n_classes=n_classes,
+                min_samples_leaf=self.min_samples_leaf,
+                top_k=int(self.atom_preselection_top_k),
+            )
+
         # ---- Sequential Covering (class-first, like Java RuleKit) ----
         # For each class c, learn rules until no uncovered positives remain
         # or no improving rule can be found.  Then move to the next class.
@@ -518,8 +702,14 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
         uncovered_masks: list[np.ndarray] = [
             np.ones(X_work.shape[0], dtype=bool) for _ in range(n_classes)
         ]
+        fit_deadline = None
+        if self.max_fit_seconds is not None:
+            fit_deadline = time.monotonic() + float(self.max_fit_seconds)
 
         for c_idx in range(n_classes):
+            if fit_deadline is not None and time.monotonic() >= fit_deadline:
+                break
+
             P = full_counts[c_idx]
             N = float(np.sum(full_counts)) - P
             if P <= 0:
@@ -529,6 +719,9 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
             max_rules_per_class = max(1, self.max_rules)
 
             while rules_for_class < max_rules_per_class:
+                if fit_deadline is not None and time.monotonic() >= fit_deadline:
+                    break
+
                 # Count uncovered positives for this class
                 uncov = uncovered_masks[c_idx]
                 n_uncov_pos = int(np.sum(
@@ -574,6 +767,10 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
                     self.max_conditions, self.max_thresholds_per_feature,
                     P, N,
                     enable_intervals=self.enable_intervals,
+                    atom_preselection_strategy=self.atom_preselection_strategy,
+                    atom_preselection_top_k=self.atom_preselection_top_k,
+                    allowed_condition_signatures=preselected_signatures,
+                    fit_deadline=fit_deadline,
                 )
                 if candidate is None:
                     break
@@ -647,8 +844,11 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
                 "enable_pruning": self.enable_pruning,
                 "pruning_mode": self.pruning_mode,
                 "enable_intervals": self.enable_intervals,
+                "atom_preselection_strategy": self.atom_preselection_strategy,
+                "atom_preselection_top_k": self.atom_preselection_top_k,
                 "max_rules": self.max_rules,
                 "max_conditions": self.max_conditions,
+                "max_fit_seconds": self.max_fit_seconds,
             },
         )
         self.ruleset_.validate()
