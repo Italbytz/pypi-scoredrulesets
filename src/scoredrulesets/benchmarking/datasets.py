@@ -448,7 +448,6 @@ def _looks_like_header(row: np.ndarray) -> bool:
 # ---------------------------------------------------------------------------
 from catgen.datasets import (  # noqa: E402
     generate_multiplexer_dataset,
-    load_multiplexer_datasets as _catgen_load_multiplexer_datasets,
     generate_xor_parity_dataset,
     generate_dnf_concept_dataset,
     generate_monk1_dataset,
@@ -483,17 +482,31 @@ def load_multiplexer_datasets(
     max_samples_large : int
         Maximum row count for large multiplexers (default: 10_000).
     """
-    raw = _catgen_load_multiplexer_datasets(max_samples_large=max_samples_large)
-    return {
-        name: DatasetBundle(
-            name=name,
-            X=Xy[0],
-            y=Xy[1],
-            source=f"multiplexer_{Xy[0].shape[1]}",
-            no_split=True,
-        )
-        for name, Xy in raw.items()
-    }
+    bundles: dict[str, DatasetBundle] = {}
+    
+    # Generate multiplexer datasets from mux_6 to mux_20
+    # Larger ones get capped at max_samples_large
+    for k in range(6, 21):
+        try:
+            X, y = generate_multiplexer_dataset(k=k, random_state=42)
+            
+            # Cap large datasets
+            if X.shape[0] > max_samples_large:
+                indices = np.random.RandomState(42).choice(X.shape[0], max_samples_large, replace=False)
+                X = X[indices]
+                y = y[indices]
+            
+            bundles[f"mux_{k}"] = DatasetBundle(
+                name=f"mux_{k}",
+                X=X,
+                y=y,
+                source=f"multiplexer_{k}",
+                no_split=True,
+            )
+        except Exception:
+            continue
+    
+    return bundles
 
 
 
