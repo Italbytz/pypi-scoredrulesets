@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/scoredrulesets.svg)](https://pypi.org/project/scoredrulesets/)
 [![Python versions](https://img.shields.io/pypi/pyversions/scoredrulesets.svg)](https://pypi.org/project/scoredrulesets/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CI](https://github.com/scoredrulesets/scoredrulesets/actions/workflows/ci.yml/badge.svg)](https://github.com/scoredrulesets/scoredrulesets/actions/workflows/ci.yml)
+[![CI](https://github.com/Italbytz/pypi-scoredrulesets/actions/workflows/ci.yml/badge.svg)](https://github.com/Italbytz/pypi-scoredrulesets/actions/workflows/ci.yml)
 
 A scikit-learn compatible toolkit for **scored rule set** classification — interpretable models that express each prediction as a weighted combination of human-readable IF-THEN rules.
 
