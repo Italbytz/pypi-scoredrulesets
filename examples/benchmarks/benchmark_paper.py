@@ -141,12 +141,8 @@ _PAPER_SPECS: dict[str, EstimatorSpec] = {
                 "stagnation_generations": 80,
                 "population_size": 120,
                 "n_adaptations_per_gen": 20,
-                "max_fit_seconds": 240,
             },
-            preprocessing={
-                "logicgp_discretize": True,
-                "n_bins": 5,
-            },
+            max_fit_seconds=240,
             random_state=0,
         ),
     ),

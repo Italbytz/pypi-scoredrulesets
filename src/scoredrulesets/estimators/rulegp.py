@@ -23,6 +23,13 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from .atom_selection import (
+    available_atom_selection_strategies,
+    is_atom_selection_strategy_available,
+    iter_native_candidate_signatures,
+    select_signatures_by_strategy,
+    signature_key,
+)
 from .atom_space import NativeAtomSpaceStrategy
 from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
@@ -32,7 +39,7 @@ AtomPreselectionStrategy = Literal[
     "none",
     "logicgp_singleton",
     "logicgp_binned_sets",
-]
+] | str
 
 ObjectiveMode = Literal["recall", "f1"]
 
@@ -332,6 +339,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         max_thresholds_per_feature: int | None = None,
         atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
         atom_preselection_strategy: AtomPreselectionStrategy = "none",
+        atom_preselection_top_k: int | None = None,
         feature_names: list[str] | None = None,
         random_state: int | None = None,
     ):
@@ -364,12 +372,25 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             "none",
             "logicgp_singleton",
             "logicgp_binned_sets",
-        ):
+        ) and not is_atom_selection_strategy_available(atom_preselection_strategy):
+            available = ", ".join(available_atom_selection_strategies())
             raise ValueError(
                 "atom_preselection_strategy must be 'none', "
-                "'logicgp_singleton', or 'logicgp_binned_sets'."
+                "'logicgp_singleton', 'logicgp_binned_sets', or a registered "
+                f"atom-selection strategy. Available registered strategies: [{available}]"
             )
         self.atom_preselection_strategy = atom_preselection_strategy
+        self.atom_preselection_top_k = atom_preselection_top_k
+        if self.atom_preselection_strategy not in (
+            "none",
+            "logicgp_singleton",
+            "logicgp_binned_sets",
+        ):
+            if self.atom_preselection_top_k is None or int(self.atom_preselection_top_k) <= 0:
+                raise ValueError(
+                    "atom_preselection_top_k must be a positive integer when "
+                    "atom_preselection_strategy requires preselection size."
+                )
         self.feature_names = feature_names
         self.random_state = random_state
         if objective_mode not in ("recall", "f1"):
@@ -423,7 +444,33 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             self.max_thresholds_per_feature,
             atom_space_strategy=self.atom_space_strategy,
         )
-        atom_pool = self._build_atom_pool(specs, X_train, y_train, n_classes)
+        allowed_top_c2_keys: set[tuple[int, str, str]] | None = None
+        if self.atom_preselection_strategy not in (
+            "none",
+            "logicgp_singleton",
+            "logicgp_binned_sets",
+        ):
+            candidates = []
+            for sig in iter_native_candidate_signatures(specs):
+                atom = _AtomGene2(int(sig[0]), str(sig[1]), sig[2])
+                candidates.append((signature_key(sig), self._atom_mask(atom, X_train)))
+            selected = select_signatures_by_strategy(
+                strategy=self.atom_preselection_strategy,
+                candidates=candidates,
+                y_idx=y_train,
+                n_classes=n_classes,
+                min_samples_leaf=self.min_samples_leaf,
+                top_k=int(self.atom_preselection_top_k),
+            )
+            allowed_top_c2_keys = {(int(fi), str(op), str(val)) for fi, op, val in selected}
+
+        atom_pool = self._build_atom_pool(
+            specs,
+            X_train,
+            y_train,
+            n_classes,
+            allowed_top_c2_keys=allowed_top_c2_keys,
+        )
         all_atoms = [a for atoms in atom_pool.values() for a in atoms]
         if not all_atoms:
             all_atoms = self._fallback_atoms(specs)
@@ -482,6 +529,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         X: np.ndarray,
         y: np.ndarray,
         n_classes: int,
+        allowed_top_c2_keys: set[tuple[int, str, str]] | None = None,
     ) -> dict[int, list[_AtomGene2]]:
         class_counts = np.bincount(y, minlength=n_classes).astype(float)
         class_counts = np.maximum(class_counts, 1.0)
@@ -553,6 +601,10 @@ class RuleGPClassifier(BaseRuleSetEstimator):
 
             scored: list[tuple[float, _AtomGene2]] = []
             for atom in candidates:
+                if allowed_top_c2_keys is not None:
+                    atom_key = (atom.feature_idx, atom.op, str(atom.value))
+                    if atom_key not in allowed_top_c2_keys:
+                        continue
                 mask = self._atom_mask(atom, X)
                 support = int(mask.sum())
                 if support < self.min_samples_leaf:
@@ -1097,5 +1149,6 @@ def _to_ruleset_rulegp(classifier: RuleGPClassifier, rs: _RuleSet2, n_classes: i
             "min_max_weight": classifier.min_max_weight,
             "atom_space_strategy": classifier.atom_space_strategy,
             "atom_preselection_strategy": classifier.atom_preselection_strategy,
+            "atom_preselection_top_k": classifier.atom_preselection_top_k,
         },
     )

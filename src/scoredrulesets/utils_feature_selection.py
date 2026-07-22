@@ -16,6 +16,8 @@ Supported methods:
 from typing import Tuple, List, Optional, Any
 import numpy as np
 
+from .preprocessing.feature_selection import build_feature_selector, get_selected_feature_names
+
 
 def select_features(
     X: np.ndarray,
@@ -34,42 +36,18 @@ def select_features(
     if feature_names is None:
         feature_names = [f"f{i}" for i in range(X.shape[1])]
 
-    if method == "kbest":
-        from sklearn.feature_selection import SelectKBest, mutual_info_classif
-        if score_func is None:
-            score_func = mutual_info_classif
-        selector = SelectKBest(score_func, k=k)
-        X_new = selector.fit_transform(X, y)
-        mask = selector.get_support()
-        selected_names = [name for name, keep in zip(feature_names, mask) if keep]
-        return X_new, selected_names
-
-    elif method == "rfe":
-        from sklearn.feature_selection import RFE
-        if estimator is None:
-            from sklearn.ensemble import RandomForestClassifier
-            estimator = RandomForestClassifier(n_estimators=50, n_jobs=-1)
-        selector = RFE(estimator, n_features_to_select=k, step=kwargs.get("step", 1))
-        X_new = selector.fit_transform(X, y)
-        mask = selector.get_support()
-        selected_names = [name for name, keep in zip(feature_names, mask) if keep]
-        return X_new, selected_names
-
-    elif method == "boruta":
-        try:
-            from boruta import BorutaPy
-        except ImportError:
-            raise ImportError("BorutaPy is not installed. Install with: pip install boruta")
-        if estimator is None:
-            from sklearn.ensemble import RandomForestClassifier
-            estimator = RandomForestClassifier(n_estimators=100, n_jobs=-1)
-        selector = BorutaPy(estimator, n_estimators="auto", verbose=0, random_state=0, **kwargs)
-        selector.fit(X, y)
-        mask = selector.support_
-        X_new = X[:, mask]
-        selected_names = [name for name, keep in zip(feature_names, mask) if keep]
-        return X_new, selected_names
-
-    else:
-        raise ValueError(f"Unknown feature selection method: {method}")
+    selector = build_feature_selector(
+        method=method,
+        k=int(k),
+        score_func=score_func,
+        estimator=estimator,
+        params=kwargs,
+    )
+    X_new = selector.fit_transform(X, y)
+    selected_names, _ = get_selected_feature_names(
+        selector,
+        list(feature_names),
+        transformed_width=int(np.asarray(X_new).shape[1]),
+    )
+    return np.asarray(X_new), selected_names
 

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] – 2025-01-01
+## [0.1.0] – 2026-07-22
 
 ### Added
 - `ScoredRuleSetClassifier` wrapper converting scikit-learn rule learners to scored rule sets
@@ -23,5 +23,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optional backends: `hs` (imodels), `exstracs`, `rulekit`
 - scikit-learn estimator API compliance (fit / predict / score / get_params / set_params)
 
-[Unreleased]: https://github.com/scoredrulesets/scoredrulesets/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/scoredrulesets/scoredrulesets/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Italbytz/pypi-scoredrulesets/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Italbytz/pypi-scoredrulesets/releases/tag/v0.1.0

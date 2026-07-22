@@ -30,6 +30,13 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from .atom_selection import (
+    available_atom_selection_strategies,
+    is_atom_selection_strategy_available,
+    iter_native_candidate_signatures,
+    select_signatures_by_strategy,
+    signature_key,
+)
 from .atom_space import NativeAtomSpaceStrategy
 from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
@@ -251,6 +258,11 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
     min_max_weight : float
         If > 0, prefilters atom candidates by their maximal class-balanced
         weight on training data. Higher values reduce the search space.
+    atom_preselection_strategy : str
+        Optional atom preselection strategy. ``"none"`` keeps all atoms;
+        any registered plugin strategy can preselect candidate atoms.
+    atom_preselection_top_k : int | None
+        Number of atoms retained when a preselection strategy is used.
     random_state : int or None
         Random seed.
     """
@@ -272,6 +284,8 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         min_max_weight: float = 0.0,
         max_thresholds_per_feature: int | None = None,
         atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
+        atom_preselection_strategy: str = "none",
+        atom_preselection_top_k: int | None = None,
         random_state: int | None = None,
     ):
         self.population_size = population_size
@@ -289,8 +303,25 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         self.min_max_weight = min_max_weight
         self.max_thresholds_per_feature = max_thresholds_per_feature
         self.atom_space_strategy = atom_space_strategy
+        self.atom_preselection_strategy = atom_preselection_strategy
+        self.atom_preselection_top_k = atom_preselection_top_k
         self.random_state = random_state
         self._atom_pool_: dict[int, list[_AtomGene]] = {}
+
+        if self.atom_preselection_strategy != "none" and not is_atom_selection_strategy_available(
+            self.atom_preselection_strategy
+        ):
+            available = ", ".join(available_atom_selection_strategies())
+            raise ValueError(
+                "atom_preselection_strategy must be 'none' or a registered "
+                f"atom-selection strategy. Available registered strategies: [{available}]"
+            )
+        if self.atom_preselection_strategy != "none":
+            if self.atom_preselection_top_k is None or int(self.atom_preselection_top_k) <= 0:
+                raise ValueError(
+                    "atom_preselection_top_k must be a positive integer when "
+                    "atom_preselection_strategy != 'none'."
+                )
 
     # ------------------------------------------------------------------
     # sklearn interface
@@ -522,6 +553,22 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         class_counts = np.maximum(class_counts, 1.0)
 
         pool: dict[int, list[_AtomGene]] = {}
+        top_c2_keys: set[tuple[int, str, str]] | None = None
+
+        if self.atom_preselection_strategy != "none":
+            candidates = []
+            for sig in iter_native_candidate_signatures(specs):
+                atom = _AtomGene(int(sig[0]), str(sig[1]), sig[2])
+                candidates.append((signature_key(sig), self._atom_mask(atom, X)))
+            selected = select_signatures_by_strategy(
+                strategy=self.atom_preselection_strategy,
+                candidates=candidates,
+                y_idx=y,
+                n_classes=n_classes,
+                min_samples_leaf=self.min_samples_leaf,
+                top_k=int(self.atom_preselection_top_k),
+            )
+            top_c2_keys = {(int(fi), str(op), str(val)) for fi, op, val in selected}
         for spec in specs:
             fi = int(spec["idx"])
             candidates: list[_AtomGene] = []
@@ -550,6 +597,10 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
 
             scored: list[tuple[float, _AtomGene]] = []
             for atom in candidates:
+                if top_c2_keys is not None:
+                    atom_key = (atom.feature_idx, atom.op, str(atom.value))
+                    if atom_key not in top_c2_keys:
+                        continue
                 mask = self._atom_mask(atom, X)
                 support = int(mask.sum())
                 if support < self.min_samples_leaf:
@@ -1136,6 +1187,8 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                 "enable_compaction": self.enable_compaction,
                 "min_max_weight": self.min_max_weight,
                 "atom_space_strategy": self.atom_space_strategy,
+                "atom_preselection_strategy": self.atom_preselection_strategy,
+                "atom_preselection_top_k": self.atom_preselection_top_k,
                 "max_rules": self.max_rules,
                 "max_atoms_per_rule": self.max_atoms_per_rule,
             },

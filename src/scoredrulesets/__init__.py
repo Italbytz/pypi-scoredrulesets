@@ -1,3 +1,5 @@
+__version__ = "0.1.0"
+
 from .benchmarking import (
     AggregatedBenchmarkResult,
     BenchmarkComparisonRow,
@@ -35,9 +37,15 @@ from .estimators.rulegp import RuleGPClassifier
 from .estimators.ruleplcs import RulePLCSClassifier
 from .estimators.rulensga2 import RuleNSGA2Classifier
 from .estimators.rulekit_native import RuleKitNativeClassifier
+from .estimators.atom_selection import (
+    available_atom_selection_strategies,
+    is_atom_selection_strategy_available,
+    register_atom_selection_strategy,
+)
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 from .formatting import format_ruleset_latex, format_ruleset_markdown, format_ruleset_table
 from .io import dump_ruleset_json, dump_ruleset_latex, dump_ruleset_markdown, load_ruleset_json
+from .preprocessing import BorutaSelector, build_feature_selector, build_preprocessing_pipeline
 from .runtime import predict_regression
 from .schema import AggregationSpec, Atom, Rule, ScoredRuleSet
 from .importers.logicgp import import_logicgp_json
@@ -49,12 +57,14 @@ __all__ = [
     "ScoredRuleSet",
     "AggregatedBenchmarkResult",
     "AutoScoredRuleSetClassifier",
+    "available_atom_selection_strategies",
     "ScoredRuleSetClusterer",
     "BenchmarkComparisonRow",
     "BenchmarkConfig",
     "BenchmarkResult",
     "ClusterApproxRunResult",
     "ClusterApproxSummary",
+    "BorutaSelector",
     "GPASClassifier",
     "LogicGPClassifier",
     "RuleGPClassifier",
@@ -64,10 +74,13 @@ __all__ = [
     "RuleKitNativeClassifier",
     "ScoredRuleSetClassifier",
     "ScoredRuleSetRegressor",
+    "is_atom_selection_strategy_available",
     "aggregate_benchmark_results",
     "aggregated_results_as_dicts",
     "benchmark_cluster_approximation",
     "build_benchmark_leaderboard",
+    "build_feature_selector",
+    "build_preprocessing_pipeline",
     "compare_benchmark_runs",
     "dump_ruleset_json",
     "dump_ruleset_latex",
@@ -92,6 +105,7 @@ __all__ = [
     "plot_benchmark_heatmap_combined",
     "plot_benchmark_results",
     "predict_regression",
+    "register_atom_selection_strategy",
     "run_benchmarks",
     "summarize_cluster_approximation_runs",
 ]

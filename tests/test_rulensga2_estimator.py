@@ -1,7 +1,8 @@
 import numpy as np
+import pytest
 from sklearn.datasets import load_iris, load_breast_cancer
 
-from scoredrulesets import RuleNSGA2Classifier, ScoredRuleSetClassifier
+from scoredrulesets import RuleNSGA2Classifier, ScoredRuleSetClassifier, register_atom_selection_strategy
 from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
 
@@ -95,6 +96,7 @@ def test_sklearn_wrapper_rulensga2_backend():
 def test_benchmarking_estimator_specs_include_rulensga2():
     specs = default_estimator_specs()
     assert "wrapper_rulensga2" in specs
+    assert "wrapper_rulensga2_topc2" not in specs
 
 
 def test_rulensga2_benchmark_spec_produces_valid_estimator():
@@ -103,7 +105,6 @@ def test_rulensga2_benchmark_spec_produces_valid_estimator():
     assert est.backend == "rulensga2"
     assert est.backend_params["population_size"] >= 10
     assert est.backend_params["enable_compaction"] is True
-
 
 def test_rulensga2_ruleset_atoms_use_correct_between_format():
     """Ensure 'between' atoms are serialized as [low, high] lists, not dicts."""
@@ -123,4 +124,50 @@ def test_rulensga2_ruleset_atoms_use_correct_between_format():
                     f"'between' atom value should be list/tuple, got {type(atom.value)}"
                 )
                 assert len(atom.value) == 2
+
+
+def test_rulensga2_registered_strategy_preselection_records_metadata():
+    X, y = load_iris(return_X_y=True)
+
+    def _first_k_strategy(candidates, _y_idx, _n_classes, min_samples_leaf, top_k):
+        selected = set()
+        for signature, mask in candidates:
+            if int(np.sum(mask)) < int(min_samples_leaf):
+                continue
+            selected.add(signature)
+            if len(selected) >= int(top_k):
+                break
+        return selected
+
+    register_atom_selection_strategy("top_c2_private_ut", _first_k_strategy, overwrite=True)
+
+    clf = RuleNSGA2Classifier(
+        population_size=20,
+        generations=8,
+        atom_preselection_strategy="top_c2_private_ut",
+        atom_preselection_top_k=64,
+        random_state=0,
+    )
+    clf.fit(X, y)
+    rs = clf.to_ruleset()
+
+    assert rs.metadata["atom_preselection_strategy"] == "top_c2_private_ut"
+    assert rs.metadata["atom_preselection_top_k"] == 64
+
+
+def test_rulensga2_registered_strategy_requires_positive_top_k():
+    register_atom_selection_strategy(
+        "top_c2_private_ut",
+        lambda candidates, y_idx, n_classes, min_samples_leaf, top_k: set(),
+        overwrite=True,
+    )
+    with pytest.raises(ValueError, match="atom_preselection_top_k"):
+        RuleNSGA2Classifier(atom_preselection_strategy="top_c2_private_ut")
+
+
+def test_removed_rulegp2_backend_raises_on_fit():
+    X, y = load_iris(return_X_y=True)
+    clf = ScoredRuleSetClassifier(backend="rulegp2", random_state=0)
+    with pytest.raises(ValueError, match="Unknown backend"):
+        clf.fit(X, y)
 

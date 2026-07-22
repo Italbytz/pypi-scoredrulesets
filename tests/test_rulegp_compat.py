@@ -123,10 +123,6 @@ def test_wrapper_rulegp_logicgp_mode_smoke_runs_on_raw_numeric_data():
             "population_size": 40,
             "n_adaptations_per_gen": 10,
         },
-        preprocessing={
-            "logicgp_discretize": True,
-            "n_bins": 5,
-        },
         random_state=0,
     )
     clf.fit(X, y)
