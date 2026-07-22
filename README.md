@@ -37,10 +37,12 @@ Each rule assigns real-valued scores to every class/cluster. At prediction time,
 
 ### Regression & Clustering
 
+⚠️ **Proof-of-Concept status** — These estimators are included in v0.1.0 but are still experimental and not yet competitive with specialized regression/clustering methods.
+
 | Estimator | Task |
 |---|---|
-| `ScoredRuleSetRegressor` | Regression wrapper; works with all backends |
-| `ScoredRuleSetClusterer` | Cluster-label approximation; explains k-means, etc. |
+| `ScoredRuleSetRegressor` | Regression wrapper; converts any backend to regression rules |
+| `ScoredRuleSetClusterer` | Cluster-label approximation; explains k-means, hierarchical clustering, etc. |
 
 ## Installation
 
@@ -123,7 +125,9 @@ ruleset = clf.to_ruleset()
 dump_ruleset_json(ruleset, "iris_rules.json")
 ```
 
-### Example 4: Regression
+### Example 4: Regression (PoC)
+
+> ⚠️ **Regression is currently in PoC stage** — not yet competitive with specialized methods.
 
 ```python
 from sklearn.datasets import load_diabetes
