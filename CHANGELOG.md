@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `ScoredRuleSetClassifier` wrapper converting scikit-learn rule learners to scored rule sets
 - `ScoredRuleSetRegressor` — regression wrapper for scored rule sets
+- `ScoredRuleSetClusterer` — cluster-label approximation with interpretable rulesets
 - `RuleNSGA2Classifier` — NSGA-II genetic programming over rule populations
 - `RuleGPClassifier` — logicGP-style evolution on native atom/rule/rule-set structures
 - `RulePLCSClassifier` — Sequential covering with a genetic algorithm (LCS-style)
@@ -20,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LogicGPClassifier` — wrapper for logicGP JSON model import
 - JSON serialisation format for scored rule sets (`dump_ruleset_json` / `load_ruleset_json`)
 - LRC (Local Rule Compaction) post-processing step for rule merging
-- Benchmarking utilities: `run_benchmarks`, leaderboard, comparison reports
+- Benchmarking utilities: `run_benchmarks`, `benchmark_cluster_approximation`, leaderboard, comparison reports
 - Benchmarking dataset registry (UCI, OpenML, multiplexer, synthetic) — generators from `catgen`
 - Optional backends: `hs` (imodels), `exstracs`, `rulekit`
 - scikit-learn estimator API compliance (fit / predict / score / get_params / set_params)
