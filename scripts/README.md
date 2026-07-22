@@ -12,4 +12,3 @@ Beispiele:
 - `scripts/run/run_full_benchmark_with_recovery.sh`
 - `scripts/run/run_standard_benchmark_with_recovery.sh`
 - `scripts/run/run_normal_lite_benchmark_with_recovery.sh`
-- `scripts/run/run_exstracs_shrinking_benchmark.sh`
