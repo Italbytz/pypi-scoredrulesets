@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JSON serialisation format for scored rule sets (`dump_ruleset_json` / `load_ruleset_json`)
 - LRC (Local Rule Compaction) post-processing step for rule merging
 - Benchmarking utilities: `run_benchmarks`, leaderboard, comparison reports
-- Synthetic dataset generators (checkerboard, MONK, MUX, …)
+- Benchmarking dataset registry (UCI, OpenML, multiplexer, synthetic) — generators from `catgen`
 - Optional backends: `hs` (imodels), `exstracs`, `rulekit`
 - scikit-learn estimator API compliance (fit / predict / score / get_params / set_params)
 
