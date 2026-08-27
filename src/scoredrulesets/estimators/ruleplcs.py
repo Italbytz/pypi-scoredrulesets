@@ -42,7 +42,7 @@ from .atom_selection import (
 )
 from .atom_space import RulePLCSFeatureTypingStrategy
 from .atom_space import build_ruleplcs_feature_info
-from ._time_budget import deadline_reached, resolve_deadline
+from ._time_budget import FitBudgetExceededError, deadline_reached, resolve_deadline
 from .base import BaseRuleSetEstimator
 
 
@@ -765,8 +765,12 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         Threshold budget per numeric feature used during preselection.
     max_fit_seconds : float | None
         Maximum wall-clock runtime for the complete fit in seconds.
-        If set, iterative rule learning and inner GA loops stop cleanly once
-        the budget is exhausted and the best rule set found so far is returned.
+        Once at least one rule search has run, iterative rule learning and inner
+        GA loops stop cleanly when the budget is exhausted and the best rule set
+        found so far is returned. If the budget is exhausted during setup, before
+        the first rule search runs, a
+        :class:`~scoredrulesets.FitBudgetExceededError` is raised instead, since
+        no meaningful model exists yet.
     include_default_rule : bool
         Whether to append a default (catch-all) rule to the rule set.
     random_state : int or None
@@ -864,7 +868,7 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         fit_deadline = resolve_deadline(self.max_fit_seconds)
 
         # Build feature info
-        feature_info = self._build_feature_info(X)
+        feature_info = self._build_feature_info(X, deadline=fit_deadline)
 
         if self.atom_preselection_strategy != "none":
             allowed_feature_indices = _select_ruleplcs_features_by_top_c2_atoms(
@@ -896,6 +900,7 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         rules: list[_Individual] = []
         remaining_mask = np.ones(len(y), dtype=bool)
         fail_count = 0
+        ga_runs = 0
 
         for _rule_idx in range(self.max_rules):
             if deadline_reached(fit_deadline):
@@ -938,6 +943,7 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
                     allowed_feature_indices=allowed_feature_indices,
                     fit_deadline=fit_deadline,
                 )
+                ga_runs += 1
                 if best_rule is None or rule.fitness < best_rule.fitness:
                     best_rule = rule
 
@@ -960,6 +966,15 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
                     break
 
         # Determine default class from remaining instances
+        # If the fit budget was exhausted before the rule-learning GA could run
+        # even once, no meaningful rule exists.  Surface a clear timeout instead
+        # of returning a degenerate default-class-only model.
+        if ga_runs == 0:
+            raise FitBudgetExceededError(
+                "max_fit_seconds exhausted during setup before the first rule "
+                "search; the estimator is not viable within this budget."
+            )
+
         remaining_y = y[remaining_mask]
         if len(remaining_y) > 0:
             counts = np.bincount(remaining_y.astype(int), minlength=len(self.classes_))
@@ -992,12 +1007,13 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         return self.ruleset_
 
     # ------------------------------------------------------------ internal
-    def _build_feature_info(self, X: np.ndarray) -> list[dict]:
+    def _build_feature_info(self, X: np.ndarray, deadline: float | None = None) -> list[dict]:
         """Analyse features: detect numeric vs categorical."""
         return build_ruleplcs_feature_info(
             X,
             low_cardinality_threshold=self.low_cardinality_threshold,
             strategy=self.feature_typing_strategy,
+            deadline=deadline,
         )
 
     def _build_ruleset(

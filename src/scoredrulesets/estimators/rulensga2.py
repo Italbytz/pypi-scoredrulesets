@@ -29,7 +29,7 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
-from ._time_budget import deadline_reached, resolve_deadline
+from ._time_budget import FitBudgetExceededError, deadline_reached, resolve_deadline
 from .atom_selection import (
     available_atom_selection_strategies,
     is_atom_selection_strategy_available,
@@ -255,9 +255,12 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         Run backward elimination + atom pruning on the final model.
     max_fit_seconds : float or None
         Maximum wall-clock runtime for the complete fit in seconds
-        (``None`` = unlimited). The budget covers data setup and the GP loop;
-        if it is exhausted the loop stops cleanly and the best model found so
-        far is returned.
+        (``None`` = unlimited). The budget covers data setup and the GP loop.
+        Once at least one generation has evolved, the loop stops cleanly and the
+        best model found so far is returned. If the budget is exhausted during
+        setup, before the first generation runs, a
+        :class:`~scoredrulesets.FitBudgetExceededError` is raised instead, since
+        no meaningful model exists yet.
     min_max_weight : float
         If > 0, prefilters atom candidates by their maximal class-balanced
         weight on training data. Higher values reduce the search space.
@@ -370,6 +373,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         stale = 0
         _deadline = self._fit_deadline_
         gen_ran = 0
+        evolved_generations = 0
 
         for gen in range(max(1, self.generations)):
             gen_ran = gen + 1
@@ -397,6 +401,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
             # NSGA-II environmental selection
             combined = pop + offspring
             pop = _nsga2_select(combined, self.population_size)
+            evolved_generations += 1
 
             # Early stopping: track Pareto-front improvement
             front = _fast_nondominated_sort(pop)[0]
@@ -411,6 +416,15 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                     break
 
         # ---------- Select best individual ----------
+        # If the fit budget was exhausted during setup (atom pool / seeding /
+        # initial evaluation) the evolutionary search never ran a single
+        # generation.  In that case no meaningful model exists, so we surface a
+        # clear timeout instead of returning a degenerate initial individual.
+        if evolved_generations == 0:
+            raise FitBudgetExceededError(
+                "max_fit_seconds exhausted during setup before the first "
+                "generation; the estimator is not viable within this budget."
+            )
         best = self._select_best(pop)
 
         # ---------- Post-hoc compaction ----------

@@ -43,6 +43,7 @@ from .estimators.atom_selection import (
     register_atom_selection_strategy,
 )
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
+from .estimators._time_budget import FitBudgetExceededError
 from .formatting import format_ruleset_latex, format_ruleset_markdown, format_ruleset_table
 from .io import dump_ruleset_json, dump_ruleset_latex, dump_ruleset_markdown, load_ruleset_json
 from .preprocessing import BorutaSelector, build_feature_selector, build_preprocessing_pipeline
@@ -74,6 +75,7 @@ __all__ = [
     "RuleKitNativeClassifier",
     "ScoredRuleSetClassifier",
     "ScoredRuleSetRegressor",
+    "FitBudgetExceededError",
     "is_atom_selection_strategy_available",
     "aggregate_benchmark_results",
     "aggregated_results_as_dicts",

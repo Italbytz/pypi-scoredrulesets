@@ -173,8 +173,15 @@ def test_removed_rulegp2_backend_raises_on_fit():
         clf.fit(X, y)
 
 
-def test_rulensga2_max_fit_seconds_stops_cleanly(monkeypatch):
-    """The GP loop must abort on the time budget and still return a model."""
+def test_rulensga2_max_fit_seconds_raises_on_setup_timeout(monkeypatch):
+    """A budget too small for even one generation must raise, not return a model.
+
+    When ``max_fit_seconds`` is exhausted during setup (before the evolutionary
+    search runs a single generation) the estimator is not viable within the
+    budget, so it surfaces a clear timeout instead of a degenerate model.
+    """
+    from scoredrulesets import FitBudgetExceededError
+
     X, y = load_iris(return_X_y=True)
 
     ticks = iter(float(i) for i in range(10_000))
@@ -187,11 +194,7 @@ def test_rulensga2_max_fit_seconds_stops_cleanly(monkeypatch):
         max_fit_seconds=0.5,
         random_state=0,
     )
-    clf.fit(X, y)
+    with pytest.raises(FitBudgetExceededError):
+        clf.fit(X, y)
 
-    ruleset = clf.to_ruleset()
-    # A valid best-so-far model is returned even though the budget expired
-    # before/at the first generation.
-    assert ruleset.metadata["source"] == "rulensga2"
-    assert clf.predict(X[:5]).shape == (5,)
 

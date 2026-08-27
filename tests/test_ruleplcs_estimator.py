@@ -115,7 +115,15 @@ def test_ruleplcs_registered_strategy_requires_positive_top_k():
         RulePLCSClassifier(atom_preselection_strategy="top_c2_private_ut")
 
 
-def test_ruleplcs_max_fit_seconds_stops_cleanly(monkeypatch):
+def test_ruleplcs_max_fit_seconds_raises_on_setup_timeout(monkeypatch):
+    """A budget too small for even one rule search must raise, not return a model.
+
+    When ``max_fit_seconds`` is exhausted during setup (before the rule-learning
+    GA runs even once) no meaningful rule exists, so the estimator surfaces a
+    clear timeout instead of a degenerate default-class-only model.
+    """
+    from scoredrulesets import FitBudgetExceededError
+
     X, y = load_iris(return_X_y=True)
 
     ticks = iter(float(i) for i in range(1000))
@@ -129,10 +137,6 @@ def test_ruleplcs_max_fit_seconds_stops_cleanly(monkeypatch):
         max_fit_seconds=0.5,
         random_state=0,
     )
-    clf.fit(X, y)
-
-    ruleset = clf.to_ruleset()
-    assert ruleset.metadata["max_fit_seconds"] == 0.5
-    assert ruleset.metadata["n_rules"] == 0
-    assert any(rule.rule_id == "default" for rule in ruleset.rules)
+    with pytest.raises(FitBudgetExceededError):
+        clf.fit(X, y)
 

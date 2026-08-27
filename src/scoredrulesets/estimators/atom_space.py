@@ -320,8 +320,17 @@ def build_ruleplcs_feature_info(
     X: np.ndarray,
     low_cardinality_threshold: int,
     strategy: RulePLCSFeatureTypingStrategy = "auto_low_cardinality",
+    deadline: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Build RulePLCS feature metadata with low-cardinality category heuristic."""
+    """Build RulePLCS feature metadata with low-cardinality category heuristic.
+
+    When ``deadline`` (an absolute monotonic timestamp) is supplied and it is
+    reached before all features have been analysed, a
+    :class:`FitBudgetExceededError` is raised: the feature-space setup could not
+    finish within the fit-time budget, so no viable model can be built.
+    """
+    from ._time_budget import FitBudgetExceededError, deadline_reached
+
     if strategy not in (
         "auto_low_cardinality",
         "all_numeric",
@@ -335,6 +344,12 @@ def build_ruleplcs_feature_info(
 
     info: list[dict[str, Any]] = []
     for fi in range(X.shape[1]):
+        if deadline is not None and (fi & 0xFF) == 0 and deadline_reached(deadline):
+            raise FitBudgetExceededError(
+                "max_fit_seconds exhausted while building the RulePLCS feature "
+                f"space (analysed {fi} of {X.shape[1]} features); the estimator "
+                "is not viable within this budget."
+            )
         col = X[:, fi]
         unique_vals = np.unique(col)
         n_unique = len(unique_vals)

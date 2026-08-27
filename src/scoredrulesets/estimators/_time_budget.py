@@ -21,7 +21,28 @@ from __future__ import annotations
 
 import time
 
-__all__ = ["resolve_deadline", "deadline_reached", "remaining_seconds"]
+__all__ = [
+    "resolve_deadline",
+    "deadline_reached",
+    "remaining_seconds",
+    "FitBudgetExceededError",
+]
+
+
+class FitBudgetExceededError(TimeoutError):
+    """Raised when ``max_fit_seconds`` is exhausted during the setup phase.
+
+    The setup phase covers everything that happens before the search has
+    produced its first evaluated candidate solution (data preparation, atom /
+    feature-space construction, initial population seeding).  If the budget runs
+    out here, no meaningful model exists yet, so returning a fitted-but-degenerate
+    estimator would be misleading.  Estimators therefore raise this error instead;
+    callers should treat it as a timeout (the estimator is not viable within the
+    requested budget).  Once the search has produced at least one evaluated
+    solution, estimators stop cleanly and return the best model found so far
+    rather than raising.
+    """
+
 
 
 def resolve_deadline(max_fit_seconds: float | None) -> float | None:
