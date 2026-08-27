@@ -584,19 +584,30 @@ def _run_ga(
     # Create ILAS strata
     strata = _ilas_strata(rng, y, n_strata)
 
-    # Initialise population
+    # Initialise population.  ``_smart_init`` scans the whole feature space per
+    # individual, so on very wide inputs (e.g. 100k features) this setup alone
+    # can dominate the fit time.  Honour the deadline per individual so the GA
+    # stops promptly instead of overrunning the hard time cap.
     population: list[_Individual] = []
     for _ in range(population_size):
+        if deadline_reached(fit_deadline):
+            break
         tc = int(rng.choice(target_classes))
         ind = _smart_init(rng, X, y, len(feature_info), feature_info,
                           tc, prob_include, prob_one,
                           allowed_feature_indices=allowed_feature_indices)
         population.append(ind)
 
+    if not population:
+        # Budget exhausted before a single individual could be created.
+        return _Individual(predicates=[], class_value=int(target_classes[0]))
+
     # Evaluate on first stratum
     stratum_idx = strata[0]
     X_w, y_w = X[stratum_idx], y[stratum_idx]
     for ind in population:
+        if deadline_reached(fit_deadline):
+            break
         _evaluate(ind, X_w, y_w, feature_info, coverage_break, coverage_ratio,
                   0.0, False)
 

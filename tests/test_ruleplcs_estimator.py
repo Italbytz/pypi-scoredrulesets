@@ -140,3 +140,47 @@ def test_ruleplcs_max_fit_seconds_raises_on_setup_timeout(monkeypatch):
     with pytest.raises(FitBudgetExceededError):
         clf.fit(X, y)
 
+
+def test_ruleplcs_run_ga_stops_during_population_setup():
+    """A deadline crossed inside a GA run must stop cleanly, not overrun.
+
+    ``_smart_init`` scans the whole feature space per individual, so on wide
+    inputs the population setup can dominate the fit time.  When the deadline is
+    already in the past, ``_run_ga`` must honour it during setup and return a
+    valid individual instead of building the full population.
+    """
+    from scoredrulesets.estimators.ruleplcs import _run_ga
+
+    X, y = load_iris(return_X_y=True)
+    X = X.astype(float)
+    y = y.astype(int)
+    classes = np.unique(y)
+    feature_info = RulePLCSClassifier()._build_feature_info(X)
+
+    rng = np.random.default_rng(0)
+    past_deadline = time_budget_module.time.monotonic() - 1.0
+
+    rule = _run_ga(
+        rng, X, y, feature_info, classes, None,
+        population_size=50,
+        n_iterations=20,
+        tournament_size=3,
+        crossover_prob=0.6,
+        mutation_prob=0.3,
+        prob_generalize=0.5,
+        prob_specialize=0.5,
+        prob_include=0.5,
+        prob_one=0.5,
+        coverage_break=0.1,
+        coverage_ratio=0.9,
+        mdl_initial_ratio=0.25,
+        mdl_activate_iter=5,
+        mdl_relax_factor=0.9,
+        n_strata=2,
+        allowed_feature_indices=None,
+        fit_deadline=past_deadline,
+    )
+
+    assert rule is not None
+    assert int(rule.class_value) in set(int(c) for c in classes)
+
