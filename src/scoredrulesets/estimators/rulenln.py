@@ -31,7 +31,11 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
-from ._time_budget import deadline_reached, resolve_deadline
+from ._time_budget import (
+    FitBudgetExceededError,
+    deadline_reached,
+    resolve_deadline,
+)
 from .atom_space import NLNThresholdStrategy
 from .atom_space import binarize_with_thresholds, compute_nln_thresholds
 from .base import BaseRuleSetEstimator
@@ -115,9 +119,12 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
     temperature : float
         Scaling factor for class logits during training (lower → sharper).
     max_fit_seconds : float | None
-        Maximum wall-clock runtime for training in seconds. If set, training
-        stops cleanly once the budget is exhausted and keeps the best
-        validation parameters found so far.
+        Maximum wall-clock runtime for training in seconds. Once at least one
+        gradient step has run, training stops cleanly when the budget is
+        exhausted and keeps the best validation parameters found so far. If the
+        budget is exhausted during setup, before a single optimization step
+        runs, a :class:`~scoredrulesets.FitBudgetExceededError` is raised
+        instead, since no meaningful model exists yet.
     random_state : int | None
         Seed for reproducibility.
     """
@@ -260,6 +267,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         # --- training loop ---------------------------------------------------
         best_f1 = -1.0
         patience_counter = 0
+        trained = False
         best_params = (W_conj.copy(), b_conj.copy(), W_score.copy(), b_score.copy())
 
         N_train = len(y_train)
@@ -312,6 +320,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
 
                 # Ensure params_list references stay current
                 W_conj, b_conj, W_score, b_score = params_list
+                trained = True
 
             # --- early stopping on validation ---------------------------------
             val_logits, _ = self._forward(P_val, W_conj, b_conj, W_score, b_score)
@@ -326,6 +335,17 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
                 patience_counter += 1
                 if patience_counter >= self.early_stopping_rounds:
                     break
+
+        # If the budget was exhausted during setup (proposition construction and
+        # the train/validation split) not a single gradient step ran.  In that
+        # case only the random initialization exists, so we surface a clear
+        # timeout instead of returning a degenerate untrained model.
+        if not trained:
+            raise FitBudgetExceededError(
+                "max_fit_seconds exhausted during setup before the first "
+                "optimization step; the estimator is not viable within this "
+                "budget."
+            )
 
         # --- store best weights and extract rules ----------------------------
         self._W_conj_, self._b_conj_, self._W_score_, self._b_score_ = best_params

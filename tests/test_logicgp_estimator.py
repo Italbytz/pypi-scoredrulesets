@@ -288,10 +288,10 @@ def test_benchmarking_estimator_specs_include_logicgp():
 # Time budget (max_fit_seconds)
 # ---------------------------------------------------------------------------
 
-def test_logicgp_max_fit_seconds_stops_cleanly(monkeypatch):
-    """The GP loop must abort on the time budget and still return a model."""
+def test_logicgp_max_fit_seconds_raises_on_setup_timeout(monkeypatch):
+    """A budget too small for even one generation must raise, not return a model."""
     import scoredrulesets.estimators._time_budget as time_budget_module
-    from scoredrulesets import LogicGPClassifier
+    from scoredrulesets import FitBudgetExceededError, LogicGPClassifier
 
     X, y = _make_simple_data()
 
@@ -308,11 +308,8 @@ def test_logicgp_max_fit_seconds_stops_cleanly(monkeypatch):
         max_fit_seconds=0.5,
         random_state=0,
     )
-    clf.fit(X, y)
-
-    ruleset = clf.to_ruleset()
-    assert ruleset.metadata["source"] == "logicgp"
-    assert clf.predict(X[:5]).shape == (5,)
+    with pytest.raises(FitBudgetExceededError):
+        clf.fit(X, y)
 
 
 

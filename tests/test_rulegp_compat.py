@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from scoredrulesets import ScoredRuleSetClassifier
 
@@ -166,11 +167,12 @@ def test_rulegp_supports_shortest_zero_train_mcr_mode():
     assert clf.to_ruleset().metadata["model_selection"] == "shortest_zero_train_mcr"
 
 
-def test_rulegp_max_fit_seconds_stops_cleanly(monkeypatch):
-    """The GP loop must abort on the time budget and still return a model."""
+def test_rulegp_max_fit_seconds_raises_on_setup_timeout(monkeypatch):
+    """A budget too small for even one generation must raise, not return a model."""
     import scoredrulesets.estimators._time_budget as time_budget_module
     from sklearn.datasets import load_iris
 
+    from scoredrulesets import FitBudgetExceededError
     from scoredrulesets.estimators.rulegp import RuleGPClassifier
 
     X, y = load_iris(return_X_y=True)
@@ -185,9 +187,6 @@ def test_rulegp_max_fit_seconds_stops_cleanly(monkeypatch):
         max_fit_seconds=0.5,
         random_state=0,
     )
-    clf.fit(X, y)
-
-    ruleset = clf.to_ruleset()
-    assert ruleset.metadata["source"] == "rulegp"
-    assert clf.predict(X[:5]).shape == (5,)
+    with pytest.raises(FitBudgetExceededError):
+        clf.fit(X, y)
 

@@ -52,6 +52,7 @@ from .atom_selection import (
 )
 from .base import BaseRuleSetEstimator
 from ._split_utils import distribution_to_scores
+from ._time_budget import FitBudgetExceededError
 
 
 # ---------------------------------------------------------------------------
@@ -576,9 +577,12 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
     temperature : float
         Temperature for softmax aggregation.
     max_fit_seconds : float | None
-        Maximum wall-clock runtime for the complete fit in seconds. If set,
-        sequential covering stops cleanly once the budget is exhausted and the
-        induced rules so far are returned.
+        Maximum wall-clock runtime for the complete fit in seconds. Once at
+        least one rule has been induced, sequential covering stops cleanly when
+        the budget is exhausted and the induced rules so far are returned. If
+        the budget is exhausted during setup, before a single rule is induced,
+        a :class:`~scoredrulesets.FitBudgetExceededError` is raised instead,
+        since no meaningful model exists yet.
     random_state : int | None
         Random seed for reproducibility.
     """
@@ -813,6 +817,20 @@ class RuleKitNativeClassifier(BaseRuleSetEstimator):
                 # If this rule didn't cover any new positives, stop
                 if not positive_covered.any():
                     break
+
+        # If the budget was exhausted during setup (feature discretization and
+        # atom preselection) before a single rule could be induced, no
+        # meaningful model exists.  Surface a clear timeout instead of returning
+        # a degenerate default-only rule set.
+        if (
+            not induced_rules
+            and fit_deadline is not None
+            and time.monotonic() >= fit_deadline
+        ):
+            raise FitBudgetExceededError(
+                "max_fit_seconds exhausted during setup before the first rule "
+                "was induced; the estimator is not viable within this budget."
+            )
 
         # ---- Build ScoredRuleSet ----
         rules: list[Rule] = []

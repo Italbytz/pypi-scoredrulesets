@@ -54,7 +54,11 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
-from ._time_budget import deadline_reached, resolve_deadline
+from ._time_budget import (
+    FitBudgetExceededError,
+    deadline_reached,
+    resolve_deadline,
+)
 from .atom_space import LogicGPEncodingStrategy
 from .atom_space import discretize_logicgp_features
 from .base import BaseRuleSetEstimator
@@ -864,11 +868,14 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         Values > 0 are only recommended for large datasets (n >= 200).
     max_fit_seconds : float or None
         Maximum wall-clock runtime for the complete fit in seconds. The budget
-        covers data setup, the GP loop and final model selection. If set,
-        evolution stops cleanly once the budget is exhausted and the best model
-        found so far is returned. ``None`` (default) disables the time limit.
-        In benchmarks, use a value below the outer timeout (e.g. 240 with a
-        300s timeout).
+        covers data setup, the GP loop and final model selection. Once at least
+        one generation has evolved, evolution stops cleanly and the best model
+        found so far is returned. If the budget is exhausted during setup,
+        before the first generation runs, a
+        :class:`~scoredrulesets.FitBudgetExceededError` is raised instead, since
+        no meaningful model exists yet. ``None`` (default) disables the time
+        limit. In benchmarks, use a value below the outer timeout (e.g. 240
+        with a 300s timeout).
     random_state : int or None
     """
 
@@ -1435,10 +1442,12 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         # Time budget for early stopping (absolute deadline set in fit()).
         _deadline = getattr(self, "_fit_deadline_", None)
 
+        completed_generations = 0
         for _gen in range(self.max_generations):
             # Check time budget.
             if deadline_reached(_deadline):
                 break
+            completed_generations += 1
 
             # ------------------------------------------------------------------
             # Generate new individuals (n_adaptations_per_gen items).
@@ -1518,6 +1527,17 @@ class LogicGPClassifier(BaseRuleSetEstimator):
 
             if stagnation_count >= self.stagnation_generations:
                 break
+
+        # If the budget was exhausted during setup (building the search space
+        # and evaluating the initial population) the evolutionary search never
+        # ran a single generation.  In that case no meaningful model exists, so
+        # we surface a clear timeout instead of returning a degenerate initial
+        # individual.
+        if completed_generations == 0:
+            raise FitBudgetExceededError(
+                "max_fit_seconds exhausted during setup before the first "
+                "generation; the estimator is not viable within this budget."
+            )
 
         # ------------------------------------------------------------------
         # Final model selection
@@ -1700,7 +1720,9 @@ class GPASClassifier(LogicGPClassifier):
         Fraction of training data reserved for final model selection.
         ``0`` (default) disables the split.
     max_fit_seconds : float or None
-        Time budget for the GP loop in seconds. ``None`` = no limit.
+        Time budget for the GP loop in seconds. ``None`` = no limit. If the
+        budget is exhausted during setup before the first generation runs, a
+        :class:`~scoredrulesets.FitBudgetExceededError` is raised.
     model_selection : str or callable
         Final model selection strategy.
         Built-ins include ``"paper"`` and ``"shortest_zero_train_mcr"``.

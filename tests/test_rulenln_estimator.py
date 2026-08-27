@@ -124,7 +124,9 @@ class TestRuleNLNClassifier:
         print(f"\n[NLN native] Breast Cancer F1={f1:.4f}")
         assert f1 > 0.3, f"F1 too low on breast cancer: {f1:.4f}"
 
-    def test_max_fit_seconds_stops_cleanly(self, monkeypatch):
+    def test_max_fit_seconds_raises_on_setup_timeout(self, monkeypatch):
+        from scoredrulesets import FitBudgetExceededError
+
         X_train, _, y_train, _ = _iris_split()
         ticks = iter(float(i) for i in range(2000))
         monkeypatch.setattr(time_budget_module.time, "monotonic", lambda: next(ticks))
@@ -135,10 +137,8 @@ class TestRuleNLNClassifier:
             max_fit_seconds=0.5,
             random_state=0,
         )
-        clf.fit(X_train, y_train)
-
-        ruleset = clf.to_ruleset()
-        assert ruleset.metadata["max_fit_seconds"] == 0.5
+        with pytest.raises(FitBudgetExceededError):
+            clf.fit(X_train, y_train)
 
 
 # ---------------------------------------------------------------------------

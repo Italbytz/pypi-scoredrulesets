@@ -29,7 +29,11 @@ from .atom_selection import (
     select_signatures_by_strategy,
     signature_key,
 )
-from ._time_budget import deadline_reached, resolve_deadline
+from ._time_budget import (
+    FitBudgetExceededError,
+    deadline_reached,
+    resolve_deadline,
+)
 from .atom_space import NativeAtomSpaceStrategy
 from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
@@ -930,9 +934,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         _deadline = getattr(self, "_fit_deadline_", None)
         zero_mcr_target_generation: int | None = None
 
+        completed_generations = 0
         for generation_idx in range(self.max_generations):
             if deadline_reached(_deadline):
                 break
+            completed_generations += 1
 
             new_rs: list[_RuleSet2] = []
             for i in range(n_adapt):
@@ -1028,6 +1034,17 @@ class RuleGPClassifier(BaseRuleSetEstimator):
 
             if stagnation >= self.stagnation_generations:
                 break
+
+        # If the budget was exhausted during setup (building the atom pool and
+        # evaluating the initial population) the evolutionary search never ran a
+        # single generation.  In that case no meaningful model exists, so we
+        # surface a clear timeout instead of returning a degenerate initial
+        # rule set.
+        if completed_generations == 0:
+            raise FitBudgetExceededError(
+                "max_fit_seconds exhausted during setup before the first "
+                "generation; the estimator is not viable within this budget."
+            )
 
         if self.model_selection == "best_f1":
             best = _select_model_best_f1(all_candidates)

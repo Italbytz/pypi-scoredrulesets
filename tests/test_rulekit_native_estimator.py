@@ -108,7 +108,9 @@ def test_rulekit_native_accepts_registered_custom_atom_selection_strategy():
     assert ruleset.metadata.get("atom_preselection_strategy") == "first_k_unit_test"
 
 
-def test_rulekit_native_max_fit_seconds_stops_cleanly(monkeypatch):
+def test_rulekit_native_max_fit_seconds_raises_on_setup_timeout(monkeypatch):
+    from scoredrulesets import FitBudgetExceededError
+
     X, y = _make_dataset(seed=7)
     ticks = iter(float(i) for i in range(2000))
     monkeypatch.setattr(rulekit_native_module.time, "monotonic", lambda: next(ticks))
@@ -119,9 +121,5 @@ def test_rulekit_native_max_fit_seconds_stops_cleanly(monkeypatch):
         max_fit_seconds=0.5,
         random_state=0,
     )
-    clf.fit(X, y)
-    ruleset = clf.to_ruleset()
-
-    assert ruleset.metadata is not None
-    assert ruleset.metadata.get("max_fit_seconds") == 0.5
-    assert len(ruleset.rules) >= 1
+    with pytest.raises(FitBudgetExceededError):
+        clf.fit(X, y)
