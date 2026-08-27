@@ -22,7 +22,6 @@ Only numpy is required (no PyTorch / TensorFlow dependency).
 
 from __future__ import annotations
 
-import time
 import numpy as np
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
@@ -32,6 +31,7 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from ._time_budget import deadline_reached, resolve_deadline
 from .atom_space import NLNThresholdStrategy
 from .atom_space import binarize_with_thresholds, compute_nln_thresholds
 from .base import BaseRuleSetEstimator
@@ -167,6 +167,9 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         n_classes = len(self.classes_)
         rng = np.random.default_rng(self.random_state)
 
+        # Absolute fit-time deadline (covers setup + training loop).
+        fit_deadline = resolve_deadline(self.max_fit_seconds)
+
         # --- class mapping --------------------------------------------------
         class_to_idx = {label: idx for idx, label in enumerate(self.classes_)}
         y_idx = np.array([class_to_idx[v] for v in y_arr], dtype=int)
@@ -266,12 +269,9 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         # complex conjunctions (needed for MUX-like and overlapping-rule
         # problems) can establish before sparsification kicks in.
         warmup_epochs = max(1, int(self.epochs * 0.4))
-        fit_deadline = None
-        if self.max_fit_seconds is not None:
-            fit_deadline = time.monotonic() + float(self.max_fit_seconds)
 
         for epoch in range(self.epochs):
-            if fit_deadline is not None and time.monotonic() >= fit_deadline:
+            if deadline_reached(fit_deadline):
                 break
 
             perm = rng.permutation(N_train)
@@ -280,7 +280,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
             l1_factor = min(1.0, epoch / warmup_epochs)
 
             for start in range(0, N_train, bs):
-                if fit_deadline is not None and time.monotonic() >= fit_deadline:
+                if deadline_reached(fit_deadline):
                     break
 
                 idx = perm[start : start + bs]

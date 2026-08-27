@@ -164,3 +164,30 @@ def test_rulegp_supports_shortest_zero_train_mcr_mode():
     clf.fit(X, y)
 
     assert clf.to_ruleset().metadata["model_selection"] == "shortest_zero_train_mcr"
+
+
+def test_rulegp_max_fit_seconds_stops_cleanly(monkeypatch):
+    """The GP loop must abort on the time budget and still return a model."""
+    import scoredrulesets.estimators._time_budget as time_budget_module
+    from sklearn.datasets import load_iris
+
+    from scoredrulesets.estimators.rulegp import RuleGPClassifier
+
+    X, y = load_iris(return_X_y=True)
+
+    ticks = iter(float(i) for i in range(10_000))
+    monkeypatch.setattr(time_budget_module.time, "monotonic", lambda: next(ticks))
+
+    clf = RuleGPClassifier(
+        max_generations=1000,
+        stagnation_generations=1000,
+        population_size=30,
+        max_fit_seconds=0.5,
+        random_state=0,
+    )
+    clf.fit(X, y)
+
+    ruleset = clf.to_ruleset()
+    assert ruleset.metadata["source"] == "rulegp"
+    assert clf.predict(X[:5]).shape == (5,)
+

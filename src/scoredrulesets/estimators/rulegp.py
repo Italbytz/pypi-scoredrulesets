@@ -9,7 +9,6 @@ while using atom-based rules and native numeric/categorical handling.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Any, Literal
@@ -30,6 +29,7 @@ from .atom_selection import (
     select_signatures_by_strategy,
     signature_key,
 )
+from ._time_budget import deadline_reached, resolve_deadline
 from .atom_space import NativeAtomSpaceStrategy
 from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
@@ -412,6 +412,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             )
         self.classes_ = unique_labels(y_valid)
         n_classes = len(self.classes_)
+
+        # Absolute fit-time deadline (covers setup + GP loop). ``None`` = no limit.
+        self._fit_deadline_ = resolve_deadline(self.max_fit_seconds)
 
         self._rng_ = np.random.default_rng(self.random_state)
         class_to_idx = {label: idx for idx, label in enumerate(self.classes_)}
@@ -924,11 +927,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         ]
 
         n_adapt = max(1, self.n_adaptations_per_gen)
-        t0 = time.monotonic()
+        _deadline = getattr(self, "_fit_deadline_", None)
         zero_mcr_target_generation: int | None = None
 
         for generation_idx in range(self.max_generations):
-            if self.max_fit_seconds is not None and (time.monotonic() - t0) >= self.max_fit_seconds:
+            if deadline_reached(_deadline):
                 break
 
             new_rs: list[_RuleSet2] = []
@@ -962,6 +965,10 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     self.objective_mode,
                 )
                 new_eval.append((rs, fit))
+                # Stop mid-generation once the budget is exhausted; the rule set
+                # just evaluated is retained so no work is wasted.
+                if deadline_reached(_deadline):
+                    break
 
             combined = evaluated + new_eval
             evaluated = _pareto_front_rlcw2(combined)

@@ -26,7 +26,6 @@ Key elements from BioHEL:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import time
 from typing import Any
 
 import numpy as np
@@ -43,6 +42,7 @@ from .atom_selection import (
 )
 from .atom_space import RulePLCSFeatureTypingStrategy
 from .atom_space import build_ruleplcs_feature_info
+from ._time_budget import deadline_reached, resolve_deadline
 from .base import BaseRuleSetEstimator
 
 
@@ -610,7 +610,7 @@ def _run_ga(
     mdl_active = False
 
     for iteration in range(n_iterations):
-        if fit_deadline is not None and time.monotonic() >= fit_deadline:
+        if deadline_reached(fit_deadline):
             break
 
         # Windowing: pick stratum
@@ -860,6 +860,9 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
 
         rng = np.random.default_rng(self.random_state)
 
+        # Absolute fit-time deadline (covers setup + iterative rule learning).
+        fit_deadline = resolve_deadline(self.max_fit_seconds)
+
         # Build feature info
         feature_info = self._build_feature_info(X)
 
@@ -893,12 +896,9 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         rules: list[_Individual] = []
         remaining_mask = np.ones(len(y), dtype=bool)
         fail_count = 0
-        fit_deadline = None
-        if self.max_fit_seconds is not None:
-            fit_deadline = time.monotonic() + float(self.max_fit_seconds)
 
         for _rule_idx in range(self.max_rules):
-            if fit_deadline is not None and time.monotonic() >= fit_deadline:
+            if deadline_reached(fit_deadline):
                 break
 
             if np.sum(remaining_mask) == 0:
@@ -914,7 +914,7 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
 
             best_rule: _Individual | None = None
             for _rep in range(self.n_repetitions):
-                if fit_deadline is not None and time.monotonic() >= fit_deadline:
+                if deadline_reached(fit_deadline):
                     break
 
                 rule = _run_ga(

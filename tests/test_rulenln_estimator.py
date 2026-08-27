@@ -8,7 +8,7 @@ from sklearn.datasets import load_iris, load_wine, load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 
-import scoredrulesets.estimators.rulenln as rulenln_module
+import scoredrulesets.estimators._time_budget as time_budget_module
 from scoredrulesets.estimators.rulenln import RuleNLNClassifier
 from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 from scoredrulesets.schema import ScoredRuleSet
@@ -127,7 +127,7 @@ class TestRuleNLNClassifier:
     def test_max_fit_seconds_stops_cleanly(self, monkeypatch):
         X_train, _, y_train, _ = _iris_split()
         ticks = iter(float(i) for i in range(2000))
-        monkeypatch.setattr(rulenln_module.time, "monotonic", lambda: next(ticks))
+        monkeypatch.setattr(time_budget_module.time, "monotonic", lambda: next(ticks))
 
         clf = RuleNLNClassifier(
             n_rules=8,

@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from sklearn.datasets import load_iris, load_breast_cancer
 
+import scoredrulesets.estimators._time_budget as time_budget_module
 from scoredrulesets import RuleNSGA2Classifier, ScoredRuleSetClassifier, register_atom_selection_strategy
 from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
@@ -170,4 +171,27 @@ def test_removed_rulegp2_backend_raises_on_fit():
     clf = ScoredRuleSetClassifier(backend="rulegp2", random_state=0)
     with pytest.raises(ValueError, match="Unknown backend"):
         clf.fit(X, y)
+
+
+def test_rulensga2_max_fit_seconds_stops_cleanly(monkeypatch):
+    """The GP loop must abort on the time budget and still return a model."""
+    X, y = load_iris(return_X_y=True)
+
+    ticks = iter(float(i) for i in range(10_000))
+    monkeypatch.setattr(time_budget_module.time, "monotonic", lambda: next(ticks))
+
+    clf = RuleNSGA2Classifier(
+        population_size=20,
+        generations=1000,
+        max_rules=6,
+        max_fit_seconds=0.5,
+        random_state=0,
+    )
+    clf.fit(X, y)
+
+    ruleset = clf.to_ruleset()
+    # A valid best-so-far model is returned even though the budget expired
+    # before/at the first generation.
+    assert ruleset.metadata["source"] == "rulensga2"
+    assert clf.predict(X[:5]).shape == (5,)
 

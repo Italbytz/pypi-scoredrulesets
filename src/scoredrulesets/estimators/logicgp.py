@@ -42,7 +42,6 @@ GP algorithm
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol, Union
 
@@ -55,6 +54,7 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
+from ._time_budget import deadline_reached, resolve_deadline
 from .atom_space import LogicGPEncodingStrategy
 from .atom_space import discretize_logicgp_features
 from .base import BaseRuleSetEstimator
@@ -863,10 +863,12 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         (mean recall) and avoids data loss.
         Values > 0 are only recommended for large datasets (n >= 200).
     max_fit_seconds : float or None
-        Maximum runtime for the GP loop in seconds. If set, evolution is
-        stopped cleanly after timeout and the best model so far is returned.
-        ``None`` (default) disables the time limit. In benchmarks, use a value
-        below the outer timeout (e.g. 240 with a 300s timeout).
+        Maximum wall-clock runtime for the complete fit in seconds. The budget
+        covers data setup, the GP loop and final model selection. If set,
+        evolution stops cleanly once the budget is exhausted and the best model
+        found so far is returned. ``None`` (default) disables the time limit.
+        In benchmarks, use a value below the outer timeout (e.g. 240 with a
+        300s timeout).
     random_state : int or None
     """
 
@@ -923,6 +925,9 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         )
         self.classes_ = unique_labels(y_valid)
         n_classes = len(self.classes_)
+
+        # Absolute fit-time deadline (covers setup + GP loop). ``None`` = no limit.
+        self._fit_deadline_ = resolve_deadline(self.max_fit_seconds)
 
         self._rng_ = np.random.default_rng(self.random_state)
 
@@ -1427,16 +1432,13 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         _MUT_OPS = self._build_mutation_ops(all_literals, n_classes)
         n_adapt = max(1, self.n_adaptations_per_gen)
 
-        # Time budget for early stopping (max_fit_seconds).
-        _gp_start_time = time.monotonic()
-        _time_budget = self.max_fit_seconds  # None = no limit
+        # Time budget for early stopping (absolute deadline set in fit()).
+        _deadline = getattr(self, "_fit_deadline_", None)
 
         for _gen in range(self.max_generations):
             # Check time budget.
-            if _time_budget is not None:
-                elapsed = time.monotonic() - _gp_start_time
-                if elapsed >= _time_budget:
-                    break
+            if deadline_reached(_deadline):
+                break
 
             # ------------------------------------------------------------------
             # Generate new individuals (n_adaptations_per_gen items).
@@ -1466,6 +1468,10 @@ class LogicGPClassifier(BaseRuleSetEstimator):
                 _compute_weights(poly, X_disc, y_idx, n_classes)
                 fit = evaluate_fn(poly, X_disc, y_idx, n_classes)
                 new_evaluated.append((poly, fit))
+                # Stop mid-generation as soon as the budget is exhausted; the
+                # individual just evaluated is kept so no work is wasted.
+                if deadline_reached(_deadline):
+                    break
 
             # ------------------------------------------------------------------
             # Pareto selection + optional population-size cap.
@@ -1542,6 +1548,11 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         for poly, fit, _ in top_hist:
             if id(poly) in seen_ids:
                 continue
+            # Once the budget is exhausted, stop re-scoring historical
+            # candidates: the final population and elite already provide a
+            # valid best-so-far model.
+            if deadline_reached(_deadline):
+                break
             seen_ids.add(id(poly))
             preds = poly.predict_classes(eval_X)
             f1 = float(_f1_score(eval_y, preds, average=f1_average, labels=labels))

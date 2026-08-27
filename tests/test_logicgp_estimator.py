@@ -284,3 +284,35 @@ def test_benchmarking_estimator_specs_include_logicgp():
     assert "wrapper_logicgp_mux_rlcw_macro" in specs
 
 
+# ---------------------------------------------------------------------------
+# Time budget (max_fit_seconds)
+# ---------------------------------------------------------------------------
+
+def test_logicgp_max_fit_seconds_stops_cleanly(monkeypatch):
+    """The GP loop must abort on the time budget and still return a model."""
+    import scoredrulesets.estimators._time_budget as time_budget_module
+    from scoredrulesets import LogicGPClassifier
+
+    X, y = _make_simple_data()
+
+    ticks = iter(float(i) for i in range(10_000))
+    monkeypatch.setattr(time_budget_module.time, "monotonic", lambda: next(ticks))
+
+    clf = LogicGPClassifier(
+        trainer="rlcw",
+        f1_averaging="macro",
+        max_generations=1000,
+        stagnation_generations=1000,
+        n_bins=3,
+        population_size=25,
+        max_fit_seconds=0.5,
+        random_state=0,
+    )
+    clf.fit(X, y)
+
+    ruleset = clf.to_ruleset()
+    assert ruleset.metadata["source"] == "logicgp"
+    assert clf.predict(X[:5]).shape == (5,)
+
+
+

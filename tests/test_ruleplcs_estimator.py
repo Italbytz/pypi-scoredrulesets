@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from sklearn.datasets import load_iris
 
-import scoredrulesets.estimators.ruleplcs as ruleplcs_module
+import scoredrulesets.estimators._time_budget as time_budget_module
 from scoredrulesets import RulePLCSClassifier, ScoredRuleSetClassifier, register_atom_selection_strategy
 from scoredrulesets.benchmarking.estimators import default_estimator_specs
 
@@ -119,7 +119,7 @@ def test_ruleplcs_max_fit_seconds_stops_cleanly(monkeypatch):
     X, y = load_iris(return_X_y=True)
 
     ticks = iter(float(i) for i in range(1000))
-    monkeypatch.setattr(ruleplcs_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(time_budget_module.time, "monotonic", lambda: next(ticks))
 
     clf = RulePLCSClassifier(
         population_size=30,
