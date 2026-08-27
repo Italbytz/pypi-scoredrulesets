@@ -579,7 +579,10 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                 top_k=int(self.atom_preselection_top_k),
             )
             top_c2_keys = {(int(fi), str(op), str(val)) for fi, op, val in selected}
+        _deadline = getattr(self, "_fit_deadline_", None)
         for spec in specs:
+            if deadline_reached(_deadline):
+                break
             fi = int(spec["idx"])
             candidates: list[_AtomGene] = []
 
@@ -659,15 +662,24 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         n_classes: int,
         rng: np.random.Generator,
     ) -> list[_Individual]:
-        """One single-rule individual per representative atom (analogous to logicGP's
-        per-literal seeding).  For each feature, picks at most 2 atoms with the
-        highest discriminative lift and creates a single-atom-rule individual.
+        """Single-rule seeds for the globally most discriminative atoms.
+
+        A few representative atoms are scored per feature by discriminative lift,
+        but only the globally top ``population_size // 2`` atoms are materialised
+        into individuals.  This bounds the number of expensive ``_refit_scores``
+        calls by the population size (independent of the feature count), analogous
+        to logicGP/rulegp seeding, and leaves room for the diverse seeds added
+        afterwards.  The scan honours the fit-time budget so huge feature spaces
+        cannot exhaust it before the GP loop starts.
         """
-        seeds: list[_Individual] = []
         class_counts = np.bincount(y, minlength=n_classes).astype(float)
         class_counts = np.maximum(class_counts, 1.0)
 
+        _deadline = getattr(self, "_fit_deadline_", None)
+        scored: list[tuple[float, _AtomGene]] = []
         for spec in specs:
+            if deadline_reached(_deadline):
+                break
             fi = spec["idx"]
             candidate_atoms: list[_AtomGene] = []
 
@@ -692,7 +704,6 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                     candidate_atoms.append(_AtomGene(fi, "==", cat))
 
             # Score atoms by discriminative lift (max class balanced-weight above uniform)
-            scored: list[tuple[float, _AtomGene]] = []
             for atom in candidate_atoms:
                 mask = self._atom_mask(atom, X)
                 support = int(mask.sum())
@@ -703,11 +714,16 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                 lift = float(balanced.max() - 1.0 / n_classes)
                 scored.append((lift, atom))
 
-            scored.sort(key=lambda x: x[0], reverse=True)
-            for _, atom in scored[:2]:  # top-2 per feature
-                ind = _Individual(rules=[_RuleGene(atoms=[atom])])
-                self._refit_scores(ind, X, y, n_classes)
-                seeds.append(ind)
+        # Keep only the globally most discriminative atoms and bound the number of
+        # seed individuals (and thus refits) by the population size.  ``key`` avoids
+        # ever comparing the un-orderable ``_AtomGene`` objects on tied lifts.
+        scored.sort(key=lambda t: t[0], reverse=True)
+        budget = max(2, self.population_size // 2)
+        seeds: list[_Individual] = []
+        for _, atom in scored[:budget]:
+            ind = _Individual(rules=[_RuleGene(atoms=[atom])])
+            self._refit_scores(ind, X, y, n_classes)
+            seeds.append(ind)
 
         return seeds
 
