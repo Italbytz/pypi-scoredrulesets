@@ -653,10 +653,21 @@ def _run_ga(
                                    prob_generalize, prob_specialize,
                                    allowed_feature_indices=allowed_feature_indices)
 
-        # Evaluate offspring
+        # Evaluate offspring.  With very wide rules (e.g. on 100k unfiltered
+        # features a rule can carry thousands of predicates) a single
+        # generation's evaluation can take tens of seconds, which would overrun
+        # the deadline that is only checked at the top of the loop.  Honour the
+        # deadline per individual and stop evolving once it is crossed, keeping
+        # the last fully evaluated best-so-far.
+        deadline_hit = False
         for ind in offspring:
+            if deadline_reached(fit_deadline):
+                deadline_hit = True
+                break
             _evaluate(ind, X_w, y_w, feature_info, coverage_break,
                       coverage_ratio, mdl_weight, mdl_active)
+        if deadline_hit:
+            break
 
         # Elitism: inject best into population if better than worst
         population = offspring
