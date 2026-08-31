@@ -22,11 +22,13 @@ NativeAtomSpaceStrategy = Literal[
     "categorical_low_cardinality_only",
     "genotype_aware",
 ]
+ContinuousThresholdStrategy = Literal["quantile_midpoint", "supervised_mdl"]
 NLNThresholdStrategy = Literal["quantile_midpoint", "quantile_only", "midpoint_only"]
 RulePLCSFeatureTypingStrategy = Literal[
     "auto_low_cardinality",
     "all_numeric",
     "all_integer_categorical",
+    "genotype_aware",
 ]
 
 
@@ -228,11 +230,109 @@ def genotype_feature_spec(fi: int, levels: list[float]) -> dict[str, Any]:
     }
 
 
+def _entropy(class_counts: np.ndarray) -> float:
+    """Shannon entropy (in bits) of a class-count vector."""
+    total = float(class_counts.sum())
+    if total <= 0.0:
+        return 0.0
+    p = class_counts[class_counts > 0] / total
+    return float(-np.sum(p * np.log2(p)))
+
+
+def fayyad_irani_cut_points(
+    x: np.ndarray,
+    y: np.ndarray,
+    max_cut_points: int | None = None,
+) -> list[float]:
+    """Supervised multi-interval discretization cut points (Fayyad & Irani, 1993).
+
+    Recursively splits the range of a continuous feature at the boundary that
+    minimizes class-information entropy, accepting a split only when it passes
+    the MDLP (minimum description length principle) stopping criterion. Returns
+    the sorted accepted cut points (empty when the feature is uninformative).
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y)
+    if x.size < 2:
+        return []
+    order = np.argsort(x, kind="mergesort")
+    xs = x[order]
+    _, y_idx = np.unique(y[order], return_inverse=True)
+    n_classes = int(y_idx.max()) + 1 if y_idx.size else 0
+    if n_classes < 2:
+        return []
+
+    cut_points: list[float] = []
+
+    def recurse(lo: int, hi: int) -> None:
+        n = hi - lo
+        if n < 2:
+            return
+        seg_x = xs[lo:hi]
+        seg_y = y_idx[lo:hi]
+        total_counts = np.bincount(seg_y, minlength=n_classes).astype(float)
+        k = int(np.count_nonzero(total_counts))
+        if k < 2:
+            return
+        ent_s = _entropy(total_counts)
+
+        best_gain = -1.0
+        best_pos = -1
+        best_left: np.ndarray | None = None
+        best_right: np.ndarray | None = None
+        left_counts = np.zeros(n_classes, dtype=float)
+        for i in range(n - 1):
+            left_counts[seg_y[i]] += 1.0
+            if seg_x[i] == seg_x[i + 1]:
+                continue
+            right_counts = total_counts - left_counts
+            n_left = i + 1
+            n_right = n - n_left
+            e = (n_left / n) * _entropy(left_counts) + (
+                n_right / n
+            ) * _entropy(right_counts)
+            gain = ent_s - e
+            if gain > best_gain:
+                best_gain = gain
+                best_pos = i
+                best_left = left_counts.copy()
+                best_right = right_counts.copy()
+
+        if best_pos < 0 or best_left is None or best_right is None:
+            return
+
+        k1 = int(np.count_nonzero(best_left))
+        k2 = int(np.count_nonzero(best_right))
+        ent_s1 = _entropy(best_left)
+        ent_s2 = _entropy(best_right)
+        delta = np.log2(3.0 ** k - 2.0) - (
+            k * ent_s - k1 * ent_s1 - k2 * ent_s2
+        )
+        threshold = (np.log2(n - 1) + delta) / n
+        if best_gain <= threshold:
+            return
+
+        cut = (seg_x[best_pos] + seg_x[best_pos + 1]) / 2.0
+        cut_points.append(float(cut))
+        split = lo + best_pos + 1
+        recurse(lo, split)
+        recurse(split, hi)
+
+    recurse(0, xs.size)
+    cuts = sorted(set(cut_points))
+    if max_cut_points is not None and len(cuts) > max_cut_points:
+        idx = np.round(np.linspace(0, len(cuts) - 1, max_cut_points)).astype(int)
+        cuts = [cuts[i] for i in sorted(set(idx.tolist()))]
+    return cuts
+
+
 def build_native_feature_specs(
     X: np.ndarray,
     max_thresholds: int | None = None,
     low_cardinality_threshold: int = 10,
     strategy: NativeAtomSpaceStrategy = "hybrid",
+    y: np.ndarray | None = None,
+    continuous_threshold_strategy: ContinuousThresholdStrategy = "quantile_midpoint",
 ) -> list[dict[str, Any]]:
     """Build per-feature specs for native atom generation."""
     if strategy not in (
@@ -246,6 +346,13 @@ def build_native_feature_specs(
             f"'{strategy}'. Choose 'hybrid', 'numeric_only', "
             "'categorical_low_cardinality_only', or 'genotype_aware'."
         )
+    if continuous_threshold_strategy not in ("quantile_midpoint", "supervised_mdl"):
+        raise ValueError(
+            "Unknown continuous threshold strategy "
+            f"'{continuous_threshold_strategy}'. Choose 'quantile_midpoint' or "
+            "'supervised_mdl'."
+        )
+    supervised = continuous_threshold_strategy == "supervised_mdl" and y is not None
 
     specs: list[dict[str, Any]] = []
     for fi in range(X.shape[1]):
@@ -257,8 +364,13 @@ def build_native_feature_specs(
                 specs.append(genotype_feature_spec(fi, levels))
                 continue
         if np.issubdtype(arr.dtype, np.number):
-            vals = np.unique(arr.astype(float))
-            if vals.size >= 2:
+            float_full = arr.astype(float)
+            vals = np.unique(float_full)
+            if supervised and vals.size >= 2:
+                thr = fayyad_irani_cut_points(
+                    float_full, y, max_cut_points=max_thresholds
+                )
+            elif vals.size >= 2:
                 if vals.size <= 20:
                     thr = ((vals[:-1] + vals[1:]) / 2.0).tolist()
                 else:
@@ -266,12 +378,23 @@ def build_native_feature_specs(
                     thr = q.astype(float).tolist()
             else:
                 thr = []
-            if max_thresholds and len(thr) > max_thresholds:
+            if not supervised and max_thresholds and len(thr) > max_thresholds:
                 idx = np.round(np.linspace(0, len(thr) - 1, max_thresholds)).astype(int)
                 thr = [thr[i] for i in idx]
 
             intervals: list[tuple[float, float]] = []
-            if vals.size >= 3:
+            if supervised and len(thr) >= 1:
+                edges = sorted(
+                    set(
+                        [float(vals.min())]
+                        + [float(t) for t in thr]
+                        + [float(vals.max())]
+                    )
+                )
+                for i in range(len(edges) - 1):
+                    if edges[i] < edges[i + 1]:
+                        intervals.append((edges[i], edges[i + 1]))
+            elif not supervised and vals.size >= 3:
                 qp = np.unique(np.quantile(vals, [0.15, 0.35, 0.5, 0.65, 0.85]))
                 for i in range(len(qp) - 1):
                     if qp[i] < qp[i + 1]:
@@ -400,11 +523,12 @@ def build_ruleplcs_feature_info(
         "auto_low_cardinality",
         "all_numeric",
         "all_integer_categorical",
+        "genotype_aware",
     ):
         raise ValueError(
             "Unknown RulePLCS feature typing strategy "
             f"'{strategy}'. Choose 'auto_low_cardinality', 'all_numeric', "
-            "or 'all_integer_categorical'."
+            "'all_integer_categorical', or 'genotype_aware'."
         )
 
     info: list[dict[str, Any]] = []
@@ -422,6 +546,8 @@ def build_ruleplcs_feature_info(
             is_cat = False
         elif strategy == "all_integer_categorical":
             is_cat = bool(np.all(col == np.round(col)))
+        elif strategy == "genotype_aware":
+            is_cat = genotype_levels(col, max_levels=low_cardinality_threshold) is not None
         else:
             is_cat = (
                 n_unique <= low_cardinality_threshold and np.all(col == np.round(col))

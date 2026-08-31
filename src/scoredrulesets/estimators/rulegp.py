@@ -34,7 +34,7 @@ from ._time_budget import (
     deadline_reached,
     resolve_deadline,
 )
-from .atom_space import NativeAtomSpaceStrategy
+from .atom_space import ContinuousThresholdStrategy, NativeAtomSpaceStrategy
 from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
 
@@ -170,12 +170,16 @@ def _build_feature_specs(
     max_thresholds: int | None = None,
     low_cardinality_threshold: int = 10,
     atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
+    y: np.ndarray | None = None,
+    continuous_threshold_strategy: ContinuousThresholdStrategy = "quantile_midpoint",
 ) -> list[dict[str, Any]]:
     return build_native_feature_specs(
         X,
         max_thresholds=max_thresholds,
         low_cardinality_threshold=low_cardinality_threshold,
         strategy=atom_space_strategy,
+        y=y,
+        continuous_threshold_strategy=continuous_threshold_strategy,
     )
 
 
@@ -342,6 +346,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         min_samples_leaf: int = 1,
         max_thresholds_per_feature: int | None = None,
         atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
+        continuous_threshold_strategy: ContinuousThresholdStrategy = "quantile_midpoint",
         atom_preselection_strategy: AtomPreselectionStrategy = "none",
         atom_preselection_top_k: int | None = None,
         feature_names: list[str] | None = None,
@@ -372,6 +377,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         self.min_samples_leaf = min_samples_leaf
         self.max_thresholds_per_feature = max_thresholds_per_feature
         self.atom_space_strategy = atom_space_strategy
+        self.continuous_threshold_strategy = continuous_threshold_strategy
         if atom_preselection_strategy not in (
             "none",
             "logicgp_singleton",
@@ -450,6 +456,8 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             X_train,
             self.max_thresholds_per_feature,
             atom_space_strategy=self.atom_space_strategy,
+            y=y_train,
+            continuous_threshold_strategy=self.continuous_threshold_strategy,
         )
         allowed_top_c2_keys: set[tuple[int, str, str]] | None = None
         if self.atom_preselection_strategy not in (
@@ -1172,6 +1180,7 @@ def _to_ruleset_rulegp(classifier: RuleGPClassifier, rs: _RuleSet2, n_classes: i
             "max_model_size": classifier.max_model_size,
             "min_max_weight": classifier.min_max_weight,
             "atom_space_strategy": classifier.atom_space_strategy,
+            "continuous_threshold_strategy": classifier.continuous_threshold_strategy,
             "atom_preselection_strategy": classifier.atom_preselection_strategy,
             "atom_preselection_top_k": classifier.atom_preselection_top_k,
         },
