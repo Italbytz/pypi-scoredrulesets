@@ -37,7 +37,7 @@ from .atom_selection import (
     select_signatures_by_strategy,
     signature_key,
 )
-from .atom_space import NativeAtomSpaceStrategy
+from .atom_space import ContinuousThresholdStrategy, NativeAtomSpaceStrategy
 from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
 
@@ -198,6 +198,8 @@ def _build_feature_specs(
     max_thresholds: int | None = None,
     low_cardinality_threshold: int = 10,
     atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
+    y: np.ndarray | None = None,
+    continuous_threshold_strategy: ContinuousThresholdStrategy = "quantile_midpoint",
 ) -> list[dict]:
     """Build per-feature specs describing the operators and values RuleGP may use.
 
@@ -215,6 +217,8 @@ def _build_feature_specs(
         max_thresholds=max_thresholds,
         low_cardinality_threshold=low_cardinality_threshold,
         strategy=atom_space_strategy,
+        y=y,
+        continuous_threshold_strategy=continuous_threshold_strategy,
     )
 
 
@@ -290,6 +294,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         min_max_weight: float = 0.0,
         max_thresholds_per_feature: int | None = None,
         atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
+        continuous_threshold_strategy: ContinuousThresholdStrategy = "quantile_midpoint",
         atom_preselection_strategy: str = "none",
         atom_preselection_top_k: int | None = None,
         random_state: int | None = None,
@@ -309,6 +314,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         self.min_max_weight = min_max_weight
         self.max_thresholds_per_feature = max_thresholds_per_feature
         self.atom_space_strategy = atom_space_strategy
+        self.continuous_threshold_strategy = continuous_threshold_strategy
         self.atom_preselection_strategy = atom_preselection_strategy
         self.atom_preselection_top_k = atom_preselection_top_k
         self.random_state = random_state
@@ -359,6 +365,8 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
             X,
             self.max_thresholds_per_feature,
             atom_space_strategy=self.atom_space_strategy,
+            y=y_idx,
+            continuous_threshold_strategy=self.continuous_threshold_strategy,
         )
         self._atom_pool_ = self._build_atom_pool(specs, X_train, y_train, n_classes)
 
@@ -1227,6 +1235,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                 "enable_compaction": self.enable_compaction,
                 "min_max_weight": self.min_max_weight,
                 "atom_space_strategy": self.atom_space_strategy,
+                "continuous_threshold_strategy": self.continuous_threshold_strategy,
                 "atom_preselection_strategy": self.atom_preselection_strategy,
                 "atom_preselection_top_k": self.atom_preselection_top_k,
                 "max_rules": self.max_rules,

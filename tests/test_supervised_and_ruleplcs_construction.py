@@ -105,6 +105,27 @@ def test_rulegp_supervised_mdl_fits_and_predicts():
     assert set(np.unique(pred)).issubset({0, 1})
 
 
+def test_rulensga2_supervised_mdl_fits_and_records_metadata():
+    from scoredrulesets.estimators.rulensga2 import RuleNSGA2Classifier
+
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(80, 4))
+    y = (X[:, 0] + X[:, 1] > 0).astype(int)
+
+    clf = RuleNSGA2Classifier(
+        population_size=20,
+        generations=10,
+        continuous_threshold_strategy="supervised_mdl",
+        min_samples_leaf=1,
+        random_state=0,
+    )
+    clf.fit(X, y)
+    pred = clf.predict(X)
+    assert pred.shape == (80,)
+    assert set(np.unique(pred)).issubset({0, 1})
+    assert clf.to_ruleset().metadata["continuous_threshold_strategy"] == "supervised_mdl"
+
+
 def test_ruleplcs_feature_info_genotype_aware_marks_snp_categorical():
     # Feature 0: SNP genotype {0,1,2}. Feature 1: continuous.
     rng = np.random.default_rng(0)
