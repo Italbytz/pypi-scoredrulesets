@@ -16,7 +16,12 @@ from sklearn.preprocessing import KBinsDiscretizer
 
 FeatureKind = Literal["num", "cat", "both"]
 LogicGPEncodingStrategy = Literal["auto_low_cardinality", "force_numeric_bins"]
-NativeAtomSpaceStrategy = Literal["hybrid", "numeric_only", "categorical_low_cardinality_only"]
+NativeAtomSpaceStrategy = Literal[
+    "hybrid",
+    "numeric_only",
+    "categorical_low_cardinality_only",
+    "genotype_aware",
+]
 NLNThresholdStrategy = Literal["quantile_midpoint", "quantile_only", "midpoint_only"]
 RulePLCSFeatureTypingStrategy = Literal[
     "auto_low_cardinality",
@@ -173,6 +178,56 @@ def discretize_logicgp_features(
     return X_disc, fitted_binners, cat_masks_arr
 
 
+def genotype_levels(
+    col: np.ndarray,
+    max_levels: int = 10,
+) -> list[float] | None:
+    """Return sorted integer levels if ``col`` is an ordinal count/genotype feature.
+
+    A feature qualifies when it is numeric, non-negative, integer-valued, and has
+    between two and ``max_levels`` distinct levels. The canonical case is the SNP
+    genotype encoding with levels ``{0, 1, 2}``; more generally this covers small
+    ordinal count features. Returns ``None`` when the feature does not qualify.
+    """
+    arr = np.asarray(col)
+    try:
+        float_col = arr.astype(float)
+    except (ValueError, TypeError):
+        return None
+    if float_col.size == 0 or not np.all(np.isfinite(float_col)):
+        return None
+    if np.any(float_col < 0):
+        return None
+    if not np.all(float_col == np.round(float_col)):
+        return None
+    levels = np.unique(float_col)
+    if levels.size < 2 or levels.size > max_levels:
+        return None
+    return levels.tolist()
+
+
+def genotype_feature_spec(fi: int, levels: list[float]) -> dict[str, Any]:
+    """Build a compact genetic-model atom spec for an ordinal genotype feature.
+
+    For sorted integer ``levels`` the thresholds are the half-integer midpoints
+    between consecutive levels. For the canonical genotype encoding ``{0, 1, 2}``
+    this yields thresholds ``[0.5, 1.5]``, so the expanded atom pool contains
+    ``> 0.5`` (dominant model, carrier of the minor allele, ``x >= 1``) and
+    ``> 1.5`` (recessive model, homozygous minor, ``x == 2``) together with their
+    complements, capturing the additive structure. No interval or subset atoms
+    are emitted, keeping the per-feature pool minimal.
+    """
+    thresholds = [
+        (levels[i] + levels[i + 1]) / 2.0 for i in range(len(levels) - 1)
+    ]
+    return {
+        "idx": fi,
+        "kind": "num",
+        "thresholds": thresholds,
+        "intervals": [],
+    }
+
+
 def build_native_feature_specs(
     X: np.ndarray,
     max_thresholds: int | None = None,
@@ -180,17 +235,27 @@ def build_native_feature_specs(
     strategy: NativeAtomSpaceStrategy = "hybrid",
 ) -> list[dict[str, Any]]:
     """Build per-feature specs for native atom generation."""
-    if strategy not in ("hybrid", "numeric_only", "categorical_low_cardinality_only"):
+    if strategy not in (
+        "hybrid",
+        "numeric_only",
+        "categorical_low_cardinality_only",
+        "genotype_aware",
+    ):
         raise ValueError(
             "Unknown native atom-space strategy "
-            f"'{strategy}'. Choose 'hybrid', 'numeric_only', or "
-            "'categorical_low_cardinality_only'."
+            f"'{strategy}'. Choose 'hybrid', 'numeric_only', "
+            "'categorical_low_cardinality_only', or 'genotype_aware'."
         )
 
     specs: list[dict[str, Any]] = []
     for fi in range(X.shape[1]):
         col = X[:, fi]
         arr = np.asarray(col)
+        if strategy == "genotype_aware":
+            levels = genotype_levels(col, max_levels=low_cardinality_threshold)
+            if levels is not None:
+                specs.append(genotype_feature_spec(fi, levels))
+                continue
         if np.issubdtype(arr.dtype, np.number):
             vals = np.unique(arr.astype(float))
             if vals.size >= 2:
