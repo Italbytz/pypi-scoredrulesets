@@ -11,6 +11,7 @@ from .rulenln import RuleNLNClassifier
 from .rulegp import RuleGPClassifier
 from .rulegp_regressor import RuleGPRegressor
 from .ruleplcs import RulePLCSClassifier
+from .ruleplcs_regressor import RulePLCSRegressor
 from .rulensga2 import RuleNSGA2Classifier
 from .rulensga2_regressor import RuleNSGA2Regressor
 from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
@@ -26,6 +27,7 @@ __all__ = [
 	"RuleGPRegressor",
 	"RuleNLNClassifier",
 	"RulePLCSClassifier",
+	"RulePLCSRegressor",
 	"RuleNSGA2Classifier",
 	"RuleNSGA2Regressor",
 	"ScoredRuleSetClassifier",

@@ -575,6 +575,14 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 self.estimator_ = RuleNSGA2Regressor(**params)
                 self.estimator_.fit(X_valid, y_valid)
                 self.ruleset_ = self.estimator_.to_ruleset()
+            elif backend_key in {"ruleplcs", "ruleplcs_native"}:
+                from .ruleplcs_regressor import RulePLCSRegressor
+                params = dict(self.backend_params or {})
+                params.setdefault("random_state", self.random_state)
+                params.setdefault("feature_names", self.feature_names_in_)
+                self.estimator_ = RulePLCSRegressor(**params)
+                self.estimator_.fit(X_valid, y_valid)
+                self.ruleset_ = self.estimator_.to_ruleset()
             elif backend_key in {"projection_rulegp", "projection_rulensga2"}:
                 base_b = "rulegp" if "rulegp" in backend_key else "rulensga2"
                 y_encoded, bin_edges, bin_centers = _encode_regression_targets(

@@ -36,6 +36,7 @@ from .estimators.rulenln import RuleNLNClassifier
 from .estimators.rulegp import RuleGPClassifier
 from .estimators.rulegp_regressor import RuleGPRegressor
 from .estimators.ruleplcs import RulePLCSClassifier
+from .estimators.ruleplcs_regressor import RulePLCSRegressor
 from .estimators.rulensga2 import RuleNSGA2Classifier
 from .estimators.rulensga2_regressor import RuleNSGA2Regressor
 from .estimators.rulekit_native import RuleKitNativeClassifier
@@ -74,6 +75,7 @@ __all__ = [
     "RuleGPRegressor",
     "RuleNLNClassifier",
     "RulePLCSClassifier",
+    "RulePLCSRegressor",
     "RuleNSGA2Classifier",
     "RuleNSGA2Regressor",
     "RuleKitNativeClassifier",
