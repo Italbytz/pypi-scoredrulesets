@@ -9,8 +9,10 @@ from .cluster_wrapper import ScoredRuleSetClusterer
 from .logicgp import GPASClassifier, LogicGPClassifier
 from .rulenln import RuleNLNClassifier
 from .rulegp import RuleGPClassifier
+from .rulegp_regressor import RuleGPRegressor
 from .ruleplcs import RulePLCSClassifier
 from .rulensga2 import RuleNSGA2Classifier
+from .rulensga2_regressor import RuleNSGA2Regressor
 from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 __all__ = [
@@ -21,9 +23,11 @@ __all__ = [
 	"GPASClassifier",
 	"LogicGPClassifier",
 	"RuleGPClassifier",
+	"RuleGPRegressor",
 	"RuleNLNClassifier",
 	"RulePLCSClassifier",
 	"RuleNSGA2Classifier",
+	"RuleNSGA2Regressor",
 	"ScoredRuleSetClassifier",
 	"ScoredRuleSetRegressor",
 	"is_atom_selection_strategy_available",

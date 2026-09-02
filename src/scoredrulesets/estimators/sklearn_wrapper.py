@@ -559,7 +559,24 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                     estimator=self.estimator_,
                     feature_names=self.feature_names_in_,
                 )
-            elif backend_key in {"rulegp", "rulensga2"}:
+            elif backend_key in {"rulegp", "rulegp_native"}:
+                from .rulegp_regressor import RuleGPRegressor
+                params = dict(self.backend_params or {})
+                params.setdefault("random_state", self.random_state)
+                params.setdefault("feature_names", self.feature_names_in_)
+                self.estimator_ = RuleGPRegressor(**params)
+                self.estimator_.fit(X_valid, y_valid)
+                self.ruleset_ = self.estimator_.to_ruleset()
+            elif backend_key in {"rulensga2", "rulensga2_native"}:
+                from .rulensga2_regressor import RuleNSGA2Regressor
+                params = dict(self.backend_params or {})
+                params.setdefault("random_state", self.random_state)
+                params.setdefault("feature_names", self.feature_names_in_)
+                self.estimator_ = RuleNSGA2Regressor(**params)
+                self.estimator_.fit(X_valid, y_valid)
+                self.ruleset_ = self.estimator_.to_ruleset()
+            elif backend_key in {"projection_rulegp", "projection_rulensga2"}:
+                base_b = "rulegp" if "rulegp" in backend_key else "rulensga2"
                 y_encoded, bin_edges, bin_centers = _encode_regression_targets(
                     y_valid, n_bins=max(int(self.target_bins), 2)
                 )
@@ -567,7 +584,7 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 self._target_bin_centers_ = bin_centers
 
                 self.estimator_ = build_backend_estimator(
-                    backend=backend_key,
+                    backend=base_b,
                     backend_params=self.backend_params,
                     random_state=self.random_state,
                 )
@@ -585,8 +602,8 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 )
             else:
                 raise ValueError(
-                    "ScoredRuleSetRegressor currently supports backend='cart', "
-                    "'rulegp', 'rulensga2', or a custom estimator via 'estimator'."
+                    f"ScoredRuleSetRegressor unsupported backend '{self.backend}'. "
+                    "Supported: 'cart', 'rulegp', 'rulensga2', 'projection_rulegp', 'projection_rulensga2'."
                 )
         return self
 

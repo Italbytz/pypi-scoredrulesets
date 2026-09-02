@@ -34,8 +34,10 @@ from .estimators.cluster_wrapper import ScoredRuleSetClusterer
 from .estimators.logicgp import GPASClassifier, LogicGPClassifier
 from .estimators.rulenln import RuleNLNClassifier
 from .estimators.rulegp import RuleGPClassifier
+from .estimators.rulegp_regressor import RuleGPRegressor
 from .estimators.ruleplcs import RulePLCSClassifier
 from .estimators.rulensga2 import RuleNSGA2Classifier
+from .estimators.rulensga2_regressor import RuleNSGA2Regressor
 from .estimators.rulekit_native import RuleKitNativeClassifier
 from .estimators.atom_selection import (
     available_atom_selection_strategies,
@@ -69,9 +71,11 @@ __all__ = [
     "GPASClassifier",
     "LogicGPClassifier",
     "RuleGPClassifier",
+    "RuleGPRegressor",
     "RuleNLNClassifier",
     "RulePLCSClassifier",
     "RuleNSGA2Classifier",
+    "RuleNSGA2Regressor",
     "RuleKitNativeClassifier",
     "ScoredRuleSetClassifier",
     "ScoredRuleSetRegressor",
