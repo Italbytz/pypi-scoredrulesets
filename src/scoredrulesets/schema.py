@@ -114,13 +114,25 @@ class ScoredRuleSet:
                     )
             return
 
-        # Regression: one scalar output per rule.
+        # Regression
         if self.class_labels:
             raise ValueError("class_labels must be empty for regression")
+            
+        if not self.rules:
+            return
+            
+        if self.aggregation.type == "takagi_sugeno":
+            expected_scores = len(self.feature_names) + 1
+        else:
+            # Infer the target dimension from the first rule.
+            expected_scores = len(self.rules[0].scores)
+            if expected_scores < 1:
+                raise ValueError("Regression rules must have at least 1 score.")
+            
         for idx, rule in enumerate(self.rules):
-            if len(rule.scores) != 1:
+            if len(rule.scores) != expected_scores:
                 raise ValueError(
-                    f"Rule at index {idx} has {len(rule.scores)} scores; expected 1"
+                    f"Rule at index {idx} has {len(rule.scores)} scores; expected {expected_scores}"
                 )
 
     def to_dict(self) -> Dict[str, Any]:

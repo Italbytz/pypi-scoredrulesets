@@ -39,7 +39,7 @@ from .rulegp_regressor import (
 )
 
 
-@dataclass
+@dataclass(eq=False)
 class _NSGA2IndividualReg:
     ruleset: _RuleSetReg
     fitness: _FitnessReg = field(default_factory=lambda: _FitnessReg(rmse=999999.0, size=999999, r2=-999.0))
@@ -127,6 +127,7 @@ class RuleNSGA2Regressor(BaseRuleSetEstimator, RegressorMixin):
         max_atoms_per_rule: int | None = 4,
         atom_space_strategy: NativeAtomSpaceStrategy = "hybrid",
         continuous_threshold_strategy: ContinuousThresholdStrategy = "quantile_midpoint",
+        prediction_type: Literal["constant", "linear"] = "constant",
         max_fit_seconds: float | None = None,
         feature_names: list[str] | None = None,
         random_state: int | None = None,
@@ -139,6 +140,7 @@ class RuleNSGA2Regressor(BaseRuleSetEstimator, RegressorMixin):
         self.max_atoms_per_rule = max_atoms_per_rule
         self.atom_space_strategy = atom_space_strategy
         self.continuous_threshold_strategy = continuous_threshold_strategy
+        self.prediction_type = prediction_type
         self.max_fit_seconds = max_fit_seconds
         self.feature_names = feature_names
         self.random_state = random_state
@@ -180,7 +182,7 @@ class RuleNSGA2Regressor(BaseRuleSetEstimator, RegressorMixin):
                 n_a = rng.integers(1, min(3, len(available_atoms)) + 1)
                 chosen = [rng.choice(available_atoms) for _ in range(n_a)]
                 rules.append(_RuleReg(atoms=chosen))
-            rs = _RuleSetReg(rules=rules)
+            rs = _RuleSetReg(rules=rules, prediction_type=self.prediction_type)
             _compute_regression_weights(rs, X_arr, y_arr)
             fit = _evaluate_fitness_reg(rs, X_arr, y_arr)
             pop.append(_NSGA2IndividualReg(ruleset=rs, fitness=fit))
@@ -276,12 +278,32 @@ class RuleNSGA2Regressor(BaseRuleSetEstimator, RegressorMixin):
             for a in rule.atoms:
                 feat_name = self.feature_names_in_[a.feature_idx]
                 schema_atoms.append(Atom(feature=feat_name, op=a.op, value=a.value))
+            if self.prediction_type == "linear":
+                b = getattr(rule, "beta", None)
+                scores = list(b if b is not None else []) + [float(getattr(rule, "beta0", 0.0))]
+            else:
+                scores = [float(rule.weight)]
+
             schema_rules.append(
-                Rule(atoms=schema_atoms, scores=[float(rule.weight)], rule_id=f"r_{idx}")
+                Rule(
+                    atoms=schema_atoms, 
+                    scores=scores, 
+                    rule_id=f"r_{idx}"
+                )
             )
 
+        if self.prediction_type == "linear":
+            db = getattr(rs, "default_beta", None)
+            def_scores = list(db if db is not None else []) + [float(getattr(rs, "default_beta0", 0.0))]
+        else:
+            def_scores = [float(rs.default_weight)]
+
         schema_rules.append(
-            Rule(atoms=[], scores=[float(rs.default_weight)], rule_id="default_reg")
+            Rule(
+                atoms=[], 
+                scores=def_scores, 
+                rule_id="default_reg"
+            )
         )
 
         ruleset = ScoredRuleSet(
@@ -289,8 +311,8 @@ class RuleNSGA2Regressor(BaseRuleSetEstimator, RegressorMixin):
             task_type="regression",
             feature_names=list(self.feature_names_in_),
             rules=schema_rules,
-            aggregation=AggregationSpec(type="mean_active"),
-            metadata={"estimator": "RuleNSGA2Regressor", "rules_count": len(schema_rules)},
+            aggregation=AggregationSpec(type="takagi_sugeno" if self.prediction_type == "linear" else "mean_active"),
+            metadata={"estimator": "RuleNSGA2Regressor", "prediction_type": self.prediction_type, "rules_count": len(schema_rules)},
         )
         ruleset.validate()
         return ruleset
@@ -299,6 +321,10 @@ class RuleNSGA2Regressor(BaseRuleSetEstimator, RegressorMixin):
         check_is_fitted(self, "ruleset_")
         X_arr = check_array(X, dtype=None)
         return predict_regression_from_ruleset(self.ruleset_, X_arr)
+
+    def score(self, X, y, sample_weight=None):
+        from sklearn.metrics import r2_score
+        return r2_score(y, self.predict(X), sample_weight=sample_weight)
 
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, "ruleset_")

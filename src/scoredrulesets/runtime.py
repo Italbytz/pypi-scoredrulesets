@@ -112,37 +112,79 @@ def decision_function_regression(ruleset: ScoredRuleSet, X: np.ndarray, debug: b
     if X.ndim != 2:
         raise ValueError("X must be a 2D array")
 
-    predictions = np.zeros(X.shape[0], dtype=float)
-    feature_names = ruleset.feature_names or [f"f{i}" for i in range(X.shape[1])]
+    agg = ruleset.aggregation.type
+    d = 1
+    if ruleset.rules and agg != "takagi_sugeno":
+        d = len(ruleset.rules[0].scores)
 
-    default_value = 0.0
+    if d > 1:
+        predictions = np.zeros((X.shape[0], d), dtype=float)
+        default_value = np.zeros(d, dtype=float)
+    else:
+        predictions = np.zeros(X.shape[0], dtype=float)
+        default_value = 0.0
+
+    feature_names = ruleset.feature_names or [f"f{i}" for i in range(X.shape[1])]
     has_default = False
     non_default_rules = []
+    
     for rule in ruleset.rules:
         if not getattr(rule, "atoms", None):
-            default_value += float(rule.scores[0])
+            if d > 1:
+                default_value += np.asarray(rule.scores, dtype=float)
+            else:
+                default_value += float(rule.scores[0])
             has_default = True
         else:
             non_default_rules.append(rule)
 
-    agg = ruleset.aggregation.type
     for i, row in enumerate(X):
-        active_values: list[float] = []
+        if agg == "takagi_sugeno":
+            # TS is strictly 1D for now
+            active_ts_values = []
+            for rule in non_default_rules:
+                if _rule_fires(row, rule, feature_names):
+                    beta = rule.scores[:-1]
+                    beta0 = rule.scores[-1]
+                    active_ts_values.append(np.dot(row, beta) + beta0)
+            if active_ts_values:
+                predictions[i] = float(np.mean(active_ts_values))
+            elif has_default:
+                default_beta = ruleset.rules[-1].scores[:-1]
+                default_beta0 = ruleset.rules[-1].scores[-1]
+                predictions[i] = float(np.dot(row, default_beta) + default_beta0)
+            else:
+                predictions[i] = 0.0
+            continue
+
+        active_values = []
         for rule in non_default_rules:
             if _rule_fires(row, rule, feature_names):
-                active_values.append(float(rule.scores[0]))
+                if d > 1:
+                    active_values.append(np.asarray(rule.scores, dtype=float))
+                else:
+                    active_values.append(float(rule.scores[0]))
 
         if agg == "weighted_sum":
-            predictions[i] = float(np.sum(active_values)) if active_values else (default_value if has_default else 0.0)
+            if active_values:
+                predictions[i] = np.sum(active_values, axis=0)
+            else:
+                predictions[i] = default_value if has_default else (np.zeros(d) if d > 1 else 0.0)
         elif agg == "mean_active":
-            predictions[i] = float(np.mean(active_values)) if active_values else (default_value if has_default else 0.0)
+            if active_values:
+                predictions[i] = np.mean(active_values, axis=0)
+            else:
+                predictions[i] = default_value if has_default else (np.zeros(d) if d > 1 else 0.0)
         elif agg == "default_plus_sum":
-            predictions[i] = default_value + float(np.sum(active_values))
+            if active_values:
+                predictions[i] = default_value + np.sum(active_values, axis=0)
+            else:
+                predictions[i] = default_value
         else:
             raise ValueError(f"Unsupported regression aggregation type: {agg}")
 
         if debug:
-            print(f"[DEBUG regression] Sample {i}: active_values={active_values}, prediction={predictions[i]:.6f}")
+            print(f"[DEBUG regression] Sample {i}: prediction={predictions[i]}")
 
     return predictions
 

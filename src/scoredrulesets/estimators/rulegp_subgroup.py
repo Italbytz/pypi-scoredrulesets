@@ -1,5 +1,5 @@
 """
-RuleGPRegressor - Native Genetic Programming for Scored Rule Sets in Regression
+RuleGPSubgroup - Native Genetic Programming for Scored Rule Sets in Regression
 ================================================================================
 
 Evolves complete scored rule sets directly optimizing continuous target objectives
@@ -34,21 +34,21 @@ from .base import BaseRuleSetEstimator
 
 
 @dataclass(frozen=True)
-class _AtomGeneReg:
+class _AtomGeneSubgroup:
     feature_idx: int
     op: str
     value: object
 
 
 @dataclass(eq=False)
-class _RuleReg:
-    atoms: list[_AtomGeneReg]
+class _RuleSubgroup:
+    atoms: list[_AtomGeneSubgroup]
     weight: float = 0.0
     beta: np.ndarray | None = None
     beta0: float = 0.0
 
-    def clone(self) -> "_RuleReg":
-        r = _RuleReg(atoms=list(self.atoms), weight=self.weight.copy() if isinstance(self.weight, np.ndarray) else float(self.weight))
+    def clone(self) -> "_RuleSubgroup":
+        r = _RuleSubgroup(atoms=list(self.atoms), weight=float(self.weight))
         if self.beta is not None:
             r.beta = self.beta.copy()
             r.beta0 = self.beta0
@@ -56,15 +56,15 @@ class _RuleReg:
 
 
 @dataclass(eq=False)
-class _RuleSetReg:
-    rules: list[_RuleReg]
+class _RuleSetSubgroup:
+    rules: list[_RuleSubgroup]
     default_weight: float = 0.0
     default_beta: np.ndarray | None = None
     default_beta0: float = 0.0
     prediction_type: str = "constant"
 
     @staticmethod
-    def _atom_key(atom: _AtomGeneReg) -> tuple[int, str, object]:
+    def _atom_key(atom: _AtomGeneSubgroup) -> tuple[int, str, object]:
         if atom.op in ("between", "in"):
             return (atom.feature_idx, atom.op, tuple(atom.value))
         return (atom.feature_idx, atom.op, atom.value)
@@ -77,10 +77,10 @@ class _RuleSetReg:
                 seen.add(self._atom_key(atom))
         return len(seen)
 
-    def clone(self) -> "_RuleSetReg":
-        rs = _RuleSetReg(
+    def clone(self) -> "_RuleSetSubgroup":
+        rs = _RuleSetSubgroup(
             rules=[r.clone() for r in self.rules],
-            default_weight=self.default_weight.copy() if isinstance(self.default_weight, np.ndarray) else float(self.default_weight),
+            default_weight=float(self.default_weight),
         )
         rs.prediction_type = self.prediction_type
         if self.default_beta is not None:
@@ -88,7 +88,7 @@ class _RuleSetReg:
             rs.default_beta0 = self.default_beta0
         return rs
 
-    def _atom_mask(self, atom: _AtomGeneReg, X: np.ndarray) -> np.ndarray:
+    def _atom_mask(self, atom: _AtomGeneSubgroup, X: np.ndarray) -> np.ndarray:
         col = X[:, atom.feature_idx]
         if atom.op == "<=":
             return np.asarray(col, dtype=float) <= float(atom.value)
@@ -111,7 +111,7 @@ class _RuleSetReg:
             return np.isin(np.asarray(col, dtype=object), list(atom.value)).astype(bool)
         return np.ones(X.shape[0], dtype=bool)
 
-    def _rule_mask(self, rule: _RuleReg, X: np.ndarray) -> np.ndarray:
+    def _rule_mask(self, rule: _RuleSubgroup, X: np.ndarray) -> np.ndarray:
         if not rule.atoms:
             return np.zeros(X.shape[0], dtype=bool)
         mask = np.ones(X.shape[0], dtype=bool)
@@ -121,119 +121,91 @@ class _RuleSetReg:
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         n_samples = X.shape[0]
-        is_multi = isinstance(self.default_weight, np.ndarray) and self.default_weight.ndim > 0
-        if is_multi:
-            preds = np.zeros((n_samples, len(self.default_weight)), dtype=float)
-            counts = np.zeros((n_samples, 1), dtype=int)
-        else:
-            preds = np.zeros(n_samples, dtype=float)
-            counts = np.zeros(n_samples, dtype=int)
-            
+        preds = np.zeros(n_samples, dtype=float)
+        counts = np.zeros(n_samples, dtype=int)
+        
         for rule in self.rules:
             mask = self._rule_mask(rule, X)
             if mask.any():
-                if self.prediction_type == "linear" and getattr(rule, "beta", None) is not None:
+                if self.prediction_type == "linear" and rule.beta is not None:
                     preds[mask] += (X[mask] @ rule.beta) + rule.beta0
                 else:
-                    if is_multi:
-                        preds[mask] += rule.weight.reshape(1, -1)
-                        counts[mask] += 1
-                    else:
-                        preds[mask] += rule.weight
-                        counts[mask] += 1
+                    preds[mask] += rule.weight
+                counts[mask] += 1
                 
         # Average active rules; fallback to default if no rule fires
-        fired = (counts > 0).ravel() if is_multi else counts > 0
-        if fired.any():
-            if is_multi:
-                preds[fired] /= counts[fired]
-            else:
-                preds[fired] /= counts[fired]
+        fired = counts > 0
+        preds[fired] /= counts[fired]
         
         unfired = ~fired
         if unfired.any():
-            if self.prediction_type == "linear" and getattr(self, "default_beta", None) is not None:
+            if self.prediction_type == "linear" and self.default_beta is not None:
                 preds[unfired] = (X[unfired] @ self.default_beta) + self.default_beta0
             else:
-                if is_multi:
-                    preds[unfired] = self.default_weight.reshape(1, -1)
-                else:
-                    preds[unfired] = self.default_weight
+                preds[unfired] = self.default_weight
         return preds
 
 
-@dataclass(frozen=True)
-class _FitnessReg:
-    rmse: float
+@dataclass
+class _FitnessSubgroup:
+    quality: float
     size: int
-    r2: float
 
-    def dominates(self, other: "_FitnessReg") -> bool:
-        ge = (self.rmse <= other.rmse and self.size <= other.size)
-        gt = (self.rmse < other.rmse or self.size < other.size)
-        return ge and gt
+    def dominates(self, other: "_FitnessSubgroup") -> bool:
+        # Maximize quality, minimize size
+        q_ge = self.quality >= other.quality - 1e-6
+        sz_le = self.size <= other.size
+        q_gt = self.quality > other.quality + 1e-6
+        sz_lt = self.size < other.size
+        return q_ge and sz_le and (q_gt or sz_lt)
 
 
-def _compute_regression_weights(rs: _RuleSetReg, X: np.ndarray, y: np.ndarray) -> None:
-    global_mean = np.mean(y, axis=0) if y.size > 0 else (np.zeros(y.shape[1]) if y.ndim > 1 else 0.0)
-    any_fired = np.zeros(X.shape[0], dtype=bool)
-
-    if getattr(rs, "prediction_type", "constant") == "linear":
-        from sklearn.linear_model import Ridge
+def _evaluate_fitness_subgroup(
+    rs: _RuleSetSubgroup, 
+    X: np.ndarray, 
+    y: np.ndarray, 
+    global_mean: float, 
+    gamma: float
+) -> _FitnessSubgroup:
+    n = X.shape[0]
+    total_quality = 0.0
+    
+    # Track overlapping coverage
+    coverage_counts = np.zeros(n, dtype=int)
+    
+    for r in rs.rules:
+        mask = rs._rule_mask(r, X)
+        coverage_counts[mask] += 1
+        n_r = mask.sum()
         
-        # Fit global linear model as fallback
-        ridge_global = Ridge(alpha=1.0)
-        if X.shape[0] > 1:
-            ridge_global.fit(X, y)
-            rs.default_beta = ridge_global.coef_
-            rs.default_beta0 = float(ridge_global.intercept_)
+        if n_r > 0:
+            local_mean = float(np.mean(y[mask]))
+            # Subgroup Quality: (coverage^gamma) * absolute deviation from global mean
+            c_r = n_r / n
+            q_r = (c_r ** gamma) * abs(local_mean - global_mean)
+            total_quality += q_r
+            r.weight = local_mean
+            r.quality = q_r
         else:
-            rs.default_beta = np.zeros(X.shape[1])
-            rs.default_beta0 = global_mean
-
-        for rule in rs.rules:
-            mask = rs._rule_mask(rule, X)
-            any_fired |= mask
-            if mask.sum() > 1:
-                ridge_local = Ridge(alpha=1.0)
-                ridge_local.fit(X[mask], y[mask])
-                rule.beta = ridge_local.coef_
-                rule.beta0 = float(ridge_local.intercept_)
-            else:
-                rule.beta = np.zeros(X.shape[1])
-                rule.beta0 = global_mean
-    else:
-        for rule in rs.rules:
-            mask = rs._rule_mask(rule, X)
-            any_fired |= mask
-            if mask.any():
-                rule.weight = np.mean(y[mask], axis=0)
-            else:
-                rule.weight = global_mean
-
-        uncovered = ~any_fired
-        if uncovered.any():
-            rs.default_weight = np.mean(y[uncovered], axis=0)
-        else:
-            rs.default_weight = global_mean
+            r.weight = global_mean
+            r.quality = 0.0
+            
+    # Overlap penalty
+    overlap_sum = np.maximum(0, coverage_counts - 1).sum()
+    overlap_penalty = (overlap_sum / n) * abs(global_mean) * 0.5
+    
+    final_quality = total_quality - overlap_penalty
+    size = sum(len(r.atoms) for r in rs.rules)
+    return _FitnessSubgroup(quality=float(final_quality), size=size)
 
 
-def _evaluate_fitness_reg(rs: _RuleSetReg, X: np.ndarray, y: np.ndarray) -> _FitnessReg:
-    preds = rs.predict(X)
-    mse = float(np.mean((y - preds) ** 2))
-    rmse = float(np.sqrt(mse))
-    var_y = float(np.var(y))
-    r2 = 1.0 - (mse / var_y) if var_y > 1e-12 else 0.0
-    return _FitnessReg(rmse=rmse, size=rs.size, r2=r2)
-
-
-def _pareto_front_reg(
-    individuals: list[tuple[_RuleSetReg, _FitnessReg]],
-) -> list[tuple[_RuleSetReg, _FitnessReg]]:
-    front: list[tuple[_RuleSetReg, _FitnessReg]] = []
+def _pareto_front_subgroup(
+    individuals: list[tuple[_RuleSetSubgroup, _FitnessSubgroup]],
+) -> list[tuple[_RuleSetSubgroup, _FitnessSubgroup]]:
+    front: list[tuple[_RuleSetSubgroup, _FitnessSubgroup]] = []
     for cand_rs, cand_fit in individuals:
         dominated = False
-        kept: list[tuple[_RuleSetReg, _FitnessReg]] = []
+        kept: list[tuple[_RuleSetSubgroup, _FitnessSubgroup]] = []
         for cur_rs, cur_fit in front:
             if cur_fit.dominates(cand_fit):
                 dominated = True
@@ -246,16 +218,16 @@ def _pareto_front_reg(
     return front
 
 
-def _tournament_trim_reg(
-    individuals: list[tuple[_RuleSetReg, _FitnessReg]],
+def _tournament_trim_subgroup(
+    individuals: list[tuple[_RuleSetSubgroup, _FitnessSubgroup]],
     n_keep: int,
     tournament_size: int,
     rng: np.random.Generator,
-) -> list[tuple[_RuleSetReg, _FitnessReg]]:
+) -> list[tuple[_RuleSetSubgroup, _FitnessSubgroup]]:
     if len(individuals) <= n_keep:
         return individuals
 
-    selected: list[tuple[_RuleSetReg, _FitnessReg]] = []
+    selected: list[tuple[_RuleSetSubgroup, _FitnessSubgroup]] = []
     remaining_idx = list(range(len(individuals)))
 
     for _ in range(n_keep):
@@ -273,7 +245,7 @@ def _tournament_trim_reg(
             if c_fit.dominates(w_fit):
                 winner_orig_idx = orig_idx
                 w_fit = c_fit
-            elif not w_fit.dominates(c_fit) and c_fit.rmse < w_fit.rmse:
+            elif not w_fit.dominates(c_fit) and c_fit.quality > w_fit.quality:
                 winner_orig_idx = orig_idx
                 w_fit = c_fit
 
@@ -283,11 +255,12 @@ def _tournament_trim_reg(
     return selected
 
 
-class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
+class RuleGPSubgroup(BaseRuleSetEstimator):
     """Genetic Programming for Scored Rule Sets targeting continuous regression."""
 
     def __init__(
         self,
+        gamma: float = 0.5,
         max_generations: int = 150,
         stagnation_generations: int = 40,
         population_size: int = 80,
@@ -302,6 +275,7 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
         feature_names: list[str] | None = None,
         random_state: int | None = None,
     ):
+        self.gamma = gamma
         self.max_generations = max_generations
         self.stagnation_generations = stagnation_generations
         self.population_size = population_size
@@ -317,7 +291,8 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
         self.random_state = random_state
 
     def fit(self, X, y):
-        X_arr, y_arr = check_X_y(X, y, dtype=None, y_numeric=True, multi_output=True)
+        X_arr, y_arr = check_X_y(X, y, dtype=None, y_numeric=True)
+        self.global_mean_ = float(np.mean(y_arr))
         self.n_features_in_ = X_arr.shape[1]
         self.feature_names_in_ = self.feature_names or [f"f{i}" for i in range(self.n_features_in_)]
 
@@ -331,38 +306,37 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
             continuous_threshold_strategy=self.continuous_threshold_strategy,
         )
 
-        available_atoms: list[_AtomGeneReg] = []
+        available_atoms: list[_AtomGeneSubgroup] = []
         for feat_idx, spec in enumerate(specs):
             for op in spec.get("operators", ["<=", ">"]):
                 for val in spec.get("thresholds", []):
-                    available_atoms.append(_AtomGeneReg(feature_idx=feat_idx, op=op, value=val))
+                    available_atoms.append(_AtomGeneSubgroup(feature_idx=feat_idx, op=op, value=val))
             for val in spec.get("categories", []):
-                available_atoms.append(_AtomGeneReg(feature_idx=feat_idx, op="==", value=val))
+                available_atoms.append(_AtomGeneSubgroup(feature_idx=feat_idx, op="==", value=val))
 
         if not available_atoms:
             # Fallback atom if no variation
-            available_atoms.append(_AtomGeneReg(feature_idx=0, op="<=", value=0.0))
+            available_atoms.append(_AtomGeneSubgroup(feature_idx=0, op="<=", value=0.0))
 
         # 2. Initialize Population
         pop_size = max(int(self.population_size), 10)
-        pop: list[tuple[_RuleSetReg, _FitnessReg]] = []
+        pop: list[tuple[_RuleSetSubgroup, _FitnessSubgroup]] = []
 
         for _ in range(pop_size):
             n_r = rng.integers(1, 4)
-            rules: list[_RuleReg] = []
+            rules: list[_RuleSubgroup] = []
             for _ in range(n_r):
                 n_a = rng.integers(1, min(self.max_atoms_per_rule or 4, len(available_atoms)) + 1)
                 chosen_atoms = [rng.choice(available_atoms) for _ in range(n_a)]
-                rules.append(_RuleReg(atoms=chosen_atoms))
+                rules.append(_RuleSubgroup(atoms=chosen_atoms))
             
-            rs = _RuleSetReg(rules=rules, prediction_type=self.prediction_type)
-            _compute_regression_weights(rs, X_arr, y_arr)
-            fit = _evaluate_fitness_reg(rs, X_arr, y_arr)
+            rs = _RuleSetSubgroup(rules=rules)
+            fit = _evaluate_fitness_subgroup(rs, X_arr, y_arr, self.global_mean_, self.gamma)
             pop.append((rs, fit))
 
         best_rs = pop[0][0]
         best_fit = pop[0][1]
-        best_rmse = best_fit.rmse
+        best_quality = best_fit.quality
         stagnation = 0
 
         # 3. Evolution Loop
@@ -370,7 +344,7 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
             if deadline_reached(deadline):
                 break
 
-            offspring: list[tuple[_RuleSetReg, _FitnessReg]] = []
+            offspring: list[tuple[_RuleSetSubgroup, _FitnessSubgroup]] = []
             for _ in range(self.n_adaptations_per_gen):
                 # Pick parent
                 p1_idx = rng.integers(0, len(pop))
@@ -384,7 +358,7 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
 
                 if mut_type == "add_rule" and len(child_rs.rules) < max_r:
                     new_atom = rng.choice(available_atoms)
-                    child_rs.rules.append(_RuleReg(atoms=[new_atom]))
+                    child_rs.rules.append(_RuleSubgroup(atoms=[new_atom]))
                 elif mut_type == "drop_rule" and len(child_rs.rules) > 1:
                     r_idx = rng.integers(0, len(child_rs.rules))
                     child_rs.rules.pop(r_idx)
@@ -403,23 +377,21 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
                     if child_rs.rules[r_idx].atoms:
                         a_idx = rng.integers(0, len(child_rs.rules[r_idx].atoms))
                         child_rs.rules[r_idx].atoms[a_idx] = rng.choice(available_atoms)
-
-                _compute_regression_weights(child_rs, X_arr, y_arr)
-                c_fit = _evaluate_fitness_reg(child_rs, X_arr, y_arr)
+                c_fit = _evaluate_fitness_subgroup(child_rs, X_arr, y_arr, self.global_mean_, self.gamma)
                 offspring.append((child_rs, c_fit))
 
             # Combine and trim population
             combined = pop + offspring
-            pop = _tournament_trim_reg(combined, pop_size, self.tournament_size, rng)
+            pop = _tournament_trim_subgroup(combined, pop_size, self.tournament_size, rng)
 
             # Check best individual (balancing RMSE & compactness)
             for rs, fit in pop:
-                if fit.rmse < best_rmse - 1e-4:
-                    best_rmse = fit.rmse
+                if fit.quality > best_quality + 1e-4:
+                    best_quality = fit.quality
                     best_fit = fit
                     best_rs = rs.clone()
                     stagnation = 0
-                elif fit.rmse <= best_rmse + 1e-4 and fit.size < best_fit.size:
+                elif fit.quality >= best_quality - 1e-4 and fit.size < best_fit.size:
                     best_fit = fit
                     best_rs = rs.clone()
                     stagnation = 0
@@ -430,89 +402,82 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
 
         # 4. Backward Rule Elimination (Post-hoc Compaction)
         self.ruleset_internal_ = self._compact_ruleset(best_rs, X_arr, y_arr)
-        self.ruleset_ = self._to_schema_ruleset(self.ruleset_internal_)
+        self.ruleset_ = self._to_schema_ruleset(self.ruleset_internal_, X_arr)
         return self
 
-    def _compact_ruleset(self, rs: _RuleSetReg, X: np.ndarray, y: np.ndarray) -> _RuleSetReg:
+    def _compact_ruleset(self, rs: _RuleSetSubgroup, X: np.ndarray, y: np.ndarray) -> _RuleSetSubgroup:
         curr_rs = rs.clone()
-        base_fit = _evaluate_fitness_reg(curr_rs, X, y)
+        base_fit = _evaluate_fitness_subgroup(curr_rs, X, y, self.global_mean_, self.gamma)
         
-        # Greedily remove rules if RMSE does not increase significantly
+        # Greedily remove rules if Quality does not drop significantly
         improved = True
         while improved and len(curr_rs.rules) > 1:
             improved = False
             best_candidate = None
-            best_cand_rmse = base_fit.rmse + 1e-3  # Allow small tolerance for huge size reduction
+            best_cand_quality = base_fit.quality - 1e-4  # Allow small tolerance for huge size reduction
 
             for idx in range(len(curr_rs.rules)):
                 cand_rs = curr_rs.clone()
                 cand_rs.rules.pop(idx)
-                _compute_regression_weights(cand_rs, X, y)
-                cand_fit = _evaluate_fitness_reg(cand_rs, X, y)
-                if cand_fit.rmse <= best_cand_rmse:
-                    best_cand_rmse = cand_fit.rmse
+                cand_fit = _evaluate_fitness_subgroup(cand_rs, X, y, self.global_mean_, self.gamma)
+                if cand_fit.quality >= best_cand_quality:
+                    best_cand_quality = cand_fit.quality
                     best_candidate = cand_rs
 
             if best_candidate is not None:
                 curr_rs = best_candidate
-                base_fit = _evaluate_fitness_reg(curr_rs, X, y)
+                base_fit = _evaluate_fitness_subgroup(curr_rs, X, y, self.global_mean_, self.gamma)
+                improved = True
                 improved = True
 
         return curr_rs
-
-    def _to_schema_ruleset(self, rs: _RuleSetReg) -> ScoredRuleSet:
+    def _to_schema_ruleset(self, rs: _RuleSetSubgroup, X: np.ndarray) -> ScoredRuleSet:
         schema_rules: list[Rule] = []
+        n = X.shape[0]
         
-        # Non-default rules
-        for idx, rule in enumerate(rs.rules):
+        # Sort rules by quality descending
+        sorted_rules = sorted(rs.rules, key=lambda r: getattr(r, "quality", 0.0), reverse=True)
+        
+        for idx, rule in enumerate(sorted_rules):
             schema_atoms: list[Atom] = []
             for a in rule.atoms:
                 feat_name = self.feature_names_in_[a.feature_idx]
-                schema_atoms.append(Atom(feature=feat_name, op=a.op, value=a.value))
-            
-            if self.prediction_type == "linear":
-                b = getattr(rule, "beta", None)
-                scores = list(b if b is not None else []) + [float(getattr(rule, "beta0", 0.0))]
-            else:
-                scores = rule.weight.tolist() if isinstance(rule.weight, np.ndarray) else [float(rule.weight)]
+                val = float(a.value) if isinstance(a.value, (int, float, np.number)) else a.value
+                schema_atoms.append(Atom(feature=feat_name, op=a.op, value=val))
                 
+            local_mean = getattr(rule, "weight", 0.0)
+            quality = getattr(rule, "quality", 0.0)
+            
+            mask = rs._rule_mask(rule, X)
+            coverage = mask.sum() / n if n > 0 else 0.0
+            
             schema_rules.append(
                 Rule(
                     atoms=schema_atoms, 
-                    scores=scores, 
-                    rule_id=f"rule_{idx+1}"
+                    scores=[float(local_mean)], 
+                    rule_id=f"subgroup_{idx+1}",
+                    metadata={
+                        "quality": float(quality), 
+                        "coverage": float(coverage),
+                        "local_mean": float(local_mean),
+                        "global_mean": float(self.global_mean_)
+                    }
                 )
             )
 
-        # Default rule
-        if self.prediction_type == "linear":
-            db = getattr(rs, "default_beta", None)
-            def_scores = list(db if db is not None else []) + [float(getattr(rs, "default_beta0", 0.0))]
-        else:
-            def_scores = rs.default_weight.tolist() if isinstance(rs.default_weight, np.ndarray) else [float(rs.default_weight)]
-            
-        schema_rules.append(
-            Rule(atoms=[], scores=def_scores, rule_id="default_reg")
-        )
-
         ruleset = ScoredRuleSet(
             class_labels=[],
-            task_type="regression",
+            task_type="regression", 
             feature_names=list(self.feature_names_in_),
             rules=schema_rules,
-            aggregation=AggregationSpec(type="takagi_sugeno" if self.prediction_type == "linear" else "mean_active"),
-            metadata={"estimator": "RuleGPRegressor", "prediction_type": self.prediction_type, "rules_count": len(schema_rules)},
+            aggregation=AggregationSpec(type="independent"),
+            metadata={"estimator": "RuleGPSubgroup", "rules_count": len(schema_rules)},
         )
         ruleset.validate()
         return ruleset
 
     def predict(self, X):
-        check_is_fitted(self, "ruleset_")
-        X_arr = check_array(X, dtype=None)
-        return predict_regression_from_ruleset(self.ruleset_, X_arr)
-
-    def score(self, X, y, sample_weight=None):
-        return r2_score(y, self.predict(X), sample_weight=sample_weight)
+        raise NotImplementedError("RuleGPSubgroup is an exploratory model for subgroup discovery, not a predictive model. Inspect .ruleset_ instead.")
 
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, "ruleset_")
