@@ -119,7 +119,7 @@ class RuleNSGA2Regressor(BaseRuleSetEstimator, RegressorMixin):
 
     def __init__(
         self,
-        max_generations: int = 150,
+        max_generations: int | None = None,
         population_size: int = 80,
         n_offspring: int = 40,
         tournament_size: int = 3,
@@ -131,8 +131,9 @@ class RuleNSGA2Regressor(BaseRuleSetEstimator, RegressorMixin):
         max_fit_seconds: float | None = None,
         feature_names: list[str] | None = None,
         random_state: int | None = None,
+        generations: int | None = None,
     ):
-        self.max_generations = max_generations
+        self.max_generations = generations if generations is not None else (max_generations or 150)
         self.population_size = population_size
         self.n_offspring = n_offspring
         self.tournament_size = tournament_size
@@ -144,6 +145,7 @@ class RuleNSGA2Regressor(BaseRuleSetEstimator, RegressorMixin):
         self.max_fit_seconds = max_fit_seconds
         self.feature_names = feature_names
         self.random_state = random_state
+        self.generations = generations
 
     def fit(self, X, y):
         X_arr, y_arr = check_X_y(X, y, dtype=None, y_numeric=True)

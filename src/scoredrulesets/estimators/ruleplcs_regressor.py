@@ -37,7 +37,7 @@ class _IndividualReg:
     rmse_local: float = 999999.0
     coverage_count: int = 0
     theory_length: float = 0.0
-    fitness: float = 999999.0  # Minimise fitness (error + complexity)
+    fitness: float = 999999.0  # Minimise fitness (variance-reduction penalty + complexity)
 
 
 def _compute_theory_length_reg(ind: _IndividualReg, feature_info: list[dict]) -> float:
@@ -62,13 +62,15 @@ def _evaluate_reg_individual(
     X: np.ndarray,
     y: np.ndarray,
     feature_info: list[dict],
-    mdl_weight: float = 0.25,
+    mdl_weight: float = 0.05,
+    min_samples: int = 10,
 ) -> None:
     mask = _matches_mask(ind, X)
     n_cov = int(mask.sum())
+    n_total = X.shape[0]
     ind.coverage_count = n_cov
 
-    if n_cov < 3:
+    if n_cov < min_samples or n_cov > n_total - max(5, min_samples // 2):
         ind.weight = float(np.mean(y)) if y.size > 0 else 0.0
         ind.rmse_local = float(np.std(y)) if y.size > 0 else 1.0
         ind.theory_length = 1.0
@@ -76,20 +78,20 @@ def _evaluate_reg_individual(
         return
 
     y_cov = y[mask]
+    y_rem = y[~mask]
     ind.weight = float(np.mean(y_cov))
     mse_local = float(np.mean((y_cov - ind.weight) ** 2))
     ind.rmse_local = float(np.sqrt(mse_local))
-    
     ind.theory_length = _compute_theory_length_reg(ind, feature_info)
     
-    # Coverage reward (fraction of current dataset)
-    cov_ratio = n_cov / X.shape[0]
-    std_global = float(np.std(y)) if np.std(y) > 1e-12 else 1.0
+    # Global variance reduction criterion
+    sse_total = float(np.var(y) * n_total)
+    sse_cov = float(np.var(y_cov) * n_cov)
+    sse_rem = float(np.var(y_rem) * (n_total - n_cov))
+    gain = (sse_total - (sse_cov + sse_rem)) / (sse_total + 1e-12)
     
-    # Normalized error + coverage penalty + MDL theory length
-    norm_err = ind.rmse_local / std_global
-    cov_penalty = max(0.0, 1.0 - cov_ratio)
-    ind.fitness = norm_err + 0.5 * cov_penalty + mdl_weight * ind.theory_length
+    # Minimizing fitness: negative gain + MDL theory length penalty
+    ind.fitness = -gain + mdl_weight * (ind.theory_length + 0.05 * len(ind.predicates))
 
 
 def _clone_pred(p: _Predicate) -> _Predicate:
@@ -106,7 +108,7 @@ def _init_individual_reg(
     rng: np.random.Generator,
     inst: np.ndarray,
     feature_info: list[dict],
-    prob_express: float = 0.3,
+    prob_express: float = 0.35,
 ) -> _IndividualReg:
     predicates: list[_Predicate] = []
     n_features = len(feature_info)
@@ -119,7 +121,7 @@ def _init_individual_reg(
             domain = info["max"] - info["min"]
             if domain <= 0:
                 continue
-            size = rng.uniform(0.25, 0.75) * domain
+            size = rng.uniform(0.35, 0.85) * domain
             center = inst[fi]
             lo = max(info["min"], center - size / 2)
             hi = min(info["max"], center + size / 2)
@@ -145,14 +147,14 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
 
     def __init__(
         self,
-        max_rules: int = 12,
-        pop_size: int = 50,
-        num_generations: int = 60,
+        max_rules: int = 8,
+        pop_size: int = 60,
+        num_generations: int = 50,
         tournament_size: int = 4,
-        coverage_break: float = 0.85,
-        mdl_weight: float = 0.2,
+        min_samples_split: int = 12,
+        mdl_weight: float = 0.04,
         prob_crossover: float = 0.8,
-        prob_mutation: float = 0.15,
+        prob_mutation: float = 0.25,
         max_fit_seconds: float | None = None,
         feature_names: list[str] | None = None,
         random_state: int | None = None,
@@ -161,7 +163,7 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
         self.pop_size = pop_size
         self.num_generations = num_generations
         self.tournament_size = tournament_size
-        self.coverage_break = coverage_break
+        self.min_samples_split = min_samples_split
         self.mdl_weight = mdl_weight
         self.prob_crossover = prob_crossover
         self.prob_mutation = prob_mutation
@@ -185,7 +187,7 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
 
         # Iterative Rule Learning (Sequential Covering)
         for rule_iter in range(self.max_rules):
-            if deadline_reached(deadline) or len(remaining_indices) < 5:
+            if deadline_reached(deadline) or len(remaining_indices) < max(20, self.min_samples_split * 2):
                 break
 
             X_rem = X_arr[remaining_indices]
@@ -197,7 +199,7 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
                 seed_idx = rng.choice(len(remaining_indices))
                 inst = X_rem[seed_idx]
                 ind = _init_individual_reg(rng, inst, feature_info)
-                _evaluate_reg_individual(ind, X_rem, y_rem, feature_info, self.mdl_weight)
+                _evaluate_reg_individual(ind, X_rem, y_rem, feature_info, self.mdl_weight, min_samples=self.min_samples_split)
                 pop.append(ind)
 
             # 2. Evolve one best rule
@@ -219,11 +221,26 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
                         pred = child.predicates[p_idx]
                         if pred.is_numeric:
                             dom = feature_info[pred.feature_idx]["max"] - feature_info[pred.feature_idx]["min"]
-                            shift = rng.uniform(-0.1, 0.1) * dom
+                            shift = rng.uniform(-0.15, 0.15) * dom
                             pred.lo = max(feature_info[pred.feature_idx]["min"], pred.lo + shift)
                             pred.hi = min(feature_info[pred.feature_idx]["max"], pred.hi + shift)
+                    elif rng.random() < 0.2:
+                        if len(child.predicates) > 1 and rng.random() < 0.5:
+                            child.predicates.pop(rng.integers(0, len(child.predicates)))
+                        else:
+                            fi = rng.integers(0, self.n_features_in_)
+                            info = feature_info[fi]
+                            if info["numeric"]:
+                                dom = info["max"] - info["min"]
+                                sz = rng.uniform(0.35, 0.85) * dom
+                                c = X_rem[rng.choice(len(X_rem)), fi]
+                                child.predicates.append(_Predicate(
+                                    feature_idx=fi, is_numeric=True,
+                                    lo=max(info["min"], c - sz / 2),
+                                    hi=min(info["max"], c + sz / 2),
+                                ))
                     
-                    _evaluate_reg_individual(child, X_rem, y_rem, feature_info, self.mdl_weight)
+                    _evaluate_reg_individual(child, X_rem, y_rem, feature_info, self.mdl_weight, min_samples=self.min_samples_split)
                     offspring.append(child)
 
                 combined = pop + offspring
@@ -231,7 +248,7 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
                 pop = combined[:self.pop_size]
 
             best_rule = pop[0]
-            if best_rule.coverage_count < 3 or best_rule.fitness >= 999999.0:
+            if best_rule.coverage_count < self.min_samples_split or best_rule.fitness >= 0.0:
                 break
 
             # Compute exact weight over full training set
