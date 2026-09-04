@@ -15,7 +15,7 @@ from .ruleplcs_regressor import RulePLCSRegressor
 from .rulensga2 import RuleNSGA2Classifier
 from .rulensga2_regressor import RuleNSGA2Regressor
 from .evocluster import RuleEvoCluster
-from .evosubgroup import RuleEvoSubgroup
+from .evosubgroup import RuleEvoSubgroup, RuleNSGA2Subgroup
 from .rulegp_subgroup import RuleGPSubgroup
 from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
@@ -33,6 +33,7 @@ __all__ = [
 	"RulePLCSRegressor",
 	"RuleNSGA2Classifier",
 	"RuleNSGA2Regressor",
+	"RuleNSGA2Subgroup",
 	"RuleEvoCluster",
 	"RuleEvoSubgroup",
 	"RuleGPSubgroup",

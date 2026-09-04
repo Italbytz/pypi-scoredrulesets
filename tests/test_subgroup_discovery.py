@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from sklearn.datasets import make_regression
 
-from scoredrulesets.estimators.evosubgroup import RuleEvoSubgroup
+from scoredrulesets.estimators.evosubgroup import RuleEvoSubgroup, RuleNSGA2Subgroup
 from scoredrulesets.estimators.rulegp_subgroup import RuleGPSubgroup
 
 
@@ -14,7 +14,7 @@ def regression_data():
 
 def test_ruleevo_subgroup_basic(regression_data):
     X, y = regression_data
-    model = RuleEvoSubgroup(population_size=20, max_generations=5, random_state=42)
+    model = RuleNSGA2Subgroup(population_size=20, max_generations=5, random_state=42)
     model.fit(X, y)
     
     # Subgroup discovery is exploratory, predict() should raise NotImplementedError

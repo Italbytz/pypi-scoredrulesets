@@ -197,10 +197,11 @@ def _assign_crowding_distance_subgroup(front: list[_NSGA2IndividualSubgroup]) ->
             front[i].crowding_dist += (front[i + 1].fitness.size - front[i - 1].fitness.size) / s_range
 
 
-class RuleEvoSubgroup(BaseRuleSetEstimator):
+class RuleNSGA2Subgroup(BaseRuleSetEstimator):
     """Multi-Objective NSGA-II Genetic Programming for Subgroup Discovery / Exceptional Model Mining.
     
-    Extracts k distinct subgroups that maximize the trade-off between coverage and effect size (deviation from global mean).
+    Extracts k distinct subgroups that maximize the Pareto trade-off between subgroup quality (coverage * effect size)
+    and model complexity (total atom count).
     """
 
     def __init__(
@@ -391,14 +392,18 @@ class RuleEvoSubgroup(BaseRuleSetEstimator):
             feature_names=list(self.feature_names_in_),
             rules=schema_rules,
             aggregation=AggregationSpec(type="independent"),
-            metadata={"estimator": "RuleEvoSubgroup", "rules_count": len(schema_rules)},
+            metadata={"estimator": "RuleNSGA2Subgroup", "rules_count": len(schema_rules)},
         )
         ruleset.validate()
         return ruleset
 
     def predict(self, X):
-        raise NotImplementedError("RuleEvoSubgroup is an exploratory model for subgroup discovery, not a predictive model. Inspect .ruleset_ instead.")
+        raise NotImplementedError("RuleNSGA2Subgroup is an exploratory model for subgroup discovery, not a predictive model. Inspect .ruleset_ instead.")
 
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, "ruleset_")
         return self.ruleset_
+
+
+# Backward compatibility alias
+RuleEvoSubgroup = RuleNSGA2Subgroup
