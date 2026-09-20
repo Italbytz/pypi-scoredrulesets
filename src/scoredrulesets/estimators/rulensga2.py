@@ -297,6 +297,10 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         continuous_threshold_strategy: ContinuousThresholdStrategy = "quantile_midpoint",
         atom_preselection_strategy: str = "none",
         atom_preselection_top_k: int | None = None,
+        warmstart_strategy: str = "none",
+        warmstart_max_rules: int = 30,
+        warmstart_jaccard_max: float = 0.8,
+        feature_names: list[str] | None = None,
         random_state: int | None = None,
     ):
         self.population_size = population_size
@@ -317,6 +321,19 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         self.continuous_threshold_strategy = continuous_threshold_strategy
         self.atom_preselection_strategy = atom_preselection_strategy
         self.atom_preselection_top_k = atom_preselection_top_k
+        if warmstart_strategy not in (
+            "none",
+            "rulefit",
+            "rulefit_atoms_only",
+            "rulefit_seeds_only",
+        ):
+            raise ValueError(
+                "warmstart_strategy must be 'none', 'rulefit', 'rulefit_atoms_only', or 'rulefit_seeds_only'."
+            )
+        self.warmstart_strategy = warmstart_strategy
+        self.warmstart_max_rules = warmstart_max_rules
+        self.warmstart_jaccard_max = warmstart_jaccard_max
+        self.feature_names = feature_names
         self.random_state = random_state
         self._atom_pool_: dict[int, list[_AtomGene]] = {}
 
@@ -342,9 +359,16 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
     def fit(self, X, y):
         X, y = check_X_y(X, y, dtype=None)
         self.n_features_in_ = X.shape[1]
-        self.feature_names_in_ = np.asarray(
-            [f"f{i}" for i in range(self.n_features_in_)], dtype=object
-        )
+        if self.feature_names is not None:
+            if len(self.feature_names) != self.n_features_in_:
+                raise ValueError(
+                    f"feature_names has length {len(self.feature_names)}; expected {self.n_features_in_}."
+                )
+            self.feature_names_in_ = np.asarray([str(name) for name in self.feature_names], dtype=object)
+        else:
+            self.feature_names_in_ = np.asarray(
+                [f"f{i}" for i in range(self.n_features_in_)], dtype=object
+            )
         self.classes_ = unique_labels(y)
         n_classes = len(self.classes_)
         rng = np.random.default_rng(self.random_state)
@@ -368,10 +392,45 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
             y=y_idx,
             continuous_threshold_strategy=self.continuous_threshold_strategy,
         )
-        self._atom_pool_ = self._build_atom_pool(specs, X_train, y_train, n_classes)
+
+        warmstart_seed_individuals: list[_Individual] = []
+        if self.warmstart_strategy in ("rulefit", "rulefit_atoms_only", "rulefit_seeds_only"):
+            from scoredrulesets.warmstart.rulefit_warmstart import extract_rulefit_components
+
+            feature_names_list = [str(f) for f in self.feature_names_in_]
+            curated_raw_atoms, curated_raw_rules = extract_rulefit_components(
+                X_train=X_train,
+                y_train=y_train,
+                feature_names=feature_names_list,
+                max_rules=self.warmstart_max_rules,
+                min_samples_split=self.min_samples_leaf,
+                jaccard_max_sim=self.warmstart_jaccard_max,
+                random_state=self.random_state,
+            )
+
+            if self.warmstart_strategy in ("rulefit", "rulefit_atoms_only"):
+                curated_pool: dict[int, list[_AtomGene]] = {}
+                for fi, op, thr in curated_raw_atoms:
+                    curated_pool.setdefault(fi, []).append(_AtomGene(fi, op, float(thr)))
+                if curated_pool:
+                    self._atom_pool_ = curated_pool
+                    specs = [s for s in specs if s["idx"] in curated_pool]
+
+            if self.warmstart_strategy in ("rulefit", "rulefit_seeds_only"):
+                for r_atoms in curated_raw_rules:
+                    rule_genes = [_AtomGene(fi, op, float(thr)) for fi, op, thr in r_atoms]
+                    if rule_genes:
+                        ind = _Individual(rules=[_RuleGene(atoms=rule_genes)])
+                        self._refit_scores(ind, X_train, y_train, n_classes)
+                        warmstart_seed_individuals.append(ind)
+
+        if not hasattr(self, "_atom_pool_") or not self._atom_pool_:
+            self._atom_pool_ = self._build_atom_pool(specs, X_train, y_train, n_classes)
 
         # ---------- Initialise population ----------
-        pop = self._init_population(specs, X_train, y_train, n_classes, rng)
+        pop = self._init_population(
+            specs, X_train, y_train, n_classes, rng, warmstart_seeds=warmstart_seed_individuals
+        )
         for ind in pop:
             self._evaluate(ind, X_eval, y_eval, n_classes)
 
@@ -473,16 +532,25 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         y: np.ndarray,
         n_classes: int,
         rng: np.random.Generator,
+        warmstart_seeds: list[_Individual] | None = None,
     ) -> list[_Individual]:
         pop: list[_Individual] = []
         n_init = max(2, self.population_size)
 
+        if warmstart_seeds:
+            for ind in warmstart_seeds:
+                pop.append(ind.clone())
+
         # (a) Systematic single-atom seeds (analogous to logicGP's per-literal seeding)
         for ind in self._seed_systematic(specs, X, y, n_classes, rng):
+            if warmstart_seeds and len(pop) >= n_init // 2:
+                break
             pop.append(ind)
 
         # (b) Class-discriminative seeds: one rule per class
         for _ in range(min(n_init // 4, n_classes * 2)):
+            if warmstart_seeds and len(pop) >= n_init * 3 // 4:
+                break
             ind = self._seed_class_discriminative(specs, X, y, n_classes, rng)
             if ind is not None:
                 self._refit_scores(ind, X, y, n_classes)
@@ -490,6 +558,8 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
 
         # (c) Greedy sequential-cover seed
         for _ in range(min(3, n_init // 4)):
+            if warmstart_seeds and len(pop) >= n_init:
+                break
             ind = self._seed_greedy_cover(specs, X, y, n_classes, rng)
             self._refit_scores(ind, X, y, n_classes)
             pop.append(ind)
@@ -500,7 +570,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
             self._refit_scores(ind, X, y, n_classes)
             pop.append(ind)
 
-        return pop
+        return pop[:n_init]
 
     def _random_individual(
         self, specs: list[dict], rng: np.random.Generator
@@ -519,14 +589,15 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
     def _random_atom(
         self, specs: list[dict], rng: np.random.Generator
     ) -> _AtomGene:
-        if self._atom_pool_ and rng.random() < 0.85:
-            fi_keys = list(self._atom_pool_.keys())
-            if fi_keys:
-                fi = int(fi_keys[int(rng.integers(0, len(fi_keys)))])
-                atoms = self._atom_pool_.get(fi, [])
-                if atoms:
-                    atom = atoms[int(rng.integers(0, len(atoms)))]
-                    return _AtomGene(atom.feature_idx, atom.op, atom.value)
+        if self._atom_pool_:
+            if getattr(self, "warmstart_strategy", "none") in ("rulefit", "rulefit_atoms_only") or rng.random() < 0.85:
+                fi_keys = list(self._atom_pool_.keys())
+                if fi_keys:
+                    fi = int(fi_keys[int(rng.integers(0, len(fi_keys)))])
+                    atoms = self._atom_pool_.get(fi, [])
+                    if atoms:
+                        atom = atoms[int(rng.integers(0, len(atoms)))]
+                        return _AtomGene(atom.feature_idx, atom.op, atom.value)
 
         spec = specs[int(rng.integers(0, len(specs)))]
         fi = spec["idx"]
@@ -1238,6 +1309,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                 "continuous_threshold_strategy": self.continuous_threshold_strategy,
                 "atom_preselection_strategy": self.atom_preselection_strategy,
                 "atom_preselection_top_k": self.atom_preselection_top_k,
+                "warmstart_strategy": self.warmstart_strategy,
                 "max_rules": self.max_rules,
                 "max_atoms_per_rule": self.max_atoms_per_rule,
             },

@@ -198,3 +198,24 @@ def test_rulensga2_max_fit_seconds_raises_on_setup_timeout(monkeypatch):
         clf.fit(X, y)
 
 
+def test_rulensga2_warmstart_execution():
+    X, y = load_breast_cancer(return_X_y=True)
+    feature_names = [f"feat_{i}" for i in range(X.shape[1])]
+
+    for mode in ("rulefit", "rulefit_atoms_only", "rulefit_seeds_only"):
+        clf = RuleNSGA2Classifier(
+            warmstart_strategy=mode,
+            warmstart_max_rules=15,
+            feature_names=feature_names,
+            population_size=20,
+            generations=5,
+            random_state=42,
+        )
+        clf.fit(X, y)
+        rs = clf.to_ruleset()
+        assert rs.metadata["warmstart_strategy"] == mode
+        preds = clf.predict(X)
+        assert preds.shape == (X.shape[0],)
+        assert hasattr(clf, "ruleset_")
+
+
