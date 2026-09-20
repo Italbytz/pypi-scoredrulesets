@@ -349,6 +349,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         continuous_threshold_strategy: ContinuousThresholdStrategy = "quantile_midpoint",
         atom_preselection_strategy: AtomPreselectionStrategy = "none",
         atom_preselection_top_k: int | None = None,
+        warmstart_strategy: str = "none",
+        warmstart_max_rules: int = 30,
+        warmstart_jaccard_max: float = 0.8,
         feature_names: list[str] | None = None,
         random_state: int | None = None,
     ):
@@ -401,6 +404,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     "atom_preselection_top_k must be a positive integer when "
                     "atom_preselection_strategy requires preselection size."
                 )
+        if warmstart_strategy not in ("none", "rulefit"):
+            raise ValueError("warmstart_strategy must be 'none' or 'rulefit'.")
+        self.warmstart_strategy = warmstart_strategy
+        self.warmstart_max_rules = warmstart_max_rules
+        self.warmstart_jaccard_max = warmstart_jaccard_max
         self.feature_names = feature_names
         self.random_state = random_state
         if objective_mode not in ("recall", "f1"):
@@ -487,6 +495,34 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             allowed_top_c2_keys=allowed_top_c2_keys,
         )
         all_atoms = [a for atoms in atom_pool.values() for a in atoms]
+
+        warmstart_seeds: list[_RuleSet2] = []
+        if self.warmstart_strategy == "rulefit":
+            from scoredrulesets.warmstart.rulefit_warmstart import extract_rulefit_components
+
+            feature_names_list = [str(f) for f in self.feature_names_in_]
+            curated_raw_atoms, curated_raw_rules = extract_rulefit_components(
+                X_train=X_train,
+                y_train=y_train,
+                feature_names=feature_names_list,
+                max_rules=self.warmstart_max_rules,
+                min_samples_split=self.min_samples_leaf,
+                jaccard_max_sim=self.warmstart_jaccard_max,
+                random_state=self.random_state,
+            )
+
+            curated_genes = [_AtomGene2(fi, op, thr) for fi, op, thr in curated_raw_atoms]
+            if curated_genes:
+                all_atoms = curated_genes
+
+            unif = np.ones(n_classes, dtype=float) / n_classes
+            for r_atoms in curated_raw_rules:
+                genes = [_AtomGene2(fi, op, thr) for fi, op, thr in r_atoms]
+                if genes:
+                    rule_obj = _Rule2(atoms=genes, weights=unif.copy())
+                    seed_rs = _RuleSet2(rules=[rule_obj], default_weights=unif.copy())
+                    warmstart_seeds.append(seed_rs)
+
         if not all_atoms:
             all_atoms = self._fallback_atoms(specs)
         if not all_atoms:
@@ -498,6 +534,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             X_train=X_train,
             y_train=y_train,
             n_classes=n_classes,
+            warmstart_seeds=warmstart_seeds,
         )
         best_rs = self._run_gp(
             population=population,
@@ -680,9 +717,14 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         X_train: np.ndarray,
         y_train: np.ndarray,
         n_classes: int,
+        warmstart_seeds: list[_RuleSet2] | None = None,
     ) -> list[_RuleSet2]:
         unif = np.ones(n_classes, dtype=float) / n_classes
         pop: list[_RuleSet2] = []
+        if warmstart_seeds:
+            for s in warmstart_seeds:
+                pop.append(s.clone())
+
         for atom in all_atoms:
             pop.append(
                 _RuleSet2(
@@ -1183,5 +1225,8 @@ def _to_ruleset_rulegp(classifier: RuleGPClassifier, rs: _RuleSet2, n_classes: i
             "continuous_threshold_strategy": classifier.continuous_threshold_strategy,
             "atom_preselection_strategy": classifier.atom_preselection_strategy,
             "atom_preselection_top_k": classifier.atom_preselection_top_k,
+            "warmstart_strategy": classifier.warmstart_strategy,
+            "warmstart_max_rules": classifier.warmstart_max_rules,
+            "warmstart_jaccard_max": classifier.warmstart_jaccard_max,
         },
     )
