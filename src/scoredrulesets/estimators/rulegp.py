@@ -404,8 +404,15 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     "atom_preselection_top_k must be a positive integer when "
                     "atom_preselection_strategy requires preselection size."
                 )
-        if warmstart_strategy not in ("none", "rulefit"):
-            raise ValueError("warmstart_strategy must be 'none' or 'rulefit'.")
+        if warmstart_strategy not in (
+            "none",
+            "rulefit",
+            "rulefit_atoms_only",
+            "rulefit_seeds_only",
+        ):
+            raise ValueError(
+                "warmstart_strategy must be 'none', 'rulefit', 'rulefit_atoms_only', or 'rulefit_seeds_only'."
+            )
         self.warmstart_strategy = warmstart_strategy
         self.warmstart_max_rules = warmstart_max_rules
         self.warmstart_jaccard_max = warmstart_jaccard_max
@@ -497,7 +504,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         all_atoms = [a for atoms in atom_pool.values() for a in atoms]
 
         warmstart_seeds: list[_RuleSet2] = []
-        if self.warmstart_strategy == "rulefit":
+        if self.warmstart_strategy in ("rulefit", "rulefit_atoms_only", "rulefit_seeds_only"):
             from scoredrulesets.warmstart.rulefit_warmstart import extract_rulefit_components
 
             feature_names_list = [str(f) for f in self.feature_names_in_]
@@ -511,17 +518,19 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                 random_state=self.random_state,
             )
 
-            curated_genes = [_AtomGene2(fi, op, thr) for fi, op, thr in curated_raw_atoms]
-            if curated_genes:
-                all_atoms = curated_genes
+            if self.warmstart_strategy in ("rulefit", "rulefit_atoms_only"):
+                curated_genes = [_AtomGene2(fi, op, thr) for fi, op, thr in curated_raw_atoms]
+                if curated_genes:
+                    all_atoms = curated_genes
 
-            unif = np.ones(n_classes, dtype=float) / n_classes
-            for r_atoms in curated_raw_rules:
-                genes = [_AtomGene2(fi, op, thr) for fi, op, thr in r_atoms]
-                if genes:
-                    rule_obj = _Rule2(atoms=genes, weights=unif.copy())
-                    seed_rs = _RuleSet2(rules=[rule_obj], default_weights=unif.copy())
-                    warmstart_seeds.append(seed_rs)
+            if self.warmstart_strategy in ("rulefit", "rulefit_seeds_only"):
+                unif = np.ones(n_classes, dtype=float) / n_classes
+                for r_atoms in curated_raw_rules:
+                    genes = [_AtomGene2(fi, op, thr) for fi, op, thr in r_atoms]
+                    if genes:
+                        rule_obj = _Rule2(atoms=genes, weights=unif.copy())
+                        seed_rs = _RuleSet2(rules=[rule_obj], default_weights=unif.copy())
+                        warmstart_seeds.append(seed_rs)
 
         if not all_atoms:
             all_atoms = self._fallback_atoms(specs)
