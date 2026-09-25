@@ -352,11 +352,14 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         warmstart_strategy: str = "none",
         warmstart_max_rules: int = 30,
         warmstart_jaccard_max: float = 0.8,
+        espresso_seed_pruning: bool = False,
+        espresso_mutation: bool = False,
         feature_names: list[str] | None = None,
         random_state: int | None = None,
     ):
         self.f1_averaging = f1_averaging
         self.max_generations = max_generations
+
         self.stagnation_generations = stagnation_generations
         self.early_stopping_metric = early_stopping_metric
         self.min_max_weight = min_max_weight
@@ -416,8 +419,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         self.warmstart_strategy = warmstart_strategy
         self.warmstart_max_rules = warmstart_max_rules
         self.warmstart_jaccard_max = warmstart_jaccard_max
+        self.espresso_seed_pruning = espresso_seed_pruning
+        self.espresso_mutation = espresso_mutation
         self.feature_names = feature_names
         self.random_state = random_state
+
         if objective_mode not in ("recall", "f1"):
             raise ValueError("objective_mode must be 'recall' or 'f1'.")
         self.objective_mode = objective_mode
@@ -515,8 +521,10 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                 max_rules=self.warmstart_max_rules,
                 min_samples_split=self.min_samples_leaf,
                 jaccard_max_sim=self.warmstart_jaccard_max,
+                espresso_expand_seeds=self.espresso_seed_pruning,
                 random_state=self.random_state,
             )
+
 
             if self.warmstart_strategy in ("rulefit", "rulefit_atoms_only"):
                 curated_genes = [_AtomGene2(fi, op, thr) for fi, op, thr in curated_raw_atoms]
@@ -911,6 +919,46 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         out.rules.pop(ri)
         return out
 
+    def _mut_espresso_expand(self, rs: _RuleSet2, X_train: np.ndarray, y_train: np.ndarray) -> _RuleSet2:
+        out = rs.clone()
+        candidates = [i for i, r in enumerate(out.rules) if len(r.atoms) > 1]
+        if not candidates:
+            return self._mut_delete_atom(rs)
+        ri = candidates[int(self._rng_.integers(0, len(candidates)))]
+        rule = out.rules[ri]
+
+        best_ai = None
+        best_purity = -1.0
+        for ai in range(len(rule.atoms)):
+            cand_atoms = rule.atoms[:ai] + rule.atoms[ai + 1:]
+            m = np.ones(X_train.shape[0], dtype=bool)
+            for atom in cand_atoms:
+                m &= out._atom_mask(atom, X_train)
+            if m.any():
+                cts = np.bincount(y_train[m])
+                purity = float(np.max(cts) / m.sum())
+                if purity > best_purity:
+                    best_purity = purity
+                    best_ai = ai
+        if best_ai is not None:
+            rule.atoms.pop(best_ai)
+        return out
+
+    def _mut_espresso_irredundant(self, rs: _RuleSet2, X_train: np.ndarray) -> _RuleSet2:
+        if len(rs.rules) <= 1:
+            return rs
+        out = rs.clone()
+        masks = [out._rule_mask(r, X_train) for r in out.rules]
+        for i in range(len(out.rules)):
+            for j in range(len(out.rules)):
+                if i != j and masks[i].any():
+                    overlap = float(np.sum(masks[i] & masks[j]) / np.sum(masks[i]))
+                    if overlap > 0.85:
+                        out.rules.pop(i)
+                        return out
+        return self._mut_delete_rule(rs)
+
+
     def _run_gp(
         self,
         population: list[_RuleSet2],
@@ -988,8 +1036,12 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             lambda p: self._mut_insert_rule(p, all_atoms, n_classes),
             self._mut_delete_rule,
         ]
+        if self.espresso_mutation:
+            mut_ops.append(lambda p: self._mut_espresso_expand(p, X_train, y_train))
+            mut_ops.append(lambda p: self._mut_espresso_irredundant(p, X_train))
 
         n_adapt = max(1, self.n_adaptations_per_gen)
+
         _deadline = getattr(self, "_fit_deadline_", None)
         zero_mcr_target_generation: int | None = None
 
@@ -1237,5 +1289,8 @@ def _to_ruleset_rulegp(classifier: RuleGPClassifier, rs: _RuleSet2, n_classes: i
             "warmstart_strategy": classifier.warmstart_strategy,
             "warmstart_max_rules": classifier.warmstart_max_rules,
             "warmstart_jaccard_max": classifier.warmstart_jaccard_max,
+            "espresso_seed_pruning": classifier.espresso_seed_pruning,
+            "espresso_mutation": classifier.espresso_mutation,
         },
     )
+

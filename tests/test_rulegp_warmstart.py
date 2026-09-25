@@ -116,3 +116,29 @@ def test_rulegp_warmstart_ablation_modes():
         assert rs.metadata["warmstart_strategy"] == mode
         preds = clf.predict(X)
         assert preds.shape == (X.shape[0],)
+
+
+def test_rulegp_espresso_options():
+    from scoredrulesets.estimators.rulegp import RuleGPClassifier
+
+    data = load_breast_cancer()
+    X, y = data.data, data.target
+    feature_names = [f"feat_{i}" for i in range(X.shape[1])]
+
+    clf = RuleGPClassifier(
+        warmstart_strategy="rulefit",
+        warmstart_max_rules=15,
+        espresso_seed_pruning=True,
+        espresso_mutation=True,
+        feature_names=feature_names,
+        max_generations=5,
+        population_size=20,
+        random_state=42,
+    )
+    clf.fit(X, y)
+    rs = clf.to_ruleset()
+    assert rs.metadata["espresso_seed_pruning"] is True
+    assert rs.metadata["espresso_mutation"] is True
+    preds = clf.predict(X)
+    assert preds.shape == (X.shape[0],)
+

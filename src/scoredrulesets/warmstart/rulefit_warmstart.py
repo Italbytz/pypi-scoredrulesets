@@ -17,6 +17,52 @@ def _parse_feature_idx(feat_str: str, feature_names: list[str]) -> int:
     raise ValueError(f"Cannot resolve feature '{feat_str}' to an index.")
 
 
+def _espresso_expand_rule(
+    rule_atoms: list[tuple[int, str, float]],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    min_purity_loss: float = 0.02,
+) -> list[tuple[int, str, float]]:
+    """Prunes non-essential literals from a rule conjunction while preserving class precision."""
+    if len(rule_atoms) <= 1:
+        return rule_atoms
+
+    def _eval(atoms: list[tuple[int, str, float]]) -> tuple[float, int, int]:
+        m = np.ones(X_train.shape[0], dtype=bool)
+        for fi, op, thr in atoms:
+            col = X_train[:, fi]
+            if op == "<=":
+                m &= (col <= thr)
+            elif op == "<":
+                m &= (col < thr)
+            elif op == ">=":
+                m &= (col >= thr)
+            elif op == ">":
+                m &= (col > thr)
+        if not m.any():
+            return 0.0, 0, 0
+        counts = np.bincount(y_train[m])
+        dom_class = int(np.argmax(counts))
+        purity = float(counts[dom_class] / m.sum())
+        return purity, int(m.sum()), dom_class
+
+    orig_purity, orig_cov, orig_class = _eval(rule_atoms)
+    current_atoms = list(rule_atoms)
+    changed = True
+    while changed and len(current_atoms) > 1:
+        changed = False
+        for idx in range(len(current_atoms)):
+            candidate = current_atoms[:idx] + current_atoms[idx + 1:]
+            purity, cov, dom_class = _eval(candidate)
+            if dom_class == orig_class and purity >= orig_purity - min_purity_loss and cov >= orig_cov:
+                current_atoms = candidate
+                orig_purity = purity
+                orig_cov = cov
+                changed = True
+                break
+    return current_atoms
+
+
 def extract_rulefit_components(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -26,6 +72,7 @@ def extract_rulefit_components(
     max_thresholds_per_feature: int = 3,
     max_rules_seed: int = 15,
     jaccard_max_sim: float = 0.8,
+    espresso_expand_seeds: bool = False,
     random_state: int | None = None,
 ) -> tuple[list[tuple[int, str, float]], list[list[tuple[int, str, float]]]]:
     """
@@ -43,6 +90,7 @@ def extract_rulefit_components(
             "imodels is required for warmstart_strategy='rulefit'. "
             "Please install it via 'pip install imodels'."
         ) from exc
+
 
     n_samples, n_features = X_train.shape
     rf = RuleFitClassifier(max_rules=max_rules, random_state=random_state)
@@ -164,9 +212,15 @@ def extract_rulefit_components(
                 break
 
         if not is_redundant:
+            rule_to_add = (
+                _espresso_expand_rule(rule_atoms, X_train, y_train)
+                if espresso_expand_seeds
+                else rule_atoms
+            )
             selected_masks.append(mask)
-            selected_rules.append(rule_atoms)
+            selected_rules.append(rule_to_add)
             if len(selected_rules) >= max_rules_seed:
                 break
 
     return curated_atom_list, selected_rules
+
