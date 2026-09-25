@@ -180,8 +180,30 @@ def decision_function_regression(ruleset: ScoredRuleSet, X: np.ndarray, debug: b
                 predictions[i] = default_value + np.sum(active_values, axis=0)
             else:
                 predictions[i] = default_value
+        elif agg == "cascaded_sum":
+            # Evaluates each stage separately (using mean_active within stage) and sums stages
+            stage1_rules = [r for r in non_default_rules if getattr(r, "metadata", {}).get("stage") == 1]
+            stage2_rules = [r for r in non_default_rules if getattr(r, "metadata", {}).get("stage") == 2]
+            stage1_defs = [r for r in ruleset.rules if not getattr(r, "atoms", None) and getattr(r, "metadata", {}).get("stage") == 1]
+            stage2_defs = [r for r in ruleset.rules if not getattr(r, "atoms", None) and getattr(r, "metadata", {}).get("stage") == 2]
+
+            def _eval_stage(rules, defs):
+                active = []
+                for r in rules:
+                    if _rule_fires(row, r, feature_names):
+                        active.append(float(r.scores[0]))
+                if active:
+                    return float(np.mean(active))
+                if defs:
+                    return float(defs[0].scores[0])
+                return 0.0
+
+            pred1 = _eval_stage(stage1_rules, stage1_defs)
+            pred2 = _eval_stage(stage2_rules, stage2_defs)
+            predictions[i] = pred1 + pred2
         else:
             raise ValueError(f"Unsupported regression aggregation type: {agg}")
+
 
         if debug:
             print(f"[DEBUG regression] Sample {i}: prediction={predictions[i]}")

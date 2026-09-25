@@ -10,6 +10,7 @@ from .logicgp import GPASClassifier, LogicGPClassifier
 from .rulenln import RuleNLNClassifier
 from .rulegp import RuleGPClassifier
 from .rulegp_regressor import RuleGPRegressor
+from .cascaded_rulegp_regressor import CascadedRuleGPRegressor
 from .ruleplcs import RulePLCSClassifier
 from .ruleplcs_regressor import RulePLCSRegressor
 from .rulensga2 import RuleNSGA2Classifier
@@ -28,6 +29,7 @@ __all__ = [
 	"LogicGPClassifier",
 	"RuleGPClassifier",
 	"RuleGPRegressor",
+	"CascadedRuleGPRegressor",
 	"RuleNLNClassifier",
 	"RulePLCSClassifier",
 	"RulePLCSRegressor",
@@ -42,3 +44,4 @@ __all__ = [
 	"is_atom_selection_strategy_available",
 	"register_atom_selection_strategy",
 ]
+
