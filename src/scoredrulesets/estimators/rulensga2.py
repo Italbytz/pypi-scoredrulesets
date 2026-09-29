@@ -321,14 +321,24 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         self.continuous_threshold_strategy = continuous_threshold_strategy
         self.atom_preselection_strategy = atom_preselection_strategy
         self.atom_preselection_top_k = atom_preselection_top_k
-        if warmstart_strategy not in (
+        valid_warmstarts = (
             "none",
             "rulefit",
             "rulefit_atoms_only",
             "rulefit_seeds_only",
-        ):
+            "extratrees",
+            "extratrees_atoms_only",
+            "extratrees_seeds_only",
+            "figs",
+            "figs_atoms_only",
+            "figs_seeds_only",
+            "l1_logistic",
+            "l1_logistic_atoms_only",
+            "l1_logistic_seeds_only",
+        )
+        if warmstart_strategy not in valid_warmstarts:
             raise ValueError(
-                "warmstart_strategy must be 'none', 'rulefit', 'rulefit_atoms_only', or 'rulefit_seeds_only'."
+                f"warmstart_strategy must be one of {valid_warmstarts}, got '{warmstart_strategy}'."
             )
         self.warmstart_strategy = warmstart_strategy
         self.warmstart_max_rules = warmstart_max_rules
@@ -394,11 +404,12 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         )
 
         warmstart_seed_individuals: list[_Individual] = []
-        if self.warmstart_strategy in ("rulefit", "rulefit_atoms_only", "rulefit_seeds_only"):
-            from scoredrulesets.warmstart.rulefit_warmstart import extract_rulefit_components
+        if self.warmstart_strategy != "none":
+            from scoredrulesets.warmstart.warmstart_extractors import extract_warmstart_components
 
             feature_names_list = [str(f) for f in self.feature_names_in_]
-            curated_raw_atoms, curated_raw_rules = extract_rulefit_components(
+            curated_raw_atoms, curated_raw_rules = extract_warmstart_components(
+                strategy=self.warmstart_strategy,
                 X_train=X_train,
                 y_train=y_train,
                 feature_names=feature_names_list,
@@ -408,7 +419,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                 random_state=self.random_state,
             )
 
-            if self.warmstart_strategy in ("rulefit", "rulefit_atoms_only"):
+            if not self.warmstart_strategy.endswith("_seeds_only"):
                 curated_pool: dict[int, list[_AtomGene]] = {}
                 for fi, op, thr in curated_raw_atoms:
                     curated_pool.setdefault(fi, []).append(_AtomGene(fi, op, float(thr)))
@@ -416,7 +427,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                     self._atom_pool_ = curated_pool
                     specs = [s for s in specs if s["idx"] in curated_pool]
 
-            if self.warmstart_strategy in ("rulefit", "rulefit_seeds_only"):
+            if not self.warmstart_strategy.endswith("_atoms_only"):
                 for r_atoms in curated_raw_rules:
                     rule_genes = [_AtomGene(fi, op, float(thr)) for fi, op, thr in r_atoms]
                     if rule_genes:
