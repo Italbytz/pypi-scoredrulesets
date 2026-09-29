@@ -282,6 +282,37 @@ def _tournament_trim(
     return selected
 
 
+def _crowding_trim(
+    individuals: list[tuple[_RuleSet2, _FitnessRLCW2]],
+    n_keep: int,
+) -> list[tuple[_RuleSet2, _FitnessRLCW2]]:
+    """NSGA-II-style crowding-distance trim preserving front geometry.
+
+    Unlike the random tournament trim, individuals in sparse regions of the
+    objective space survive: the translated warmstart front cannot be eroded
+    by chance draws, so a good P0 is retained structurally (archive HV becomes
+    monotonically non-decreasing up to objective re-evaluation).  Crowding is
+    computed over the three fitness dimensions (max_recall,
+    mean_other_recall, size), each range-normalized.
+    """
+    if len(individuals) <= n_keep:
+        return individuals
+    fits = [f for _, f in individuals]
+    dist = [0.0] * len(individuals)
+    for attr in ("max_recall", "mean_other_recall", "size"):
+        vals = [float(getattr(f, attr)) for f in fits]
+        span = (max(vals) - min(vals)) or 1.0
+        order = sorted(range(len(individuals)), key=lambda i: vals[i])
+        dist[order[0]] = float("inf")
+        dist[order[-1]] = float("inf")
+        for pos in range(1, len(order) - 1):
+            i = order[pos]
+            dist[i] += (vals[order[pos + 1]] - vals[order[pos - 1]]) / span
+    ranked = sorted(range(len(individuals)), key=lambda i: -dist[i])
+    keep = sorted(ranked[:n_keep])
+    return [individuals[i] for i in keep]
+
+
 def _compute_weights2(
     rs: _RuleSet2,
     X: np.ndarray,
@@ -321,6 +352,33 @@ def _compute_weights2(
         rs.default_weights = np.ones(n_classes, dtype=float) / n_classes
 
 
+def _population_vs_pool_coverage(
+    evaluated: list[tuple],
+    pool_atoms: list,
+) -> float:
+    """Fraction of pool feature indices that are represented in the population.
+
+    Returns a value in [0, 1].  A value near 0 means the population covers
+    only a tiny slice of the available feature space (typical of warmstart
+    with a restricted atom pool).  A value near 1 means the population
+    already explores most of the available features (typical of a cold start
+    with a large atom pool).
+
+    This metric correctly identifies the warmstart atom-pool collapse:
+    a warmstart on a 7 129-feature dataset with 30 curated atoms uses
+    ≈20 unique features → coverage ≈ 20/7129 ≈ 0.003, triggering rescue.
+    """
+    if not evaluated or not pool_atoms:
+        return 1.0
+    pool_features: set[int] = {atom.feature_idx for atom in pool_atoms}
+    pop_features: set[int] = set()
+    for rs, _ in evaluated:
+        for rule in rs.rules:
+            for atom in rule.atoms:
+                pop_features.add(atom.feature_idx)
+    return len(pop_features & pool_features) / len(pool_features)
+
+
 class RuleGPClassifier(BaseRuleSetEstimator):
     """RLCW-style GP with atoms/rules/rule sets and native numeric handling."""
 
@@ -352,10 +410,16 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         warmstart_strategy: str = "none",
         warmstart_max_rules: int = 30,
         warmstart_jaccard_max: float = 0.8,
+        warmstart_ladder: bool = False,
+        warmstart_scouting_max_depth: int | None = None,
+        trim_strategy: str = "tournament",
         espresso_seed_pruning: bool = False,
         espresso_mutation: bool = False,
+        diversity_stagnation_threshold: float = 0.1,
+        diversity_rescue_attempts: int = 0,
         feature_names: list[str] | None = None,
         random_state: int | None = None,
+        record_population: bool = False,
     ):
         self.f1_averaging = f1_averaging
         self.max_generations = max_generations
@@ -407,22 +471,47 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     "atom_preselection_top_k must be a positive integer when "
                     "atom_preselection_strategy requires preselection size."
                 )
-        if warmstart_strategy not in (
+        valid_warmstarts = (
             "none",
             "rulefit",
             "rulefit_atoms_only",
             "rulefit_seeds_only",
-        ):
+            "extratrees",
+            "extratrees_atoms_only",
+            "extratrees_seeds_only",
+            "figs",
+            "figs_atoms_only",
+            "figs_seeds_only",
+            "l1_logistic",
+            "l1_logistic_atoms_only",
+            "l1_logistic_seeds_only",
+            "ensemble_rich",
+            "ensemble_rich_atoms_only",
+            "ensemble_rich_seeds_only",
+        )
+        if warmstart_strategy not in valid_warmstarts:
             raise ValueError(
-                "warmstart_strategy must be 'none', 'rulefit', 'rulefit_atoms_only', or 'rulefit_seeds_only'."
+                f"warmstart_strategy must be one of {valid_warmstarts}, got '{warmstart_strategy}'."
             )
         self.warmstart_strategy = warmstart_strategy
         self.warmstart_max_rules = warmstart_max_rules
         self.warmstart_jaccard_max = warmstart_jaccard_max
+        self.warmstart_ladder = warmstart_ladder
+        self.warmstart_scouting_max_depth = warmstart_scouting_max_depth
+        if trim_strategy not in ("tournament", "crowding"):
+            raise ValueError("trim_strategy must be 'tournament' or 'crowding'.")
+        self.trim_strategy = trim_strategy
         self.espresso_seed_pruning = espresso_seed_pruning
         self.espresso_mutation = espresso_mutation
+        if not (0.0 <= diversity_stagnation_threshold <= 1.0):
+            raise ValueError("diversity_stagnation_threshold must be in [0, 1].")
+        self.diversity_stagnation_threshold = diversity_stagnation_threshold
+        if diversity_rescue_attempts < 0:
+            raise ValueError("diversity_rescue_attempts must be >= 0.")
+        self.diversity_rescue_attempts = diversity_rescue_attempts
         self.feature_names = feature_names
         self.random_state = random_state
+        self.record_population = record_population
 
         if objective_mode not in ("recall", "f1"):
             raise ValueError("objective_mode must be 'recall' or 'f1'.")
@@ -508,37 +597,92 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             allowed_top_c2_keys=allowed_top_c2_keys,
         )
         all_atoms = [a for atoms in atom_pool.values() for a in atoms]
+        # Preserve the full atom pool for potential diversity rescue injections
+        # later.  When a warmstart strategy restricts all_atoms to a curated
+        # subset, rescue injections must draw from the original full pool so
+        # they can introduce features outside the warmstart's narrow focus.
+        all_atoms_full = all_atoms
 
         warmstart_seeds: list[_RuleSet2] = []
-        if self.warmstart_strategy in ("rulefit", "rulefit_atoms_only", "rulefit_seeds_only"):
-            from scoredrulesets.warmstart.rulefit_warmstart import extract_rulefit_components
+        is_ensemble_rich = self.warmstart_strategy.lower().startswith("ensemble_rich")
+        if self.warmstart_strategy != "none":
+            from scoredrulesets.warmstart.warmstart_extractors import extract_warmstart_components
 
             feature_names_list = [str(f) for f in self.feature_names_in_]
-            curated_raw_atoms, curated_raw_rules = extract_rulefit_components(
-                X_train=X_train,
-                y_train=y_train,
-                feature_names=feature_names_list,
-                max_rules=self.warmstart_max_rules,
-                min_samples_split=self.min_samples_leaf,
-                jaccard_max_sim=self.warmstart_jaccard_max,
-                espresso_expand_seeds=self.espresso_seed_pruning,
-                random_state=self.random_state,
-            )
 
+            if is_ensemble_rich:
+                # ensemble_rich returns (full_atoms, seed_rules, multirule_seeds)
+                # full_atoms is already a full quantile-based pool for top-k features —
+                # we use it directly without restricting it further.
+                result = extract_warmstart_components(
+                    strategy=self.warmstart_strategy,
+                    X_train=X_train,
+                    y_train=y_train,
+                    feature_names=feature_names_list,
+                    max_rules=self.warmstart_max_rules,
+                    min_samples_split=self.min_samples_leaf,
+                    jaccard_max_sim=self.warmstart_jaccard_max,
+                    espresso_expand_seeds=self.espresso_seed_pruning,
+                    random_state=self.random_state,
+                    ladder=self.warmstart_ladder,
+                    scouting_max_depth=self.warmstart_scouting_max_depth,
+                )
+                rich_atoms, rich_seed_rules, rich_multirule_seeds = result[:3]
 
-            if self.warmstart_strategy in ("rulefit", "rulefit_atoms_only"):
-                curated_genes = [_AtomGene2(fi, op, thr) for fi, op, thr in curated_raw_atoms]
-                if curated_genes:
-                    all_atoms = curated_genes
+                # Replace atom pool with the rich full pool (not restricted to 30 splits)
+                if not self.warmstart_strategy.endswith("_seeds_only") and rich_atoms:
+                    all_atoms = [_AtomGene2(fi, op, thr) for fi, op, thr in rich_atoms]
 
-            if self.warmstart_strategy in ("rulefit", "rulefit_seeds_only"):
-                unif = np.ones(n_classes, dtype=float) / n_classes
-                for r_atoms in curated_raw_rules:
-                    genes = [_AtomGene2(fi, op, thr) for fi, op, thr in r_atoms]
-                    if genes:
-                        rule_obj = _Rule2(atoms=genes, weights=unif.copy())
-                        seed_rs = _RuleSet2(rules=[rule_obj], default_weights=unif.copy())
-                        warmstart_seeds.append(seed_rs)
+                # Single-rule seeds
+                if not self.warmstart_strategy.endswith("_atoms_only"):
+                    unif = np.ones(n_classes, dtype=float) / n_classes
+                    for r_atoms in rich_seed_rules:
+                        genes = [_AtomGene2(fi, op, thr) for fi, op, thr in r_atoms]
+                        if genes:
+                            rule_obj = _Rule2(atoms=genes, weights=unif.copy())
+                            warmstart_seeds.append(
+                                _RuleSet2(rules=[rule_obj], default_weights=unif.copy())
+                            )
+                    # Multi-rule individuals: each is a list of 2 complementary rules
+                    for multi_rules in rich_multirule_seeds:
+                        rule_list = []
+                        for r_atoms in multi_rules:
+                            genes = [_AtomGene2(fi, op, thr) for fi, op, thr in r_atoms]
+                            if genes:
+                                rule_list.append(_Rule2(atoms=genes, weights=unif.copy()))
+                        if len(rule_list) >= 2:
+                            warmstart_seeds.append(
+                                _RuleSet2(rules=rule_list, default_weights=unif.copy())
+                            )
+            else:
+                curated_raw_atoms, curated_raw_rules = extract_warmstart_components(
+                    strategy=self.warmstart_strategy,
+                    X_train=X_train,
+                    y_train=y_train,
+                    feature_names=feature_names_list,
+                    max_rules=self.warmstart_max_rules,
+                    min_samples_split=self.min_samples_leaf,
+                    jaccard_max_sim=self.warmstart_jaccard_max,
+                    espresso_expand_seeds=self.espresso_seed_pruning,
+                    random_state=self.random_state,
+                    ladder=self.warmstart_ladder,
+                    scouting_max_depth=self.warmstart_scouting_max_depth,
+                )
+
+                if not self.warmstart_strategy.endswith("_seeds_only"):
+                    curated_genes = [_AtomGene2(fi, op, thr) for fi, op, thr in curated_raw_atoms]
+                    if curated_genes:
+                        all_atoms = curated_genes
+
+                if not self.warmstart_strategy.endswith("_atoms_only"):
+                    unif = np.ones(n_classes, dtype=float) / n_classes
+                    for r_atoms in curated_raw_rules:
+                        genes = [_AtomGene2(fi, op, thr) for fi, op, thr in r_atoms]
+                        if genes:
+                            rule_obj = _Rule2(atoms=genes, weights=unif.copy())
+                            warmstart_seeds.append(
+                                _RuleSet2(rules=[rule_obj], default_weights=unif.copy())
+                            )
 
         if not all_atoms:
             all_atoms = self._fallback_atoms(specs)
@@ -553,9 +697,18 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             n_classes=n_classes,
             warmstart_seeds=warmstart_seeds,
         )
+        # Diagnostic snapshots for warmstart-translation studies (population-
+        # quality benchmark, agent-workbench project rulefit-seeded-rulegp).
+        # Opt-in via ``record_population`` so the default path stays untouched.
+        # ``warmstart_seeds_`` holds only estimator-derived individuals (empty
+        # for a cold start); the raw P0 snapshot (with computed weights) is
+        # taken inside ``_run_gp`` right after weight computation.
+        if self.record_population:
+            self.warmstart_seeds_ = [rs.clone() for rs in warmstart_seeds]
         best_rs = self._run_gp(
             population=population,
             all_atoms=all_atoms,
+            rescue_atoms=all_atoms_full,
             X_train=X_train,
             y_train=y_train,
             n_classes=n_classes,
@@ -963,6 +1116,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         self,
         population: list[_RuleSet2],
         all_atoms: list[_AtomGene2],
+        rescue_atoms: list[_AtomGene2],
         X_train: np.ndarray,
         y_train: np.ndarray,
         n_classes: int,
@@ -984,6 +1138,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         for rs in population:
             _compute_weights2(rs, X_train, y_train, n_classes)
 
+        if self.record_population:
+            # Raw P0 snapshot: translated initial population with weights
+            # computed, BEFORE the first Pareto filter + tournament trim.
+            self.initial_population_ = [rs.clone() for rs in population]
+
         evaluated = [
             (
                 rs,
@@ -1000,7 +1159,10 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         evaluated = _pareto_front_rlcw2(evaluated)
 
         if self.population_size is not None and len(evaluated) > self.population_size:
-            evaluated = _tournament_trim(evaluated, self.population_size, self.tournament_size, self._rng_)
+            if self.trim_strategy == "crowding":
+                evaluated = _crowding_trim(evaluated, self.population_size)
+            else:
+                evaluated = _tournament_trim(evaluated, self.population_size, self.tournament_size, self._rng_)
 
         if self.early_stopping_metric == "f1":
             best_signal = max(
@@ -1010,6 +1172,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         else:
             best_signal = max(fit.consolidated for _, fit in evaluated)
         stagnation = 0
+        rescue_attempts_used = 0
         all_candidates: list[tuple[_RuleSet2, _FitnessRLCW2, float, float]] = []
 
         for rs, fit in evaluated:
@@ -1028,6 +1191,37 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             self.objective_mode,
         )
         elite_f1 = max(c[2] for c in all_candidates)
+
+        # Per-generation snapshots of the Pareto archive as (size, eval-F1)
+        # pairs.  Consumed by population-quality benchmarks to trace how the
+        # (F1, size) front evolves; index 0 is the initial archive (P0 after
+        # first Pareto filter + trim).  Opt-in via ``record_population``.
+        self.front_history_: list[list[tuple[int, float]]] = []
+
+        def _snap(
+            evals: list[tuple[_RuleSet2, _FitnessRLCW2]],
+        ) -> list[tuple[int, float]]:
+            return [
+                (
+                    int(fit.size),
+                    float(
+                        _f1_score(
+                            eval_y,
+                            rs.predict_classes(eval_X),
+                            average=self.f1_averaging,
+                            labels=labels,
+                        )
+                    ),
+                )
+                for rs, fit in evals
+            ]
+
+        if self.record_population:
+            self.front_history_.append(_snap(evaluated))
+            # Final Pareto archive as individual clones, so benchmarks can
+            # re-evaluate it on held-out data (train-objective snapshots in
+            # front_history_ saturate on small samples).
+            self.final_archive_ = [rs.clone() for rs, _ in evaluated]
 
         mut_ops = [
             lambda p: self._mut_insert_atom(p, all_atoms),
@@ -1090,7 +1284,10 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             combined = evaluated + new_eval
             evaluated = _pareto_front_rlcw2(combined)
             if self.population_size is not None and len(evaluated) > self.population_size:
-                evaluated = _tournament_trim(evaluated, self.population_size, self.tournament_size, self._rng_)
+                if self.trim_strategy == "crowding":
+                    evaluated = _crowding_trim(evaluated, self.population_size)
+                else:
+                    evaluated = _tournament_trim(evaluated, self.population_size, self.tournament_size, self._rng_)
 
             if elite_rs is not None:
                 ids = {id(rs) for rs, _ in evaluated}
@@ -1107,6 +1304,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     elite_f1 = f1
                     elite_rs = rs.clone()
                     elite_fit = fit
+
+            if self.record_population:
+                self.front_history_.append(_snap(evaluated))
 
             if (
                 self.model_selection == "shortest_zero_train_mcr"
@@ -1144,7 +1344,42 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                 continue
 
             if stagnation >= self.stagnation_generations:
-                break
+                # Diversity-aware stagnation: before terminating, check whether
+                # population diversity has collapsed relative to the available
+                # rescue atom pool.  A population on a fitness plateau with low
+                # feature diversity relative to the rescue pool is a symptom of
+                # premature convergence (e.g. restricted warmstart atom pool)
+                # rather than true optimality.
+                #
+                # Rescue strategy: blend new atoms from rescue_atoms into the
+                # active mutation pool (all_atoms) rather than injecting random
+                # individuals directly into the Pareto archive.  Direct injection
+                # was found to be counterproductive: random 1-atom individuals
+                # dominate the parsimony objective and bias model selection toward
+                # poor solutions.  Expanding the mutation pool instead lets the
+                # GP discover new features organically through its existing
+                # operators without disrupting archive quality.
+                if rescue_attempts_used < self.diversity_rescue_attempts:
+                    diversity = _population_vs_pool_coverage(evaluated, rescue_atoms)
+                    if diversity <= self.diversity_stagnation_threshold:
+                        # Diversity has collapsed: sample rescue atoms from the
+                        # full pre-warmstart pool and blend them into the active
+                        # mutation operator pool.
+                        n_rescue = max(1, len(rescue_atoms) // 10)
+                        chosen = self._rng_.choice(len(rescue_atoms), size=n_rescue, replace=False)
+                        all_atoms = list(all_atoms) + [rescue_atoms[i] for i in chosen]
+                        rescue_attempts_used += 1
+                        stagnation = 0
+                        # Also update mutation ops to reflect enlarged atom pool.
+                        mut_ops[0] = lambda p, _a=all_atoms: self._mut_insert_atom(p, _a)
+                        mut_ops[2] = lambda p, _a=all_atoms: self._mut_replace_atom(p, _a)
+                        mut_ops[3] = lambda p, _a=all_atoms, _nc=n_classes: self._mut_insert_rule(p, _a, _nc)
+                    else:
+                        # Population still diverse: genuine plateau, terminate.
+                        break
+                else:
+                    # Rescue budget exhausted or rescue disabled: terminate.
+                    break
 
         # If the budget was exhausted during setup (building the atom pool and
         # evaluating the initial population) the evolutionary search never ran a
@@ -1289,6 +1524,9 @@ def _to_ruleset_rulegp(classifier: RuleGPClassifier, rs: _RuleSet2, n_classes: i
             "warmstart_strategy": classifier.warmstart_strategy,
             "warmstart_max_rules": classifier.warmstart_max_rules,
             "warmstart_jaccard_max": classifier.warmstart_jaccard_max,
+            "warmstart_ladder": classifier.warmstart_ladder,
+            "warmstart_scouting_max_depth": classifier.warmstart_scouting_max_depth,
+            "trim_strategy": classifier.trim_strategy,
             "espresso_seed_pruning": classifier.espresso_seed_pruning,
             "espresso_mutation": classifier.espresso_mutation,
         },
