@@ -412,6 +412,8 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         warmstart_jaccard_max: float = 0.8,
         warmstart_ladder: bool = False,
         warmstart_scouting_max_depth: int | None = None,
+        warmstart_classwise_multirule: bool = False,
+        warmstart_class_balance: bool = False,
         trim_strategy: str = "tournament",
         espresso_seed_pruning: bool = False,
         espresso_mutation: bool = False,
@@ -498,6 +500,8 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         self.warmstart_jaccard_max = warmstart_jaccard_max
         self.warmstart_ladder = warmstart_ladder
         self.warmstart_scouting_max_depth = warmstart_scouting_max_depth
+        self.warmstart_classwise_multirule = warmstart_classwise_multirule
+        self.warmstart_class_balance = warmstart_class_balance
         if trim_strategy not in ("tournament", "crowding"):
             raise ValueError("trim_strategy must be 'tournament' or 'crowding'.")
         self.trim_strategy = trim_strategy
@@ -655,7 +659,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                                 _RuleSet2(rules=rule_list, default_weights=unif.copy())
                             )
             else:
-                curated_raw_atoms, curated_raw_rules = extract_warmstart_components(
+                result = extract_warmstart_components(
                     strategy=self.warmstart_strategy,
                     X_train=X_train,
                     y_train=y_train,
@@ -667,7 +671,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     random_state=self.random_state,
                     ladder=self.warmstart_ladder,
                     scouting_max_depth=self.warmstart_scouting_max_depth,
+                    classwise_multirule=self.warmstart_classwise_multirule,
+                    class_balance=self.warmstart_class_balance,
                 )
+                curated_raw_atoms, curated_raw_rules = result[0], result[1]
+                multirule_groups = result[2] if self.warmstart_classwise_multirule else []
 
                 if not self.warmstart_strategy.endswith("_seeds_only"):
                     curated_genes = [_AtomGene2(fi, op, thr) for fi, op, thr in curated_raw_atoms]
@@ -682,6 +690,18 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                             rule_obj = _Rule2(atoms=genes, weights=unif.copy())
                             warmstart_seeds.append(
                                 _RuleSet2(rules=[rule_obj], default_weights=unif.copy())
+                            )
+                    # Class-wise multi-rule individuals: one rule per dominant
+                    # class, rank-aligned — a complete class-partition hypothesis.
+                    for group in multirule_groups:
+                        rule_list = []
+                        for r_atoms in group:
+                            genes = [_AtomGene2(fi, op, thr) for fi, op, thr in r_atoms]
+                            if genes:
+                                rule_list.append(_Rule2(atoms=genes, weights=unif.copy()))
+                        if len(rule_list) >= 2:
+                            warmstart_seeds.append(
+                                _RuleSet2(rules=rule_list, default_weights=unif.copy())
                             )
 
         if not all_atoms:
@@ -1526,6 +1546,8 @@ def _to_ruleset_rulegp(classifier: RuleGPClassifier, rs: _RuleSet2, n_classes: i
             "warmstart_jaccard_max": classifier.warmstart_jaccard_max,
             "warmstart_ladder": classifier.warmstart_ladder,
             "warmstart_scouting_max_depth": classifier.warmstart_scouting_max_depth,
+            "warmstart_classwise_multirule": classifier.warmstart_classwise_multirule,
+            "warmstart_class_balance": classifier.warmstart_class_balance,
             "trim_strategy": classifier.trim_strategy,
             "espresso_seed_pruning": classifier.espresso_seed_pruning,
             "espresso_mutation": classifier.espresso_mutation,

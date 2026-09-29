@@ -119,20 +119,22 @@ def _filter_rules_jaccard(
     max_rules_seed: int = 15,
     jaccard_max_sim: float = 0.8,
     espresso_expand_seeds: bool = False,
+    class_balance: bool = False,
 ) -> list[list[tuple[int, str, float]]]:
-    """Applies Jaccard coverage filter and optional Espresso expansion to candidate rules."""
+    """Applies Jaccard coverage filter and optional Espresso expansion to candidate rules.
+
+    With ``class_balance=True`` the candidates are first bucketed by their
+    dominant activation class (importance order preserved within each bucket)
+    and admitted round-robin.  This prevents the global importance ranking
+    from letting one majority class consume the entire seed budget on
+    imbalanced multiclass targets, guaranteeing minority-class deep
+    conjunctions reach the seed set (and, transitively, the size ladder).
+    """
     n_samples = X_train.shape[0]
-    candidate_rules.sort(key=lambda r: r.get("importance", 1.0), reverse=True)
 
-    selected_rules: list[list[tuple[int, str, float]]] = []
-    selected_masks: list[np.ndarray] = []
-
-    for r_dict in candidate_rules:
-        rule_atoms = r_dict["atoms"]
-        if not rule_atoms:
-            continue
+    def _mask_of(atoms: list[tuple[int, str, float]]) -> np.ndarray:
         mask = np.ones(n_samples, dtype=bool)
-        for fi, op, thr in rule_atoms:
+        for fi, op, thr in atoms:
             col = X_train[:, fi]
             if op == "<=":
                 mask &= (col <= thr)
@@ -142,30 +144,137 @@ def _filter_rules_jaccard(
                 mask &= (col >= thr)
             elif op == ">":
                 mask &= (col > thr)
+        return mask
 
+    def _admit(r_dict: dict[str, Any], selected_masks: list[np.ndarray]):
+        rule_atoms = r_dict["atoms"]
+        if not rule_atoms:
+            return None
+        mask = _mask_of(rule_atoms)
         if not mask.any():
-            continue
-
-        is_redundant = False
+            return None
         for prev_mask in selected_masks:
             intersection = int(np.sum(mask & prev_mask))
             union = int(np.sum(mask | prev_mask))
             if union > 0 and (intersection / union) > jaccard_max_sim:
-                is_redundant = True
-                break
+                return None
+        return (
+            _espresso_expand_rule(rule_atoms, X_train, y_train)
+            if espresso_expand_seeds
+            else rule_atoms
+        ), mask
 
-        if not is_redundant:
-            rule_to_add = (
-                _espresso_expand_rule(rule_atoms, X_train, y_train)
-                if espresso_expand_seeds
-                else rule_atoms
-            )
+    if class_balance:
+        candidate_rules = sorted(
+            candidate_rules, key=lambda r: r.get("importance", 1.0), reverse=True
+        )
+        n_classes = int(y_train.max()) + 1
+        by_class: dict[int, list[dict[str, Any]]] = {}
+        for r_dict in candidate_rules:
+            if not r_dict["atoms"]:
+                continue
+            mask = _mask_of(r_dict["atoms"])
+            if not mask.any():
+                continue
+            counts = np.bincount(y_train[mask], minlength=n_classes)
+            by_class.setdefault(int(np.argmax(counts)), []).append(r_dict)
+        selected_rules: list[list[tuple[int, str, float]]] = []
+        selected_masks: list[np.ndarray] = []
+        cursor = {c: 0 for c in by_class}
+        while len(selected_rules) < max_rules_seed and any(
+            cursor[c] < len(by_class[c]) for c in by_class
+        ):
+            for c in sorted(by_class):
+                if len(selected_rules) >= max_rules_seed:
+                    break
+                while cursor[c] < len(by_class[c]):
+                    r_dict = by_class[c][cursor[c]]
+                    cursor[c] += 1
+                    admitted = _admit(r_dict, selected_masks)
+                    if admitted is not None:
+                        rule_to_add, mask = admitted
+                        selected_masks.append(mask)
+                        selected_rules.append(rule_to_add)
+                        break
+        return selected_rules
+
+    candidate_rules.sort(key=lambda r: r.get("importance", 1.0), reverse=True)
+
+    selected_rules: list[list[tuple[int, str, float]]] = []
+    selected_masks: list[np.ndarray] = []
+
+    for r_dict in candidate_rules:
+        admitted = _admit(r_dict, selected_masks)
+        if admitted is not None:
+            rule_to_add, mask = admitted
             selected_masks.append(mask)
             selected_rules.append(rule_to_add)
             if len(selected_rules) >= max_rules_seed:
                 break
 
     return selected_rules
+
+
+def _rule_mask_matrix(
+    rules: list[list[tuple[int, str, float]]],
+    X_train: np.ndarray,
+) -> np.ndarray:
+    """Boolean activation masks (n_rules x n_samples) for conjunction rules."""
+    n_samples = X_train.shape[0]
+    masks = np.ones((len(rules), n_samples), dtype=bool)
+    for ri, atoms in enumerate(rules):
+        for fi, op, thr in atoms:
+            col = X_train[:, fi]
+            if op == "<=":
+                masks[ri] &= col <= thr
+            elif op == "<":
+                masks[ri] &= col < thr
+            elif op == ">=":
+                masks[ri] &= col >= thr
+            elif op == ">":
+                masks[ri] &= col > thr
+    return masks
+
+
+def _assemble_classwise_multirule(
+    selected_rules: list[list[tuple[int, str, float]]],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    max_groups: int = 10,
+) -> list[list[list[tuple[int, str, float]]]]:
+    """Assemble multi-rule seed individuals from class-wise rule groups.
+
+    Scored rule sets aggregate per-rule evidence via argmax-sum, so a
+    multi-class target is naturally covered by one rule per class region.
+    Tree-path seeds injected as single-rule individuals cannot express this
+    partition (on multiclass targets such as Car Evaluation, no single
+    conjunction spans the classes).  This function groups the
+    Jaccard-selected rules by their dominant activation class (importance
+    order preserved within each class) and emits rank-aligned combinations
+    — the rank-1 rule of every class, then rank-2, ... — as multi-rule
+    individuals, each of which is a complete class-partition hypothesis.
+    """
+    if not selected_rules:
+        return []
+    masks = _rule_mask_matrix(selected_rules, X_train)
+    n_classes = int(y_train.max()) + 1
+    by_class: dict[int, list[list[tuple[int, str, float]]]] = {c: [] for c in range(n_classes)}
+    for ri, atoms in enumerate(selected_rules):
+        m = masks[ri]
+        if not m.any():
+            continue
+        counts = np.bincount(y_train[m], minlength=n_classes)
+        by_class[int(np.argmax(counts))].append(atoms)
+    nonempty = [c for c in range(n_classes) if by_class[c]]
+    if len(nonempty) < 2:
+        return []
+    max_rank = min(len(by_class[c]) for c in nonempty)
+    groups = []
+    for rank in range(min(max_rank, max_groups)):
+        group = [by_class[c][rank] for c in nonempty]
+        if len(group) >= 2:
+            groups.append(group)
+    return groups
 
 
 def _expand_ladder(
@@ -293,6 +402,7 @@ def extract_extratrees_components(
     random_state: int | None = None,
     return_estimator: bool = False,
     scouting_max_depth: int = 3,
+    class_balance: bool = False,
 ) -> tuple[Any, ...]:
     """Fits ExtraTrees and extracts curated split atoms and rule seed conjunctions."""
     from sklearn.ensemble import ExtraTreesClassifier
@@ -340,7 +450,8 @@ def extract_extratrees_components(
         splits_per_feature, X_train, min_samples_split, max_thresholds_per_feature
     )
     selected_rules = _filter_rules_jaccard(
-        candidate_rules, X_train, y_train, max_rules_seed, jaccard_max_sim, espresso_expand_seeds
+        candidate_rules, X_train, y_train, max_rules_seed, jaccard_max_sim,
+        espresso_expand_seeds, class_balance=class_balance,
     )
 
     if return_estimator:
@@ -706,6 +817,8 @@ def extract_warmstart_components(
     ladder: bool = False,
     ladder_max_rungs: int = 60,
     scouting_max_depth: int | None = None,
+    classwise_multirule: bool = False,
+    class_balance: bool = False,
 ) -> tuple[Any, ...]:
     """Unified dispatcher for all warmstart extraction strategies.
 
@@ -713,6 +826,13 @@ def extract_warmstart_components(
     ladders of their prefixes (see ``_expand_ladder``), so the initial
     population spans several model sizes per seed lineage instead of only
     full-depth leaf paths.
+
+    With ``classwise_multirule=True`` an additional tuple element is returned:
+    rank-aligned multi-rule seed individuals assembled one-per-dominant-class
+    (see ``_assemble_classwise_multirule``).  This targets multiclass
+    problems where no single conjunction spans the classes — the scored-rule-
+    set argmax-sum aggregation covers a class partition only when several
+    per-class rules coexist in one individual.
     """
     strat = strategy.lower().strip()
     if strat in ("rulefit", "rulefit_atoms_only", "rulefit_seeds_only"):
@@ -727,6 +847,7 @@ def extract_warmstart_components(
             max_thresholds_per_feature, max_rules_seed, jaccard_max_sim,
             espresso_expand_seeds, random_state, return_estimator,
             **({} if scouting_max_depth is None else {"scouting_max_depth": scouting_max_depth}),
+            **({} if not class_balance else {"class_balance": True}),
         )
     elif strat in ("figs", "figs_atoms_only", "figs_seeds_only"):
         result = extract_figs_components(
@@ -752,6 +873,11 @@ def extract_warmstart_components(
             f"Unknown warmstart strategy '{strategy}'. "
             f"Supported: 'rulefit', 'extratrees', 'figs', 'l1_logistic', 'ensemble_rich'."
         )
+    if classwise_multirule:
+        groups = _assemble_classwise_multirule(list(result[1]), X_train, y_train)
+        # Insert as third element, mirroring the ensemble_rich tuple shape:
+        # (atoms, seed_rules, multirule_groups, ...rest)
+        result = (result[0], result[1], groups) + result[2:]
     if ladder:
         seed_rules = _expand_ladder(list(result[1]), max_rungs=ladder_max_rungs)
         result = (result[0], seed_rules) + result[2:]
