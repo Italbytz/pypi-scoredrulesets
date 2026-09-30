@@ -241,6 +241,7 @@ def _assemble_classwise_multirule(
     X_train: np.ndarray,
     y_train: np.ndarray,
     max_groups: int = 10,
+    dominance_mode: str = "count",
 ) -> list[list[list[tuple[int, str, float]]]]:
     """Assemble multi-rule seed individuals from class-wise rule groups.
 
@@ -253,6 +254,13 @@ def _assemble_classwise_multirule(
     order preserved within each class) and emits rank-aligned combinations
     — the rank-1 rule of every class, then rank-2, ... — as multi-rule
     individuals, each of which is a complete class-partition hypothesis.
+
+    Parameters
+    ----------
+    dominance_mode : str, default="count"
+        Method to assign a rule to a dominant class. Options:
+        - "count": Assigns by raw training count argmax (paper reference baseline).
+        - "evidence": Assigns by class-balanced evidence argmax (counts / class_counts).
     """
     if not selected_rules:
         return []
@@ -266,8 +274,11 @@ def _assemble_classwise_multirule(
         if not m.any():
             continue
         counts = np.bincount(y_train[m], minlength=n_classes).astype(float)
-        balanced_evidence = counts / class_counts
-        by_class[int(np.argmax(balanced_evidence))].append(atoms)
+        if dominance_mode == "evidence":
+            metric = counts / class_counts
+        else:
+            metric = counts
+        by_class[int(np.argmax(metric))].append(atoms)
     nonempty = [c for c in range(n_classes) if by_class[c]]
     if len(nonempty) < 2:
         return []
@@ -822,6 +833,7 @@ def extract_warmstart_components(
     scouting_max_depth: int | None = None,
     classwise_multirule: bool = False,
     class_balance: bool = False,
+    multirule_dominance_mode: str = "count",
 ) -> tuple[Any, ...]:
     """Unified dispatcher for all warmstart extraction strategies.
 
@@ -877,7 +889,9 @@ def extract_warmstart_components(
             f"Supported: 'rulefit', 'extratrees', 'figs', 'l1_logistic', 'ensemble_rich'."
         )
     if classwise_multirule:
-        groups = _assemble_classwise_multirule(list(result[1]), X_train, y_train)
+        groups = _assemble_classwise_multirule(
+            list(result[1]), X_train, y_train, dominance_mode=multirule_dominance_mode
+        )
         # Insert as third element, mirroring the ensemble_rich tuple shape:
         # (atoms, seed_rules, multirule_groups, ...rest)
         result = (result[0], result[1], groups) + result[2:]
