@@ -258,13 +258,16 @@ def _assemble_classwise_multirule(
         return []
     masks = _rule_mask_matrix(selected_rules, X_train)
     n_classes = int(y_train.max()) + 1
+    class_counts = np.bincount(y_train, minlength=n_classes).astype(float)
+    class_counts = np.maximum(class_counts, 1.0)
     by_class: dict[int, list[list[tuple[int, str, float]]]] = {c: [] for c in range(n_classes)}
     for ri, atoms in enumerate(selected_rules):
         m = masks[ri]
         if not m.any():
             continue
-        counts = np.bincount(y_train[m], minlength=n_classes)
-        by_class[int(np.argmax(counts))].append(atoms)
+        counts = np.bincount(y_train[m], minlength=n_classes).astype(float)
+        balanced_evidence = counts / class_counts
+        by_class[int(np.argmax(balanced_evidence))].append(atoms)
     nonempty = [c for c in range(n_classes) if by_class[c]]
     if len(nonempty) < 2:
         return []
