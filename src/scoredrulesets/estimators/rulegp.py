@@ -765,6 +765,29 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         check_is_fitted(self, "ruleset_")
         return self.ruleset_
 
+    def extract_pareto_interactions(
+        self,
+        *,
+        min_occurrences: int = 1,
+        min_ratio: float = 0.05,
+        backbone_threshold: float = 0.5,
+        out_dot=None,
+        out_csv=None,
+    ):
+        """Extract feature backbone and pairwise interactions across the Pareto archive.
+
+        Delegates to :func:`scoredrulesets.analysis.extract_pareto_interactions`.
+        """
+        from scoredrulesets.analysis.pareto_interactions import extract_pareto_interactions
+        return extract_pareto_interactions(
+            self,
+            min_occurrences=min_occurrences,
+            min_ratio=min_ratio,
+            backbone_threshold=backbone_threshold,
+            out_dot=out_dot,
+            out_csv=out_csv,
+        )
+
     def _build_atom_pool(
         self,
         specs: list[dict[str, Any]],
