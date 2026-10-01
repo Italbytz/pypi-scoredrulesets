@@ -199,6 +199,7 @@ def test_rulensga2_max_fit_seconds_raises_on_setup_timeout(monkeypatch):
 
 
 def test_rulensga2_warmstart_execution():
+    pytest.importorskip("imodels")
     X, y = load_breast_cancer(return_X_y=True)
     feature_names = [f"feat_{i}" for i in range(X.shape[1])]
 

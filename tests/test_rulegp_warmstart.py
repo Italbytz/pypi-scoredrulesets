@@ -29,6 +29,7 @@ def test_rulegp_warmstart_invalid_raises():
 
 
 def test_rulegp_warmstart_rulefit_execution():
+    pytest.importorskip("imodels")
     from scoredrulesets.estimators.rulegp import RuleGPClassifier
 
     data = load_breast_cancer()
@@ -64,6 +65,7 @@ def test_rulegp_warmstart_rulefit_execution():
 
 
 def test_extract_rulefit_components_direct():
+    pytest.importorskip("imodels")
     from scoredrulesets.warmstart.rulefit_warmstart import extract_rulefit_components
 
     data = load_breast_cancer()
@@ -96,6 +98,7 @@ def test_extract_rulefit_components_direct():
 
 
 def test_rulegp_warmstart_ablation_modes():
+    pytest.importorskip("imodels")
     from scoredrulesets.estimators.rulegp import RuleGPClassifier
 
     data = load_breast_cancer()
@@ -119,6 +122,7 @@ def test_rulegp_warmstart_ablation_modes():
 
 
 def test_rulegp_espresso_options():
+    pytest.importorskip("imodels")
     from scoredrulesets.estimators.rulegp import RuleGPClassifier
 
     data = load_breast_cancer()
