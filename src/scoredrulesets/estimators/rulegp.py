@@ -768,6 +768,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
     def extract_pareto_interactions(
         self,
         *,
+        feature_names=None,
         min_occurrences: int = 1,
         min_ratio: float = 0.05,
         backbone_threshold: float = 0.5,
@@ -781,6 +782,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         from scoredrulesets.analysis.pareto_interactions import extract_pareto_interactions
         return extract_pareto_interactions(
             self,
+            feature_names=feature_names,
             min_occurrences=min_occurrences,
             min_ratio=min_ratio,
             backbone_threshold=backbone_threshold,
@@ -1446,6 +1448,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             best = _select_model_paper(
                 [(rs, fit, f1) for rs, fit, f1, _train_mcr in all_candidates]
             )
+        self.final_archive_ = [rs.clone() for rs, _ in evaluated]
         return best
 
 

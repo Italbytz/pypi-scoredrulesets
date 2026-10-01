@@ -1083,6 +1083,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
     def extract_pareto_interactions(
         self,
         *,
+        feature_names=None,
         min_occurrences: int = 1,
         min_ratio: float = 0.05,
         backbone_threshold: float = 0.5,
@@ -1096,6 +1097,7 @@ class LogicGPClassifier(BaseRuleSetEstimator):
         from scoredrulesets.analysis.pareto_interactions import extract_pareto_interactions
         return extract_pareto_interactions(
             self,
+            feature_names=feature_names,
             min_occurrences=min_occurrences,
             min_ratio=min_ratio,
             backbone_threshold=backbone_threshold,
