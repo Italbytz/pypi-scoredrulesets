@@ -175,7 +175,21 @@ def _extract_rules_from_single_model(
             for atom in getattr(rule, "atoms", []):
                 feat = getattr(atom, "feature", None)
                 if feat is not None:
-                    feats.add(str(feat))
+                    if feature_names and isinstance(feat, int) and feat < len(feature_names):
+                        feats.add(str(feature_names[feat]))
+                    elif (
+                        feature_names
+                        and isinstance(feat, str)
+                        and feat.startswith("f")
+                        and feat[1:].isdigit()
+                    ):
+                        idx = int(feat[1:])
+                        if idx < len(feature_names):
+                            feats.add(str(feature_names[idx]))
+                        else:
+                            feats.add(str(feat))
+                    else:
+                        feats.add(str(feat))
                 else:
                     f_idx = getattr(atom, "feature_idx", None)
                     if f_idx is not None:
