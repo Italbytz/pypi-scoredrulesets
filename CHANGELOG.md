@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] – 2026-10-01
+
+### Added
+- **Continuous Regression Estimators**: Native evolutionary regressors `RuleGPRegressor`, `RuleNSGA2Regressor`, `RulePLCSRegressor`, and two-stage `CascadedRuleGPRegressor` (with closed-form ridge score calibration and `cascaded_sum` aggregation).
+- **Subgroup Discovery & Pattern Mining**: `RuleNSGA2Subgroup` (with `RuleEvoSubgroup` alias) and `RuleGPSubgroup` for multi-objective exploration of localized exceptional sub-populations.
+- **Interpretable Cluster Explanation**: `RuleEvoCluster` for evolutionary surrogate rule extraction approximating cluster assignments.
+- **Tree-Guided Ensemble Warmstart Utilities**: `scoredrulesets.warmstart` with multi-estimator extraction, prefix ladders, class-balanced seed selection, and crowding trim controls.
+- **AI Journal Benchmark Suite**: Complete, self-contained reproduction suite in `examples/benchmarks/journal_ai/` for classification, regression, cluster explanation, multi-seed robustness, and subgroup experiments.
+- **Execution Budget Controls**: Robust `max_fit_seconds` time-budgeting and `FitBudgetExceededError` handling across evolutionary setups.
+- **Supervised Discretization & Genotype-Aware Features**: Fayyad-Irani supervised cut-points and compact genetic-model atom construction for ordinal and genomic features.
+
 ## [0.1.0] – 2026-07-22
 
 ### Added

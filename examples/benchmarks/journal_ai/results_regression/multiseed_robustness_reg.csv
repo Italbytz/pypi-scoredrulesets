@@ -1,0 +1,21 @@
+task,dataset,model,seed,r2,atoms
+Regression,Diabetes,ruleGP,42,0.32698949385210224,13.2
+Regression,Diabetes,ruleNSGA-II,42,0.34106357718447466,3.6
+Regression,Diabetes,ruleGP,100,0.40246031989609055,12.8
+Regression,Diabetes,ruleNSGA-II,100,0.35231189688054504,4.0
+Regression,Diabetes,ruleGP,200,0.36012386942598856,11.8
+Regression,Diabetes,ruleNSGA-II,200,0.3806760951689891,3.8
+Regression,Diabetes,ruleGP,300,0.36697758006008974,13.8
+Regression,Diabetes,ruleNSGA-II,300,0.3681797059693733,4.2
+Regression,Diabetes,ruleGP,400,0.3697603115390485,13.2
+Regression,Diabetes,ruleNSGA-II,400,0.36283199778993974,3.8
+Regression,Friedman #1,ruleGP,42,0.5114330558060927,12.6
+Regression,Friedman #1,ruleNSGA-II,42,0.4311952036520248,6.8
+Regression,Friedman #1,ruleGP,100,0.49868620547851117,12.0
+Regression,Friedman #1,ruleNSGA-II,100,0.49371379991186215,7.0
+Regression,Friedman #1,ruleGP,200,0.48153543437082796,11.2
+Regression,Friedman #1,ruleNSGA-II,200,0.4056603618006534,6.4
+Regression,Friedman #1,ruleGP,300,0.47306976015299984,11.2
+Regression,Friedman #1,ruleNSGA-II,300,0.4865044741989523,6.2
+Regression,Friedman #1,ruleGP,400,0.5089898318590527,11.4
+Regression,Friedman #1,ruleNSGA-II,400,0.489876325149832,6.6

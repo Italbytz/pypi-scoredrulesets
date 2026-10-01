@@ -1,0 +1,21 @@
+task,dataset,model,seed,macro_f1,atoms
+Classification,Breast Cancer,ruleGP,42,0.9341911776412377,5.2
+Classification,Breast Cancer,ruleNSGA-II,42,0.9142339786515367,4.6
+Classification,Breast Cancer,ruleGP,100,0.9326409293518644,3.4
+Classification,Breast Cancer,ruleNSGA-II,100,0.8998033134661881,4.2
+Classification,Breast Cancer,ruleGP,200,0.9345843963889123,4.0
+Classification,Breast Cancer,ruleNSGA-II,200,0.9082125132711383,3.8
+Classification,Breast Cancer,ruleGP,300,0.9232381144850119,4.2
+Classification,Breast Cancer,ruleNSGA-II,300,0.904127975318507,4.8
+Classification,Breast Cancer,ruleGP,400,0.930864189589512,3.6
+Classification,Breast Cancer,ruleNSGA-II,400,0.9213212958397303,3.4
+Classification,Wine,ruleGP,42,0.9440783346755376,5.6
+Classification,Wine,ruleNSGA-II,42,0.8889032502746732,3.6
+Classification,Wine,ruleGP,100,0.9316290740775222,6.8
+Classification,Wine,ruleNSGA-II,100,0.8677375687652067,3.4
+Classification,Wine,ruleGP,200,0.9194557040462975,5.4
+Classification,Wine,ruleNSGA-II,200,0.7833001853896245,3.4
+Classification,Wine,ruleGP,300,0.9299415421826731,4.8
+Classification,Wine,ruleNSGA-II,300,0.7911486520561781,3.6
+Classification,Wine,ruleGP,400,0.9268007928317525,5.8
+Classification,Wine,ruleNSGA-II,400,0.8982502903777412,3.2

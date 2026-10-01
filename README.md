@@ -35,13 +35,28 @@ Each rule assigns real-valued scores to every class/cluster. At prediction time,
 | `ScoredRuleSetClassifier` | Wrapper for scikit-learn learners | Convert CART, HS, RuleKit, ExSTraCS, logicGP to rulesets |
 | `AutoScoredRuleSetClassifier` | Auto-selection via CV | Finds best estimator for your data |
 
-### Regression & Clustering
+### Regression
 
-⚠️ **Proof-of-Concept status** — These estimators are included in v0.1.0 but are still experimental and not yet competitive with specialized regression/clustering methods.
+| Estimator | Algorithm | Description |
+|---|---|---|
+| `RuleGPRegressor` | Native genetic programming | Direct evolution on continuous targets with closed-form scores |
+| `RuleNSGA2Regressor` | Multi-objective GP | Optimizes accuracy vs. atom complexity trade-offs |
+| `RulePLCSRegressor` | Sequential covering + GA | Variance-reduction gain and minimum support constraints |
+| `CascadedRuleGPRegressor` | Two-stage residual boosting | Macro-trend discovery followed by localized residual error refinement |
+| `ScoredRuleSetRegressor` | scikit-learn wrapper | Converts any external rule model into scored regression rules |
 
-| Estimator | Task |
+### Subgroup Discovery & Pattern Mining
+
+| Estimator | Description |
 |---|---|
-| `ScoredRuleSetRegressor` | Regression wrapper; converts any backend to regression rules |
+| `RuleNSGA2Subgroup` | Multi-objective subgroup discovery optimizing coverage vs. local mean deviation |
+| `RuleGPSubgroup` | Genetic programming search for exceptional sub-populations |
+
+### Clustering & Explanation
+
+| Estimator | Description |
+|---|---|
+| `RuleEvoCluster` | Native evolutionary surrogate rules approximating unsupervised cluster assignments |
 | `ScoredRuleSetClusterer` | Cluster-label approximation; explains k-means, hierarchical clustering, etc. |
 
 ## Installation
@@ -193,7 +208,7 @@ Rule sets are serialized to human-readable JSON:
 }
 ```
 
-## Benchmarking
+## Benchmarking & Reproducibility
 
 Run standard benchmarks (see `Makefile`):
 
@@ -203,12 +218,20 @@ make benchmark-standard     # Standard datasets
 make reports-standard       # Regenerate reports
 ```
 
-Direct invocation:
+### Reproducing Paper Benchmarks
 
-```bash
-python examples/benchmarks/benchmark_standard.py
-python examples/benchmarks/generate_reports.py normal-lite
-```
+- **ECTA 2026 Suite**:
+  ```bash
+  make benchmark-paper
+  python examples/benchmarks/replot_paper_figures.py
+  ```
+
+- **MDPI AI 2026 Journal Suite** (`examples/benchmarks/journal_ai/`):
+  ```bash
+  # Regenerate Figures 1, 2, 3 and CD diagram from pre-computed results:
+  make benchmark-journal-figures
+  ```
+  See [`examples/benchmarks/journal_ai/README.md`](examples/benchmarks/journal_ai/README.md) for individual scripts (classification, regression, cluster explanation, multi-seed robustness, EBM baselines, subgroup discovery).
 
 ## Running Tests
 

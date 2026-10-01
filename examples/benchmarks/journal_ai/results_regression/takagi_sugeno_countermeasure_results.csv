@@ -1,0 +1,16 @@
+Dataset,Model,R2_Mean,R2_Std,Atoms
+Friedman #1,Global Ridge (collapse target),0.69,0.052,0.0
+Friedman #1,Evolutionary TS (unconstrained),0.6833,0.0448,1.0
+Friedman #1,"Enforced TS (2 regions, d=1)",0.6667,0.064,1.0
+Friedman #1,"Enforced TS (4 regions, d=2)",0.6938,0.0602,3.0
+Friedman #1,"Enforced TS (8 regions, d=3)",0.686,0.0672,7.0
+Friedman #2,Global Ridge (collapse target),0.843,0.0262,0.0
+Friedman #2,Evolutionary TS (unconstrained),0.8468,0.0244,1.0
+Friedman #2,"Enforced TS (2 regions, d=1)",0.9524,0.0093,1.0
+Friedman #2,"Enforced TS (4 regions, d=2)",0.9705,0.0058,3.0
+Friedman #2,"Enforced TS (8 regions, d=3)",0.9625,0.0103,7.0
+Diabetes,Global Ridge (collapse target),0.4093,0.0642,0.0
+Diabetes,Evolutionary TS (unconstrained),0.4086,0.0649,1.0
+Diabetes,"Enforced TS (2 regions, d=1)",0.3416,0.0682,1.0
+Diabetes,"Enforced TS (4 regions, d=2)",0.3476,0.0787,3.0
+Diabetes,"Enforced TS (8 regions, d=3)",0.3433,0.08,7.0

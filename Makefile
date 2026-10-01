@@ -1,6 +1,7 @@
 .PHONY: help benchmark benchmark-resume benchmark-recover benchmark-clean benchmark-status \
        benchmark-standard benchmark-standard-resume benchmark-standard-clean benchmark-standard-status \
 	benchmark-paper benchmark-paper-clean benchmark-paper-status \
+	benchmark-journal-figures \
 	benchmark-normal benchmark-normal-resume benchmark-normal-clean benchmark-normal-status \
 	benchmark-normal-lite benchmark-normal-lite-resume benchmark-normal-lite-clean benchmark-normal-lite-status \
 	reports-normal reports-normal-lite reports-standard reports-full
@@ -149,6 +150,14 @@ benchmark-paper-status:
 	else \
 		echo "Kein Paper-Checkpoint vorhanden: $(CHECKPOINT_PAPER)"; \
 	fi
+
+# ---------------------------------------------------------------------------
+# Journal-Benchmark (MDPI AI 2026: Classification, Regression, Cluster Explanation)
+# ---------------------------------------------------------------------------
+
+benchmark-journal-figures:
+	.venv/bin/python examples/benchmarks/journal_ai/generate_all_pareto_figures.py
+	.venv/bin/python examples/benchmarks/journal_ai/make_cd_diagram.py
 
 benchmark-normal: benchmark-standard
 benchmark-normal-resume: benchmark-standard-resume

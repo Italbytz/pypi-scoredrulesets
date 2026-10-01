@@ -64,7 +64,7 @@ def test_cart_backend_mapping_matches_internal_tree_predictions_exactly():
     np.testing.assert_allclose(ruleset_pred, tree_pred, rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.parametrize("backend", ["rulegp", "rulensga2"])
+@pytest.mark.parametrize("backend", ["projection_rulegp", "projection_rulensga2"])
 def test_rule_backends_regression_projection_path(monkeypatch, backend: str):
     captured: dict[str, np.ndarray] = {}
 

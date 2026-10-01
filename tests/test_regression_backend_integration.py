@@ -20,7 +20,7 @@ def _make_small_regression_dataset(seed: int = 0):
     ("backend", "backend_params"),
     [
         (
-            "rulegp",
+            "projection_rulegp",
             {
                 "atom_space_strategy": "hybrid",
                 "max_generations": 20,
@@ -30,7 +30,7 @@ def _make_small_regression_dataset(seed: int = 0):
             },
         ),
         (
-            "rulensga2",
+            "projection_rulensga2",
             {
                 "population_size": 20,
                 "generations": 8,

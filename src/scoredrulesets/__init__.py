@@ -1,4 +1,4 @@
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .benchmarking import (
     AggregatedBenchmarkResult,
@@ -35,10 +35,14 @@ from .estimators.logicgp import GPASClassifier, LogicGPClassifier
 from .estimators.rulenln import RuleNLNClassifier
 from .estimators.rulegp import RuleGPClassifier
 from .estimators.rulegp_regressor import RuleGPRegressor
+from .estimators.cascaded_rulegp_regressor import CascadedRuleGPRegressor
 from .estimators.ruleplcs import RulePLCSClassifier
 from .estimators.ruleplcs_regressor import RulePLCSRegressor
 from .estimators.rulensga2 import RuleNSGA2Classifier
 from .estimators.rulensga2_regressor import RuleNSGA2Regressor
+from .estimators.evocluster import RuleEvoCluster
+from .estimators.evosubgroup import RuleEvoSubgroup, RuleNSGA2Subgroup
+from .estimators.rulegp_subgroup import RuleGPSubgroup
 from .estimators.rulekit_native import RuleKitNativeClassifier
 from .estimators.atom_selection import (
     available_atom_selection_strategies,
@@ -73,11 +77,16 @@ __all__ = [
     "LogicGPClassifier",
     "RuleGPClassifier",
     "RuleGPRegressor",
+    "CascadedRuleGPRegressor",
     "RuleNLNClassifier",
     "RulePLCSClassifier",
     "RulePLCSRegressor",
     "RuleNSGA2Classifier",
     "RuleNSGA2Regressor",
+    "RuleNSGA2Subgroup",
+    "RuleEvoCluster",
+    "RuleEvoSubgroup",
+    "RuleGPSubgroup",
     "RuleKitNativeClassifier",
     "ScoredRuleSetClassifier",
     "ScoredRuleSetRegressor",
