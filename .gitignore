@@ -65,7 +65,10 @@ coverage.xml
 /scoredrulesets/
 
 # Sensitive patient data – must never be committed
-**/genica63.csv
+**/genica*
 
+# Benchmark and run outputs
 benchmarks/paper
 benchmarks/revision/
+benchmarks/gpas/
+data/1000g/
