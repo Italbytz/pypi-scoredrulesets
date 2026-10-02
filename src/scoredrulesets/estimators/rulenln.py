@@ -127,6 +127,9 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
     mask_refresh_epochs : int
         How often (in epochs) the top-k mask is recomputed from the current
         conjunction weights.  Only used when ``max_atoms_per_rule`` is set.
+        Defaults to 1 (every epoch); coarser refresh rhythms measurably hurt
+        validation F1 because a prematurely frozen mask starves better
+        propositions of gradient.
     max_fit_seconds : float | None
         Maximum wall-clock runtime for training in seconds. Once at least one
         gradient step has run, training stops cleanly when the budget is
@@ -156,7 +159,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         max_thresholds_per_feature: int | None = None,
         threshold_strategy: NLNThresholdStrategy = "quantile_midpoint",
         max_atoms_per_rule: int | None = None,
-        mask_refresh_epochs: int = 10,
+        mask_refresh_epochs: int = 1,
     ):
         self.n_rules = n_rules
         self.n_bins = n_bins
