@@ -268,6 +268,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "RulePLCSClassifier has no 'ruleset_' after fit(). "
                     "Please check ruleplcs.py for errors."
                 )
+        elif backend_lower in {"greedy_pareto", "greedypareto"}:
+            if hasattr(self.estimator_, "ruleset_"):
+                self.ruleset_ = self.estimator_.ruleset_
+            else:
+                raise RuntimeError(
+                    "GreedyParetoClassifier has no 'ruleset_' after fit(). "
+                    "Please check greedy_pareto.py for errors."
+                )
         else:
             # Tree-basierte Transformation (CART, HS)
             transform_cfg = TreeTransformParams(**(self.transform_params or {}))
@@ -582,6 +590,13 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 params.setdefault("feature_names", self.feature_names_in_)
                 self.estimator_ = RulePLCSRegressor(**params)
                 self.estimator_.fit(X_valid, y_valid)
+                self.ruleset_ = self.estimator_.to_ruleset()
+            elif backend_key in {"greedy_cascaded", "greedy_cascaded_native", "greedycascaded", "greedy_reg"}:
+                from .greedy_pareto import GreedyCascadedRegressor
+                params = dict(self.backend_params or {})
+                params.setdefault("random_state", self.random_state)
+                self.estimator_ = GreedyCascadedRegressor(**params)
+                self.estimator_.fit(X_valid, y_valid, feature_names=self.feature_names_in_)
                 self.ruleset_ = self.estimator_.to_ruleset()
             elif backend_key in {"projection_rulegp", "projection_rulensga2"}:
                 base_b = "rulegp" if "rulegp" in backend_key else "rulensga2"

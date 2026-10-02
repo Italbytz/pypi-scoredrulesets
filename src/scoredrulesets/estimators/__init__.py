@@ -1,4 +1,4 @@
-from .auto import AutoScoredRuleSetClassifier
+from .auto import AutoScoredRuleSetClassifier, AutoScoredRuleSetRegressor, MasterParetoArchive
 from .atom_selection import (
 	available_atom_selection_strategies,
 	is_atom_selection_strategy_available,
@@ -6,6 +6,7 @@ from .atom_selection import (
 )
 from .base import BaseRuleSetEstimator
 from .cluster_wrapper import ScoredRuleSetClusterer
+from .greedy_pareto import GreedyParetoClassifier, GreedyCascadedRegressor
 from .logicgp import GPASClassifier, LogicGPClassifier
 from .rulenln import RuleNLNClassifier
 from .rulegp import RuleGPClassifier
@@ -22,6 +23,10 @@ from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 __all__ = [
 	"AutoScoredRuleSetClassifier",
+	"AutoScoredRuleSetRegressor",
+	"MasterParetoArchive",
+	"GreedyParetoClassifier",
+	"GreedyCascadedRegressor",
 	"available_atom_selection_strategies",
 	"BaseRuleSetEstimator",
 	"ScoredRuleSetClusterer",
