@@ -105,7 +105,39 @@ class TestAutoEstimator:
         X, y = iris_data
         clf = AutoScoredRuleSetClassifier(cv=2, random_state=0)
         clf.fit(X, y)
-        assert clf.best_backend_ in ("greedy_pareto", "cart", "hs", "ruleplcs")
+        assert clf.best_backend_ in ("greedy_pareto", "cart", "hs", "ruleplcs", "rulenln")
+
+    def test_rulenln_sweep_populates_archive(self, iris_data):
+        """The neural backend should contribute top-k sweep variants to the archive."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["rulenln"],
+            cv=2,
+            random_state=0,
+        )
+        clf.fit(X, y)
+        spectrum = clf.get_pareto_spectrum()
+        sweep_backends = [s["backend"] for s in spectrum if s["backend"].startswith("rulenln(")]
+        # At least one non-dominated k-variant should be admitted alongside
+        # the unmasked rulenln candidate.
+        assert len(sweep_backends) >= 1
+        for s in spectrum:
+            if s["backend"].startswith("rulenln(k="):
+                k = int(s["backend"].split("k=")[1].rstrip(")"))
+                assert s["complexity"] <= k * 20 + 2  # k per rule (+ default)
+
+    def test_rulenln_explicit_k_disables_sweep(self, iris_data):
+        """If max_atoms_per_rule is pinned, no additional sweep variants appear."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["rulenln"],
+            backend_params={"rulenln": {"max_atoms_per_rule": 3, "n_rules": 6, "epochs": 80}},
+            cv=2,
+            random_state=0,
+        )
+        clf.fit(X, y)
+        spectrum = clf.get_pareto_spectrum()
+        assert all(s["backend"] == "rulenln" for s in spectrum)
 
     def test_pareto_fusion_and_spectrum(self, iris_data):
         """Test Master Pareto Archive spectrum, active model switching, and index card export."""

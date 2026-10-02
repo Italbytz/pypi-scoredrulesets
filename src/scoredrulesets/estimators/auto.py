@@ -31,8 +31,14 @@ from .base import BaseRuleSetEstimator
 from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 
-_DEFAULT_CLASSIFIER_BACKENDS = ["greedy_pareto", "cart", "hs", "ruleplcs"]
+_DEFAULT_CLASSIFIER_BACKENDS = ["greedy_pareto", "cart", "hs", "ruleplcs", "rulenln"]
 _DEFAULT_REGRESSOR_BACKENDS = ["greedy_cascaded", "cart"]
+
+# Architectural top-k sweep harvested for the neural backend when the user
+# does not pin ``max_atoms_per_rule`` explicitly.  Each k contributes its own
+# point to the Master Pareto Archive; dominated variants are pruned by the
+# archive itself, so the sweep doubles as an automatic front sampler.
+_RULENLN_SWEEP_K = (2, 3, 4, 6)
 
 
 @dataclass
@@ -322,7 +328,10 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
     ----------
     candidate_backends : list[str] | None
         List of backend names to evaluate (default: ``["greedy_pareto", "cart",
-        "hs", "ruleplcs"]``).
+        "hs", "ruleplcs", "rulenln"]``).  For the neural ``rulenln`` backend an
+        architectural top-k sweep (k in {2, 3, 4, 6}) is harvested into the
+        Master Pareto Archive unless ``max_atoms_per_rule`` is set explicitly
+        in ``backend_params``.
     preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual"}, default="balanced"
         Operational intent profile:
         - "compact": minimizes rule complexity (target atoms <= 6).
@@ -581,6 +590,29 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                         preds_cand = fitted_clf.predict(X_valid)
                         cand_s = float(f1_score(y_valid, preds_cand, average="macro", zero_division=0))
                         self.master_archive_.add(rs, cand_s, backend=backend)
+
+                        # Neural top-k sweep: each k is a candidate point on the
+                        # compactness/accuracy front; the archive prunes any
+                        # variant dominated by another k or backend.
+                        if backend == "rulenln" and not (bp or {}).get("max_atoms_per_rule"):
+                            for k in _RULENLN_SWEEP_K:
+                                try:
+                                    sweep_clf = ScoredRuleSetClassifier(
+                                        backend="rulenln",
+                                        backend_params={**(bp or {}), "max_atoms_per_rule": k},
+                                        preprocessing=self.effective_preprocessing_,
+                                        random_state=self.random_state,
+                                    )
+                                    sweep_clf.fit(X_valid, y_valid)
+                                    rs_k = sweep_clf.to_ruleset()
+                                    preds_k = sweep_clf.predict(X_valid)
+                                    s_k = float(f1_score(y_valid, preds_k, average="macro", zero_division=0))
+                                    self.master_archive_.add(rs_k, s_k, backend=f"rulenln(k={k})")
+                                except Exception as exc:  # noqa: BLE001
+                                    warnings.warn(
+                                        f"AutoScoredRuleSet: rulenln top-k={k} harvest failed: {exc}",
+                                        UserWarning,
+                                    )
                 except Exception as exc:  # noqa: BLE001
                     warnings.warn(
                         f"AutoScoredRuleSet: failed to harvest Pareto models from '{backend}': {exc}",
