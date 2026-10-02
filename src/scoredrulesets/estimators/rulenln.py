@@ -118,6 +118,15 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         Fraction of training data used for early-stopping evaluation.
     temperature : float
         Scaling factor for class logits during training (lower → sharper).
+    max_atoms_per_rule : int | None
+        If set, each rule may architecturally use at most this many
+        propositions.  During training a top-k mask over the conjunction
+        weights is refreshed every ``mask_refresh_epochs`` epochs; masked
+        propositions receive no gradient, so the constraint is enforced at
+        training time rather than only post-hoc during extraction.
+    mask_refresh_epochs : int
+        How often (in epochs) the top-k mask is recomputed from the current
+        conjunction weights.  Only used when ``max_atoms_per_rule`` is set.
     max_fit_seconds : float | None
         Maximum wall-clock runtime for training in seconds. Once at least one
         gradient step has run, training stops cleanly when the budget is
@@ -146,6 +155,8 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         random_state: int | None = None,
         max_thresholds_per_feature: int | None = None,
         threshold_strategy: NLNThresholdStrategy = "quantile_midpoint",
+        max_atoms_per_rule: int | None = None,
+        mask_refresh_epochs: int = 10,
     ):
         self.n_rules = n_rules
         self.n_bins = n_bins
@@ -162,6 +173,8 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
         self.random_state = random_state
         self.max_thresholds_per_feature = max_thresholds_per_feature
         self.threshold_strategy = threshold_strategy
+        self.max_atoms_per_rule = max_atoms_per_rule
+        self.mask_refresh_epochs = mask_refresh_epochs
 
     # ------------------------------------------------------------------
     # fit
@@ -247,6 +260,12 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
                     # Positive W → gate ≈ 1 (proposition required)
                     W_conj[r, si] = rng.uniform(0.4, 0.8)
 
+        # Optional architectural top-k constraint: each rule may only ever
+        # activate its ``max_atoms_per_rule`` strongest propositions.
+        conj_mask = None
+        if self.max_atoms_per_rule is not None:
+            conj_mask = self._top_k_mask(W_conj, self.max_atoms_per_rule)
+
         # b_conj: (n_rules,) – conjunction bias (unused in product mode,
         # kept for compatibility; acts as log-scale offset)
         b_conj = np.zeros(self.n_rules, dtype=float)
@@ -282,6 +301,16 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
             if deadline_reached(fit_deadline):
                 break
 
+            # Periodically re-select which propositions each rule may use so
+            # the constraint tracks the learned weights.  Masked entries get
+            # gate = 0 in the forward pass → zero gradient (straight-through
+            # style sparsity), unmasked entries train normally.
+            if (
+                conj_mask is not None
+                and epoch % max(1, self.mask_refresh_epochs) == 0
+            ):
+                conj_mask = self._top_k_mask(W_conj, self.max_atoms_per_rule)
+
             perm = rng.permutation(N_train)
 
             # L1 warmup factor: 0→1 over warmup_epochs, then 1.0
@@ -296,7 +325,9 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
                 Y_b = Y_train[idx]  # (B, C)
 
                 # --- forward --------------------------------------------------
-                logits, cache = self._forward(P_b, W_conj, b_conj, W_score, b_score)
+                logits, cache = self._forward(
+                    P_b, W_conj, b_conj, W_score, b_score, mask=conj_mask,
+                )
                 proba = _softmax(logits / max(self.temperature, _EPS))
 
                 # --- backward -------------------------------------------------
@@ -323,7 +354,9 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
                 trained = True
 
             # --- early stopping on validation ---------------------------------
-            val_logits, _ = self._forward(P_val, W_conj, b_conj, W_score, b_score)
+            val_logits, _ = self._forward(
+                P_val, W_conj, b_conj, W_score, b_score, mask=conj_mask,
+            )
             val_pred = np.argmax(val_logits, axis=1)
             val_f1 = float(f1_score(y_val, val_pred, average="macro", zero_division=0))
 
@@ -362,12 +395,22 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
     _GATE_SCALE = 5.0
 
     @staticmethod
+    def _top_k_mask(W: np.ndarray, k: int) -> np.ndarray:
+        """Boolean mask marking the ``k`` largest entries of each row of *W*."""
+        k = max(1, min(int(k), W.shape[1]))
+        idx = np.argsort(W, axis=1)[:, -k:]
+        mask = np.zeros(W.shape, dtype=bool)
+        np.put_along_axis(mask, idx, True, axis=1)
+        return mask
+
+    @staticmethod
     def _forward(
         P: np.ndarray,
         W_conj: np.ndarray,
         b_conj: np.ndarray,
         W_score: np.ndarray,
         b_score: np.ndarray,
+        mask: np.ndarray | None = None,
     ) -> tuple[np.ndarray, dict]:
         """
         Forward pass with product-of-sigmoids conjunction (differentiable AND).
@@ -391,6 +434,10 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
 
         # Gate: how much each proposition is "required" by each rule
         gate = _sigmoid(scale * W_conj)  # (R, D)
+        if mask is not None:
+            # Architectural top-k constraint: propositions outside the mask
+            # become hard don't-cares (gate = 0 → match = 1, zero gradient).
+            gate = gate * mask
 
         # match[b,r,d] = gate[r,d] * P[b,d] + (1 - gate[r,d])
         # When gate≈1: match = P  (proposition must be true)
@@ -558,16 +605,22 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
             if not positive_mask.any():
                 positive_mask = abs_w > self.atom_threshold
 
-            # Also limit to at most top-k most important propositions
-            # to avoid overly complex rules.
-            max_atoms_per_rule = min(8, n_classes * 3)
-            if positive_mask.sum() > max_atoms_per_rule:
-                # Keep only top-k by weight magnitude
-                w_for_sort = np.where(positive_mask, abs_w, 0.0)
-                top_k_idx = np.argsort(w_for_sort)[-max_atoms_per_rule:]
-                mask = np.zeros_like(positive_mask)
-                mask[top_k_idx] = True
-                positive_mask = positive_mask & mask
+            if self.max_atoms_per_rule is not None:
+                # Architectural constraint: restrict to the top-k set of this
+                # rule, recomputed from the best (validated) weights.
+                positive_mask = positive_mask & self._top_k_mask(
+                    w_r[np.newaxis, :], self.max_atoms_per_rule
+                )[0]
+            else:
+                # Post-hoc cap to avoid overly complex rules.
+                max_atoms_per_rule = min(8, n_classes * 3)
+                if positive_mask.sum() > max_atoms_per_rule:
+                    # Keep only top-k by weight magnitude
+                    w_for_sort = np.where(positive_mask, abs_w, 0.0)
+                    top_k_idx = np.argsort(w_for_sort)[-max_atoms_per_rule:]
+                    mask = np.zeros_like(positive_mask)
+                    mask[top_k_idx] = True
+                    positive_mask = positive_mask & mask
 
             active_props = np.where(positive_mask)[0]
 
@@ -651,6 +704,7 @@ class RuleNLNClassifier(BaseRuleSetEstimator):
                 "epochs": self.epochs,
                 "threshold_strategy": self.threshold_strategy,
                 "max_fit_seconds": self.max_fit_seconds,
+                "max_atoms_per_rule": self.max_atoms_per_rule,
             },
         )
         ruleset.validate()

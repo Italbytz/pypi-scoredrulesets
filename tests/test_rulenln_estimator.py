@@ -28,6 +28,11 @@ def _wine_split(random_state: int = 42):
     return train_test_split(X, y, test_size=0.3, random_state=random_state, stratify=y)
 
 
+def _breast_cancer_split(random_state: int = 42):
+    X, y = load_breast_cancer(return_X_y=True)
+    return train_test_split(X, y, test_size=0.3, random_state=random_state, stratify=y)
+
+
 # ---------------------------------------------------------------------------
 # Basic tests
 # ---------------------------------------------------------------------------
@@ -123,6 +128,46 @@ class TestRuleNLNClassifier:
         f1 = f1_score(y_test, y_pred, average="macro")
         print(f"\n[NLN native] Breast Cancer F1={f1:.4f}")
         assert f1 > 0.3, f"F1 too low on breast cancer: {f1:.4f}"
+
+    def test_max_atoms_per_rule_caps_atoms(self):
+        """Architectural top-k constraint limits atoms per extracted rule."""
+        X_train, _, y_train, _ = _wine_split()
+        k = 3
+        clf = RuleNLNClassifier(
+            n_rules=10, n_bins=4, epochs=150, random_state=0,
+            max_atoms_per_rule=k,
+        )
+        clf.fit(X_train, y_train)
+        rs = clf.to_ruleset()
+        non_default = [r for r in rs.rules if r.atoms]
+        assert len(non_default) >= 1, "No rules extracted"
+        # Interval atoms count as 2 atoms for one feature; cap is on
+        # propositions, so allow up to 2*k atoms per rule.
+        for rule in non_default:
+            n_feats = len({a.feature for a in rule.atoms})
+            assert n_feats <= k, (
+                f"Rule uses {n_feats} features, cap is {k}: {rule.atoms}"
+            )
+        assert rs.metadata["max_atoms_per_rule"] == k
+
+    def test_max_atoms_per_rule_fewer_atoms_than_unconstrained(self):
+        """Top-k constraint should yield compact models vs. unconstrained."""
+        X_train, _, y_train, _ = _breast_cancer_split()
+        common = dict(n_rules=8, n_bins=4, epochs=150, random_state=0)
+        plain = RuleNLNClassifier(**common)
+        plain.fit(X_train, y_train)
+        capped = RuleNLNClassifier(max_atoms_per_rule=2, **common)
+        capped.fit(X_train, y_train)
+
+        atoms_plain = sum(len(r.atoms) for r in plain.to_ruleset().rules)
+        atoms_capped = sum(len(r.atoms) for r in capped.to_ruleset().rules)
+        print(
+            f"\n[NLN top-k] plain={atoms_plain} atoms, "
+            f"capped(k=2)={atoms_capped} atoms"
+        )
+        assert atoms_capped <= atoms_plain
+        # Sanity: the constrained model must still be usable
+        assert atoms_capped >= 1
 
     def test_max_fit_seconds_raises_on_setup_timeout(self, monkeypatch):
         from scoredrulesets import FitBudgetExceededError
