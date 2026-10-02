@@ -1,5 +1,6 @@
 """Tests for AutoScoredRuleSetClassifier (AutoML meta-estimator)."""
 
+import os
 import numpy as np
 import pytest
 from sklearn.datasets import load_iris
@@ -180,5 +181,34 @@ class TestAutoEstimator:
         spectrum = reg.get_pareto_spectrum()
         assert isinstance(spectrum, list)
         assert len(spectrum) >= 1
+
+    def test_plot_pareto_front(self, tmp_path, iris_data):
+        """Test Pareto front plotting and saving."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["greedy_pareto", "cart"],
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+        out_file = str(tmp_path / "pareto.png")
+        fig, ax = clf.plot_pareto_front(output_path=out_file)
+        assert fig is not None
+        assert os.path.exists(out_file)
+
+    def test_probing_strategy(self, iris_data):
+        """Test multi-fidelity probing with subsampling."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["greedy_pareto", "cart"],
+            probing_strategy="subsample",
+            probing_threshold_samples=50,
+            probing_subsample=0.5,
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+        assert clf.best_backend_ in ("greedy_pareto", "cart")
+        assert len(clf.predict(X)) == len(y)
 
 

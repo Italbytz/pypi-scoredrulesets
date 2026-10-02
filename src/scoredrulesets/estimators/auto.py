@@ -185,6 +185,131 @@ class MasterParetoArchive:
         best_idx = int(np.argmax(distances))
         return eligible[best_idx].ruleset
 
+    def plot_pareto_front(
+        self,
+        output_path: str | None = None,
+        title: str = "Master Pareto Frontier",
+        metric_name: str = "Validation Score",
+    ):
+        """Plot the non-dominated Pareto front with intent highlights.
+
+        Parameters
+        ----------
+        output_path : str | None
+            If provided, saves the figure to this file (PDF, PNG, SVG).
+        title : str
+            Title of the plot.
+        metric_name : str
+            Y-axis label.
+
+        Returns
+        -------
+        fig, ax : matplotlib Figure and Axes objects
+        """
+        import matplotlib.pyplot as plt
+
+        if not self.candidates_:
+            raise RuntimeError("Cannot plot empty MasterParetoArchive.")
+
+        fig, ax = plt.subplots(figsize=(7, 4.5), dpi=150)
+
+        # Distinct backend colors
+        unique_backends = sorted(list({c.backend for c in self.candidates_}))
+        cmap = plt.get_cmap("tab10")
+        color_map = {b: cmap(i % 10) for i, b in enumerate(unique_backends)}
+
+        # Plot all candidates by backend
+        for b in unique_backends:
+            b_cands = [c for c in self.candidates_ if c.backend == b]
+            ax.scatter(
+                [c.atoms for c in b_cands],
+                [c.score for c in b_cands],
+                label=f"Backend: {b}",
+                color=color_map[b],
+                s=70,
+                alpha=0.85,
+                edgecolors="none",
+                zorder=3,
+            )
+
+        # Plot Pareto step curve
+        sorted_cands = sorted(self.candidates_, key=lambda c: c.atoms)
+        x_steps = [c.atoms for c in sorted_cands]
+        y_steps = [c.score for c in sorted_cands]
+        ax.step(
+            x_steps,
+            y_steps,
+            where="post",
+            color="gray",
+            linestyle="--",
+            alpha=0.6,
+            zorder=2,
+            label="Pareto Envelope",
+        )
+
+        # Highlight Intent profiles
+        try:
+            compact_rs = self.select("compact")
+            c_cand = next(c for c in self.candidates_ if c.ruleset is compact_rs)
+            ax.scatter(
+                [c_cand.atoms],
+                [c_cand.score],
+                s=160,
+                facecolors="none",
+                edgecolors="blue",
+                linewidths=2,
+                label="Intent: compact",
+                zorder=4,
+            )
+        except Exception:
+            pass
+
+        try:
+            balanced_rs = self.select("balanced")
+            b_cand = next(c for c in self.candidates_ if c.ruleset is balanced_rs)
+            ax.scatter(
+                [b_cand.atoms],
+                [b_cand.score],
+                s=200,
+                facecolors="none",
+                edgecolors="crimson",
+                linewidths=2.5,
+                marker="s",
+                label="Intent: balanced (knee)",
+                zorder=4,
+            )
+        except Exception:
+            pass
+
+        try:
+            acc_rs = self.select("accuracy")
+            a_cand = next(c for c in self.candidates_ if c.ruleset is acc_rs)
+            ax.scatter(
+                [a_cand.atoms],
+                [a_cand.score],
+                s=160,
+                facecolors="none",
+                edgecolors="forestgreen",
+                linewidths=2,
+                marker="^",
+                label="Intent: accuracy",
+                zorder=4,
+            )
+        except Exception:
+            pass
+
+        ax.set_xlabel("Complexity (Total Atoms in Rule Set)", fontsize=10)
+        ax.set_ylabel(metric_name, fontsize=10)
+        ax.set_title(title, fontsize=11, fontweight="bold")
+        ax.grid(True, linestyle=":", alpha=0.5)
+        ax.legend(frameon=True, fontsize=8, loc="best")
+        plt.tight_layout()
+
+        if output_path is not None:
+            fig.savefig(output_path, bbox_inches="tight")
+
+        return fig, ax
+
 
 class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
     """AutoML meta-estimator for Scored Rule Sets classification.
@@ -237,6 +362,9 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         scoring: str = "f1_weighted",
         preprocessing: dict[str, Any] | None = None,
         timeout_per_backend: float | None = None,
+        probing_strategy: Literal["none", "subsample"] = "none",
+        probing_subsample: float = 0.25,
+        probing_threshold_samples: int = 500,
         random_state: int | None = None,
     ):
         self.candidate_backends = candidate_backends
@@ -249,6 +377,9 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         self.scoring = scoring
         self.preprocessing = preprocessing
         self.timeout_per_backend = timeout_per_backend
+        self.probing_strategy = probing_strategy
+        self.probing_subsample = probing_subsample
+        self.probing_threshold_samples = probing_threshold_samples
         self.random_state = random_state
 
     def fit(self, X, y):
@@ -257,6 +388,47 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
 
         backends = list(self.candidate_backends or _DEFAULT_CLASSIFIER_BACKENDS)
         per_backend_params = dict(self.backend_params or {})
+
+        # Multi-fidelity probing to filter unpromising backends on larger datasets
+        if (
+            self.probing_strategy == "subsample"
+            and len(X_valid) >= self.probing_threshold_samples
+            and len(backends) > 2
+        ):
+            probe_size = max(50, int(len(X_valid) * self.probing_subsample))
+            from sklearn.model_selection import StratifiedShuffleSplit
+            sss = StratifiedShuffleSplit(n_splits=1, train_size=probe_size, random_state=self.random_state)
+            probe_idx, _ = next(sss.split(X_valid, y_valid))
+            X_probe, y_probe = X_valid[probe_idx], y_valid[probe_idx]
+            probe_splitter = StratifiedKFold(n_splits=2, shuffle=True, random_state=self.random_state)
+
+            probe_scores: dict[str, float] = {}
+            for backend in backends:
+                bp = per_backend_params.get(backend)
+                if bp is None and backend == "cart":
+                    bp = {"max_depth": 3}
+                clf = ScoredRuleSetClassifier(
+                    backend=backend,
+                    backend_params=bp,
+                    preprocessing=self.preprocessing,
+                    random_state=self.random_state,
+                )
+                try:
+                    sc = cross_val_score(
+                        clf, X_probe, y_probe,
+                        cv=probe_splitter,
+                        scoring=self.scoring,
+                        error_score="raise",
+                    )
+                    probe_scores[backend] = float(np.mean(sc))
+                except Exception:
+                    probe_scores[backend] = float("-inf")
+
+            sorted_backends = sorted(backends, key=lambda b: probe_scores.get(b, float("-inf")), reverse=True)
+            cutoff = max(2, len(backends) // 2)
+            survivors = [b for b in sorted_backends[:cutoff] if probe_scores.get(b, float("-inf")) > float("-inf")]
+            if survivors:
+                backends = survivors
 
         cv_results: dict[str, float] = {}
         best_backend: str | None = None
@@ -413,6 +585,13 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         check_is_fitted(self, ["ruleset_"])
         return self.ruleset_
 
+    def plot_pareto_front(self, output_path: str | None = None, title: str | None = None):
+        """Plot the non-dominated Master Pareto front."""
+        check_is_fitted(self, ["master_archive_"])
+        t = title or f"{self.__class__.__name__} Master Pareto Frontier"
+        metric = "Validation Score" if self.scoring is None else str(self.scoring)
+        return self.master_archive_.plot_pareto_front(output_path=output_path, title=t, metric_name=metric)
+
 
 class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     """AutoML meta-estimator for Scored Rule Sets regression.
@@ -451,6 +630,9 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         backend_params: dict[str, dict[str, Any]] | None = None,
         cv: int = 5,
         scoring: str = "r2",
+        probing_strategy: Literal["none", "subsample"] = "none",
+        probing_subsample: float = 0.25,
+        probing_threshold_samples: int = 500,
         random_state: int | None = None,
     ):
         self.candidate_backends = candidate_backends
@@ -461,6 +643,9 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         self.backend_params = backend_params
         self.cv = cv
         self.scoring = scoring
+        self.probing_strategy = probing_strategy
+        self.probing_subsample = probing_subsample
+        self.probing_threshold_samples = probing_threshold_samples
         self.random_state = random_state
 
     def fit(self, X, y):
@@ -469,6 +654,46 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
 
         backends = list(self.candidate_backends or _DEFAULT_REGRESSOR_BACKENDS)
         per_backend_params = dict(self.backend_params or {})
+
+        # Multi-fidelity probing to filter unpromising backends on larger datasets
+        if (
+            self.probing_strategy == "subsample"
+            and len(X_valid) >= self.probing_threshold_samples
+            and len(backends) > 2
+        ):
+            probe_size = max(50, int(len(X_valid) * self.probing_subsample))
+            from sklearn.model_selection import ShuffleSplit
+            ss = ShuffleSplit(n_splits=1, train_size=probe_size, random_state=self.random_state)
+            probe_idx, _ = next(ss.split(X_valid, y_valid))
+            X_probe, y_probe = X_valid[probe_idx], y_valid[probe_idx]
+            probe_splitter = KFold(n_splits=2, shuffle=True, random_state=self.random_state)
+
+            probe_scores_reg: dict[str, float] = {}
+            for backend in backends:
+                bp = per_backend_params.get(backend)
+                if bp is None and backend == "cart":
+                    bp = {"max_depth": 3}
+                reg = ScoredRuleSetRegressor(
+                    backend=backend,
+                    backend_params=bp,
+                    random_state=self.random_state,
+                )
+                try:
+                    sc = cross_val_score(
+                        reg, X_probe, y_probe,
+                        cv=probe_splitter,
+                        scoring=self.scoring,
+                        error_score="raise",
+                    )
+                    probe_scores_reg[backend] = float(np.mean(sc))
+                except Exception:
+                    probe_scores_reg[backend] = float("-inf")
+
+            sorted_backends = sorted(backends, key=lambda b: probe_scores_reg.get(b, float("-inf")), reverse=True)
+            cutoff = max(2, len(backends) // 2)
+            survivors = [b for b in sorted_backends[:cutoff] if probe_scores_reg.get(b, float("-inf")) > float("-inf")]
+            if survivors:
+                backends = survivors
 
         cv_results: dict[str, float] = {}
         best_backend: str | None = None
@@ -587,3 +812,10 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, ["ruleset_"])
         return self.ruleset_
+
+    def plot_pareto_front(self, output_path: str | None = None, title: str | None = None):
+        """Plot the non-dominated Master Pareto front."""
+        check_is_fitted(self, ["master_archive_"])
+        t = title or f"{self.__class__.__name__} Master Pareto Frontier"
+        metric = "Validation Score" if self.scoring is None else str(self.scoring)
+        return self.master_archive_.plot_pareto_front(output_path=output_path, title=t, metric_name=metric)
