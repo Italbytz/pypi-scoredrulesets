@@ -18,6 +18,7 @@ import warnings
 
 import numpy as np
 from sklearn.base import ClassifierMixin, RegressorMixin
+from sklearn.metrics import f1_score, r2_score
 from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
 from sklearn.utils.validation import check_is_fitted, check_X_y
 
@@ -270,6 +271,8 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
 
         for backend in backends:
             bp = per_backend_params.get(backend)
+            if bp is None and backend == "cart":
+                bp = {"max_depth": 3}
             clf = ScoredRuleSetClassifier(
                 backend=backend,
                 backend_params=bp,
@@ -324,11 +327,14 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                     pareto_dict = getattr(underlying, "pareto_archive_", None)
                     if isinstance(pareto_dict, dict) and pareto_dict:
                         for comp, rs in pareto_dict.items():
-                            s = rs.metadata.get("train_macro_f1", mean_score)
-                            self.master_archive_.add(rs, float(s), backend=backend)
+                            preds_cand = predict_from_ruleset(rs, X_valid)
+                            cand_s = float(f1_score(y_valid, preds_cand, average="macro", zero_division=0))
+                            self.master_archive_.add(rs, cand_s, backend=backend)
                     else:
                         rs = fitted_clf.to_ruleset()
-                        self.master_archive_.add(rs, mean_score, backend=backend)
+                        preds_cand = predict_from_ruleset(rs, X_valid)
+                        cand_s = float(f1_score(y_valid, preds_cand, average="macro", zero_division=0))
+                        self.master_archive_.add(rs, cand_s, backend=backend)
                 except Exception as exc:  # noqa: BLE001
                     warnings.warn(
                         f"AutoScoredRuleSet: failed to harvest Pareto models from '{backend}': {exc}",
@@ -477,6 +483,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
 
         for backend in backends:
             bp = per_backend_params.get(backend)
+            if bp is None and backend == "cart":
+                bp = {"max_depth": 3}
             reg = ScoredRuleSetRegressor(
                 backend=backend,
                 backend_params=bp,
@@ -512,7 +520,9 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                     fitted_reg.fit(X_valid, y_valid)
                     fitted_estimators[backend] = fitted_reg
                     rs = fitted_reg.to_ruleset()
-                    self.master_archive_.add(rs, mean_score, backend=backend)
+                    preds_cand = predict_regression_from_ruleset(rs, X_valid)
+                    cand_s = float(r2_score(y_valid, preds_cand))
+                    self.master_archive_.add(rs, cand_s, backend=backend)
                 except Exception as exc:  # noqa: BLE001
                     warnings.warn(
                         f"AutoScoredRuleSetRegressor: failed to harvest model from '{backend}': {exc}",

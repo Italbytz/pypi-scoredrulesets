@@ -141,11 +141,17 @@ class GreedyParetoClassifier(BaseRuleSetEstimator, ClassifierMixin):
             else:
                 def_w = np.ones(n_classes, dtype=float) / n_classes
 
-            scores += def_w
+            scores[no_fire] += def_w
             preds = np.argmax(scores, axis=1)
 
-            # Fast macro F1 calculation
-            f1 = float(f1_score(y_encoded, preds, average="macro", zero_division=0))
+            # Fast macro F1 calculation via bincount (no sklearn overhead)
+            cm = np.bincount(n_classes * y_encoded + preds, minlength=n_classes * n_classes).reshape((n_classes, n_classes))
+            tp = np.diag(cm)
+            fp = np.sum(cm, axis=0) - tp
+            fn = np.sum(cm, axis=1) - tp
+            denom = 2 * tp + fp + fn
+            f1s = np.where(denom > 0, (2.0 * tp) / denom, 0.0)
+            f1 = float(np.mean(f1s))
             return f1, r_weights, def_w.tolist()
 
         # Helper: convert internal rule tuples to schema ScoredRuleSet
@@ -492,7 +498,7 @@ class GreedyCascadedRegressor(BaseRuleSetEstimator, RegressorMixin):
             rules=combined_rules,
             task_type="regression",
             feature_names=list(self.feature_names_),
-            aggregation=AggregationSpec(type="cascaded_sum"),
+            aggregation=AggregationSpec(type="default_plus_sum"),
             metadata={
                 "total_atoms": total_atoms,
                 "n_rules_stage1": len(rules1),
