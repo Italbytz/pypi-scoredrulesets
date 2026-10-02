@@ -342,6 +342,15 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         Number of cross-validation folds.
     scoring : str, default="f1_weighted"
         Sklearn scoring metric.
+    feature_selection : {"auto", "none", "kbest_mi", "kbest_f", "variance", "tree"} | Any, default="auto"
+        Upstream search-space reduction strategy. When set to "auto", automatically
+        activates mutual-information feature selection if n_features >= 50 or
+        n_features > n_samples, preventing combinatorial collapse on high-dimensional
+        or omics data (grounded in bioinformatics findings).
+    max_features : int | float | None, default=None
+        Maximum features to retain when feature selection is active.
+        If float between 0.0 and 1.0, treated as percentage of input features.
+        If None, adaptively scales (min 10, max 50).
     preprocessing : dict | None
         Preprocessing configuration forwarded to backends.
     timeout_per_backend : float | None
@@ -360,6 +369,8 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         backend_params: dict[str, dict[str, Any]] | None = None,
         cv: int = 5,
         scoring: str = "f1_weighted",
+        feature_selection: Literal["auto", "none", "kbest_mi", "kbest_f", "variance", "tree"] | Any = "auto",
+        max_features: int | float | None = None,
         preprocessing: dict[str, Any] | None = None,
         timeout_per_backend: float | None = None,
         probing_strategy: Literal["none", "subsample"] = "none",
@@ -375,6 +386,8 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         self.backend_params = backend_params
         self.cv = cv
         self.scoring = scoring
+        self.feature_selection = feature_selection
+        self.max_features = max_features
         self.preprocessing = preprocessing
         self.timeout_per_backend = timeout_per_backend
         self.probing_strategy = probing_strategy
@@ -382,9 +395,70 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         self.probing_threshold_samples = probing_threshold_samples
         self.random_state = random_state
 
+    def _resolve_feature_selection(self, n_samples: int, n_features: int) -> dict[str, Any] | None:
+        """Derive upstream feature selection settings based on data dimensionality.
+
+        Grounded in bioinformatics and high-dimensional omics findings, rule induction
+        in high-D regimes (D >= 50 or D > N) collapses in runtime, predictive quality,
+        or model size unless coarse variable-level selection is applied prior to
+        candidate atom construction.
+        """
+        fs = self.feature_selection
+        if fs in (None, False, "none"):
+            return None
+
+        if not isinstance(fs, str):
+            return {"feature_selector": fs}
+
+        fs_str = fs.lower()
+        if fs_str == "auto":
+            if n_features < 50 and n_features <= n_samples:
+                return None
+            method = "kbest"
+            from sklearn.feature_selection import mutual_info_classif
+            score_func = mutual_info_classif
+        elif fs_str in ("kbest_mi", "kbest"):
+            method = "kbest"
+            from sklearn.feature_selection import mutual_info_classif
+            score_func = mutual_info_classif
+        elif fs_str == "kbest_f":
+            method = "kbest"
+            from sklearn.feature_selection import f_classif
+            score_func = f_classif
+        elif fs_str == "variance":
+            from sklearn.feature_selection import VarianceThreshold
+            return {"feature_selector": VarianceThreshold()}
+        elif fs_str == "tree":
+            method = "boruta"
+            score_func = None
+        else:
+            method = fs_str
+            score_func = None
+
+        if self.max_features is None:
+            # Default heuristic: choose k in [10, 50], preserving sub-second tractability
+            k = min(n_features, max(10, min(50, max(20, n_samples // 4))))
+        elif isinstance(self.max_features, float) and 0.0 < self.max_features <= 1.0:
+            k = max(2, int(n_features * self.max_features))
+        else:
+            k = min(n_features, int(self.max_features))
+
+        cfg: dict[str, Any] = {"feature_selection": method, "k": k}
+        if score_func is not None:
+            cfg["feature_selection_params"] = {"score_func": score_func}
+        return cfg
+
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None)
         self.n_features_in_ = X_valid.shape[1]
+
+        # Resolve automated upstream search-space reduction
+        effective_preprocessing = dict(self.preprocessing or {})
+        if "feature_selection" not in effective_preprocessing and "feature_selector" not in effective_preprocessing:
+            fs_cfg = self._resolve_feature_selection(len(X_valid), self.n_features_in_)
+            if fs_cfg is not None:
+                effective_preprocessing.update(fs_cfg)
+        self.effective_preprocessing_ = effective_preprocessing
 
         backends = list(self.candidate_backends or _DEFAULT_CLASSIFIER_BACKENDS)
         per_backend_params = dict(self.backend_params or {})
@@ -410,7 +484,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                 clf = ScoredRuleSetClassifier(
                     backend=backend,
                     backend_params=bp,
-                    preprocessing=self.preprocessing,
+                    preprocessing=self.effective_preprocessing_,
                     random_state=self.random_state,
                 )
                 try:
@@ -448,7 +522,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
             clf = ScoredRuleSetClassifier(
                 backend=backend,
                 backend_params=bp,
-                preprocessing=self.preprocessing,
+                preprocessing=self.effective_preprocessing_,
                 random_state=self.random_state,
             )
             t0 = time.monotonic()
@@ -488,7 +562,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                     fitted_clf = ScoredRuleSetClassifier(
                         backend=backend,
                         backend_params=bp,
-                        preprocessing=self.preprocessing,
+                        preprocessing=self.effective_preprocessing_,
                         random_state=self.random_state,
                     )
                     fitted_clf.fit(X_valid, y_valid)
@@ -499,12 +573,12 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                     pareto_dict = getattr(underlying, "pareto_archive_", None)
                     if isinstance(pareto_dict, dict) and pareto_dict:
                         for comp, rs in pareto_dict.items():
-                            preds_cand = predict_from_ruleset(rs, X_valid)
+                            preds_cand = fitted_clf.predict(X_valid)
                             cand_s = float(f1_score(y_valid, preds_cand, average="macro", zero_division=0))
                             self.master_archive_.add(rs, cand_s, backend=backend)
                     else:
                         rs = fitted_clf.to_ruleset()
-                        preds_cand = predict_from_ruleset(rs, X_valid)
+                        preds_cand = fitted_clf.predict(X_valid)
                         cand_s = float(f1_score(y_valid, preds_cand, average="macro", zero_division=0))
                         self.master_archive_.add(rs, cand_s, backend=backend)
                 except Exception as exc:  # noqa: BLE001
@@ -527,7 +601,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
             winner = ScoredRuleSetClassifier(
                 backend=best_backend,
                 backend_params=bp,
-                preprocessing=self.preprocessing,
+                preprocessing=self.effective_preprocessing_,
                 random_state=self.random_state,
             )
             winner.fit(X_valid, y_valid)
@@ -538,6 +612,8 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         self.best_estimator_ = winner
         self.classes_ = winner.classes_
         self.feature_names_in_ = winner.feature_names_in_
+        self.selected_feature_indices_ = getattr(winner, "selected_feature_indices_", None)
+        self.feature_selector_ = getattr(winner, "feature_selector_", None)
 
         # Select model according to preference and Pareto fusion
         if self.enable_pareto_fusion and self.master_archive_.candidates_:
@@ -573,13 +649,32 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         check_is_fitted(self, ["ruleset_"])
         return format_ruleset_markdown(self.ruleset_)
 
+    def _prepare_X_for_prediction(self, X) -> np.ndarray:
+        """Apply fitted preprocessing, feature selection, and backend encoding to X."""
+        X_arr = np.asarray(X)
+        winner = getattr(self, "best_estimator_", None)
+        if winner is not None:
+            pipeline = getattr(winner, "preprocess_pipeline_", None)
+            if pipeline is not None:
+                X_arr = np.asarray(pipeline.transform(X_arr), dtype=None)
+            selector = getattr(winner, "feature_selector_", None)
+            if selector is not None:
+                X_arr = np.asarray(selector.transform(X_arr), dtype=None)
+            elif getattr(winner, "selected_feature_indices_", None) is not None:
+                X_arr = X_arr[:, winner.selected_feature_indices_]
+            if hasattr(winner, "_prepare_X_for_prediction"):
+                X_arr = winner._prepare_X_for_prediction(X_arr)
+        return X_arr
+
     def predict(self, X):
         check_is_fitted(self, ["ruleset_"])
-        return predict_from_ruleset(self.ruleset_, X)
+        X_prep = self._prepare_X_for_prediction(X)
+        return predict_from_ruleset(self.ruleset_, X_prep)
 
     def predict_proba(self, X):
         check_is_fitted(self, ["ruleset_"])
-        return predict_proba_from_ruleset(self.ruleset_, X)
+        X_prep = self._prepare_X_for_prediction(X)
+        return predict_proba_from_ruleset(self.ruleset_, X_prep)
 
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, ["ruleset_"])

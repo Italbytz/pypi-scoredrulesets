@@ -211,4 +211,96 @@ class TestAutoEstimator:
         assert clf.best_backend_ in ("greedy_pareto", "cart")
         assert len(clf.predict(X)) == len(y)
 
+    def test_auto_feature_selection_high_dimension(self):
+        """Automated feature selection triggers on high-D datasets (D >= 50)."""
+        from sklearn.datasets import make_classification
+
+        X, y = make_classification(
+            n_samples=80,
+            n_features=60,
+            n_informative=6,
+            random_state=42,
+        )
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart"],
+            feature_selection="auto",
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+
+        # Feature selection should have automatically been activated
+        assert clf.selected_feature_indices_ is not None
+        assert len(clf.selected_feature_indices_) < 60
+        assert clf.effective_preprocessing_.get("feature_selection") == "kbest"
+
+        preds = clf.predict(X)
+        assert len(preds) == len(y)
+        proba = clf.predict_proba(X)
+        assert proba.shape == (len(y), 2)
+        assert np.allclose(proba.sum(axis=1), 1.0, atol=0.01)
+
+    def test_auto_feature_selection_small_dimension(self, iris_data):
+        """Automated feature selection does not trigger on small-D datasets (D < 50)."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart"],
+            feature_selection="auto",
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+
+        assert clf.selected_feature_indices_ is None
+        assert "feature_selection" not in clf.effective_preprocessing_
+        preds = clf.predict(X)
+        assert len(preds) == len(y)
+
+    def test_explicit_feature_selection_kbest_f(self):
+        """User can specify explicit kbest_f feature selection and max_features."""
+        from sklearn.datasets import make_classification
+
+        X, y = make_classification(
+            n_samples=60,
+            n_features=40,
+            n_informative=5,
+            random_state=42,
+        )
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart"],
+            feature_selection="kbest_f",
+            max_features=6,
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+
+        assert clf.selected_feature_indices_ is not None
+        assert len(clf.selected_feature_indices_) == 6
+        preds = clf.predict(X)
+        assert len(preds) == len(y)
+
+    def test_disabled_feature_selection_high_dimension(self):
+        """User can disable feature selection explicitly on high-D datasets."""
+        from sklearn.datasets import make_classification
+
+        X, y = make_classification(
+            n_samples=60,
+            n_features=60,
+            n_informative=5,
+            random_state=42,
+        )
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart"],
+            feature_selection="none",
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+
+        assert clf.selected_feature_indices_ is None
+        assert "feature_selection" not in clf.effective_preprocessing_
+        preds = clf.predict(X)
+        assert len(preds) == len(y)
+
 
