@@ -51,10 +51,12 @@ Source = "https://github.com/Italbytz/pypi-scoredrulesets"
 hs = ["imodels>=1.4.0"]
 exstracs = ["scikit-ExSTraCS>=1.1.1,<2"]
 rulekit = ["rulekit>=2.0", "jpype1>=1.4"]
+exact = ["ortools>=9.9"]
 all = [
   "scoredrulesets[hs]",
   "scoredrulesets[exstracs]",
   "scoredrulesets[rulekit]",
+  "scoredrulesets[exact]",
 ]
 benchmark = [
   "matplotlib>=3.8",

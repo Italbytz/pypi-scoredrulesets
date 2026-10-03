@@ -30,7 +30,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     ----------
     backend : str
         Backend estimator to use (e.g. 'cart', 'hs', 'rulekit', 'exstracs',
-        'logicgp', 'ruleplcs', 'rulenln', 'rulensga2', 'rulegp').
+        'logicgp', 'ruleplcs', 'rulenln', 'rulensga2', 'rulegp', 'exact').
+        The 'exact' backend (certified CP-SAT front enumeration) requires the
+        optional dependency group ``scoredrulesets[exact]``.
     backend_params : dict, optional
         Parameters forwarded to the backend estimator constructor.
     transform_params : dict, optional
@@ -275,6 +277,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 raise RuntimeError(
                     "GreedyParetoClassifier has no 'ruleset_' after fit(). "
                     "Please check greedy_pareto.py for errors."
+                )
+        elif backend_lower in {"exact", "exact_cpusat", "exactcpusat"}:
+            if hasattr(self.estimator_, "ruleset_"):
+                self.ruleset_ = self.estimator_.ruleset_
+            else:
+                raise RuntimeError(
+                    "ExactCPSATClassifier has no 'ruleset_' after fit(). "
+                    "Please check exact_cpusat.py for errors."
                 )
         else:
             # Tree-basierte Transformation (CART, HS)

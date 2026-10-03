@@ -199,6 +199,42 @@ def default_estimator_specs() -> dict[str, EstimatorSpec]:
             ),
         ),
         # ------------------------------------------------------------------
+        # Certified exact backend (CP-SAT two-stage front enumeration)
+        # ------------------------------------------------------------------
+        "wrapper_exact": EstimatorSpec(
+            name="wrapper_exact",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="exact",
+                backend_params={
+                    "max_width": 2,
+                    "max_rules": 3,
+                    "max_atoms_per_class": 4,
+                    "n_bins": 3,
+                    "time_limit_per_solve": 10.0,
+                },
+                max_fit_seconds=120,
+                random_state=0,
+            ),
+        ),
+        # Certified front variant: sweeps the atom budget and lets the AutoML
+        # fusion harvest every certified point.
+        "wrapper_exact_front": EstimatorSpec(
+            name="wrapper_exact_front",
+            factory=lambda: ScoredRuleSetClassifier(
+                backend="exact",
+                backend_params={
+                    "max_width": 2,
+                    "max_rules": 3,
+                    "max_atoms_per_class": 4,
+                    "pareto_schedule": [1, 2, 3, 4, 6, 8],
+                    "n_bins": 3,
+                    "time_limit_per_solve": 10.0,
+                },
+                max_fit_seconds=240,
+                random_state=0,
+            ),
+        ),
+        # ------------------------------------------------------------------
         # Multiplexer-optimized variants (goal: F1=1.0 on full dataset)
         # ------------------------------------------------------------------
         "wrapper_logicgp_mux": EstimatorSpec(
