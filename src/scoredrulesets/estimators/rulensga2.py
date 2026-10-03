@@ -516,6 +516,26 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         # ---------- Build ScoredRuleSet ----------
         self.ruleset_ = self._to_ruleset(best, X, y_idx, n_classes, gen_ran)
         self.ruleset_.validate()
+
+        # Expose the final NSGA-II Pareto front as schema rule sets keyed by
+        # atom count, so AutoScoredRuleSetClassifier harvests the WHOLE front
+        # (every member individually OOF-scored) instead of only the best
+        # individual.  Mirrors the ``pareto_archive_`` convention of
+        # greedy_pareto / exact_cpusat.  Members get their scores refit on the
+        # full training data exactly like the selected best individual.
+        self.pareto_archive_: dict[int, ScoredRuleSet] = {}
+        front0 = [pop[i] for i in _fast_nondominated_sort(pop)[0]]
+        for ind in front0:
+            self._refit_scores(ind, X, y_idx, n_classes)
+            rs = self._to_ruleset(ind, X, y_idx, n_classes, gen_ran)
+            comp = int(sum(len(r.atoms) for r in rs.rules if r.atoms))
+            rs.metadata["complexity_atoms"] = comp
+            self.pareto_archive_[comp] = rs
+        # The served model (possibly post-compacted) must always be an archive
+        # member, mirroring greedy_pareto's select-from-archive contract.
+        served_comp = int(sum(len(r.atoms) for r in self.ruleset_.rules if r.atoms))
+        self.ruleset_.metadata["complexity_atoms"] = served_comp
+        self.pareto_archive_[served_comp] = self.ruleset_
         return self
 
     def predict(self, X):

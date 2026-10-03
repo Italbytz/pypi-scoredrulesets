@@ -741,6 +741,23 @@ class RuleGPClassifier(BaseRuleSetEstimator):
 
         self.ruleset_ = _to_ruleset_rulegp(self, best_rs, n_classes)
         self.ruleset_.validate()
+
+        # Expose the final Pareto archive as schema rule sets keyed by atom
+        # count, so AutoScoredRuleSetClassifier harvests the WHOLE front
+        # (every member individually OOF-scored) instead of only the best
+        # individual.  Mirrors the ``pareto_archive_`` convention of
+        # greedy_pareto / exact_cpusat.
+        self.pareto_archive_: dict[int, ScoredRuleSet] = {}
+        for internal_rs in getattr(self, "final_archive_", []):
+            rs = _to_ruleset_rulegp(self, internal_rs, n_classes)
+            comp = int(sum(len(r.atoms) for r in rs.rules if r.atoms))
+            rs.metadata["complexity_atoms"] = comp
+            self.pareto_archive_[comp] = rs
+        # The served model (selected across ALL candidates, possibly outside
+        # the final archive) must always be an archive member.
+        served_comp = int(sum(len(r.atoms) for r in self.ruleset_.rules if r.atoms))
+        self.ruleset_.metadata["complexity_atoms"] = served_comp
+        self.pareto_archive_[served_comp] = self.ruleset_
         return self
 
     def predict(self, X):

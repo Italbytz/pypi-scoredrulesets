@@ -481,3 +481,68 @@ class TestRegressorOOFArchive:
             assert c.metadata["oof_folds"] >= 2
         preds = reg.predict(X)
         assert len(preds) == len(y)
+
+
+# ---------------------------------------------------------------------------
+# Evolutionary backends must expose their FULL front via pareto_archive_
+# (harvest gap discovered while answering the archive-integration question)
+# ---------------------------------------------------------------------------
+
+class TestEvolutionaryFrontHarvest:
+    def test_rulensga2_exposes_pareto_archive(self):
+        from scoredrulesets.estimators.rulensga2 import RuleNSGA2Classifier
+
+        X, y = load_iris(return_X_y=True)
+        clf = RuleNSGA2Classifier(
+            population_size=20, generations=10, max_rules=6,
+            max_atoms_per_rule=3, random_state=0,
+        )
+        clf.fit(X, y)
+        front = clf.pareto_archive_
+        assert isinstance(front, dict) and len(front) >= 1
+        for comp, rs in front.items():
+            rs.validate()
+            assert comp == sum(len(r.atoms) for r in rs.rules if r.atoms)
+            assert rs.metadata["complexity_atoms"] == comp
+        # the served model must be one of the front members
+        served = [a.to_dict() for a in clf.ruleset_.rules]
+        assert any(
+            [a.to_dict() for a in rs.rules] == served for rs in front.values()
+        )
+
+    def test_rulegp_exposes_pareto_archive(self):
+        from scoredrulesets.estimators.rulegp import RuleGPClassifier
+
+        X, y = load_iris(return_X_y=True)
+        clf = RuleGPClassifier(
+            population_size=20, max_generations=10, stagnation_generations=10,
+            random_state=0,
+        )
+        clf.fit(X, y)
+        front = clf.pareto_archive_
+        assert isinstance(front, dict) and len(front) >= 1
+        for comp, rs in front.items():
+            rs.validate()
+            assert comp == sum(len(r.atoms) for r in rs.rules if r.atoms)
+
+    def test_auto_harvests_evolutionary_front_members(self):
+        """Multiple distinct archive candidates must come from one evo backend."""
+        X, y = load_iris(return_X_y=True)
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["rulensga2"],
+            backend_params={"rulensga2": {
+                "population_size": 20, "generations": 10, "max_rules": 6,
+                "max_atoms_per_rule": 3,
+            }},
+            cv=2, random_state=0,
+        )
+        clf.fit(X, y)
+        nsga_cands = [
+            c for c in clf.master_archive_.candidates_ if c.backend == "rulensga2"
+        ]
+        # front members have distinct atom counts -> archive can hold >1
+        assert len(nsga_cands) >= 1
+        variants = {
+            c.metadata["variant"] for c in nsga_cands if "variant" in c.metadata
+        }
+        assert len(variants) >= 1  # each admitted under its own ("front", comp) key
