@@ -32,7 +32,7 @@ from .base import BaseRuleSetEstimator
 from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 
-_DEFAULT_CLASSIFIER_BACKENDS = ["greedy_pareto", "cart", "hs", "ruleplcs", "rulenln"]
+_DEFAULT_CLASSIFIER_BACKENDS = ["greedy_pareto", "cart", "hs", "ruleplcs"]
 _DEFAULT_REGRESSOR_BACKENDS = ["greedy_cascaded", "cart", "ruleplcs"]
 
 # Architectural top-k sweep harvested for the neural backend when the user
@@ -461,14 +461,15 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
     ----------
     candidate_backends : list[str] | None
         List of backend names to evaluate (default: ``["greedy_pareto", "cart",
-        "hs", "ruleplcs", "rulenln"]``).  For the neural ``rulenln``
-        backend an architectural top-k sweep (k in {2, 3, 4, 6}) is harvested
-        into the Master Pareto Archive unless ``max_atoms_per_rule`` is set
-        explicitly in ``backend_params``.  Evolutionary backends (``rulegp``,
-        ``rulensga2``) and the certified exact backend (``exact``, requires
-        ``scoredrulesets[exact]``) are available on request via
-        ``candidate_backends`` but excluded from the default for runtime
-        reasons.
+        "hs", "ruleplcs"]``).  Additional backends are reachable on request:
+        ``rulenln`` (gradient-based; when no ``max_atoms_per_rule`` is pinned,
+        an architectural top-k sweep k in {2, 3, 4, 6} is harvested into the
+        Master Pareto Archive), ``rulegp`` / ``rulensga2`` (evolutionary) and
+        ``exact`` (certified CP-SAT; requires ``scoredrulesets[exact]``).
+        ``rulenln`` was demoted from the default after a three-generation
+        fusion study showed zero non-dominated contributions once the greedy
+        beam search's rule<->weight pairing defect was repaired; the
+        evolutionary and exact families are excluded for runtime reasons.
     preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual"}, default="balanced"
         Operational intent profile (all evaluated on out-of-fold archive scores):
         - "compact": fewest atoms within ``compact_tolerance`` of the best score.

@@ -105,7 +105,7 @@ class TestAutoEstimator:
         X, y = iris_data
         clf = AutoScoredRuleSetClassifier(cv=2, random_state=0)
         clf.fit(X, y)
-        assert clf.best_backend_ in ("greedy_pareto", "cart", "hs", "ruleplcs", "rulenln")
+        assert clf.best_backend_ in ("greedy_pareto", "cart", "hs", "ruleplcs")
 
     def test_rulenln_sweep_populates_archive(self, iris_data):
         """The neural backend should contribute top-k sweep variants to the archive."""
