@@ -11,14 +11,15 @@ Provides:
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 import time
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 import warnings
 
 import numpy as np
 from sklearn.base import ClassifierMixin, RegressorMixin
-from sklearn.metrics import f1_score, r2_score
+from sklearn.metrics import f1_score, get_scorer, r2_score
 from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
 from sklearn.utils.validation import check_is_fitted, check_X_y
 
@@ -41,6 +42,118 @@ _DEFAULT_REGRESSOR_BACKENDS = ["greedy_cascaded", "cart"]
 _RULENLN_SWEEP_K = (2, 3, 4, 6)
 
 
+def _transform_for_estimator(estimator: Any, X: Any) -> np.ndarray:
+    """Apply a fitted wrapper's own preprocessing/feature selection/encoding to X.
+
+    Each archive candidate must be evaluated (and served) in the input space of
+    the estimator that produced it; atom feature indices refer to that space.
+    """
+    X_arr = np.asarray(X)
+    if estimator is None:
+        return X_arr
+    pipeline = getattr(estimator, "preprocess_pipeline_", None)
+    if pipeline is not None:
+        X_arr = np.asarray(pipeline.transform(X_arr), dtype=None)
+    selector = getattr(estimator, "feature_selector_", None)
+    if selector is not None:
+        X_arr = np.asarray(selector.transform(X_arr), dtype=None)
+    elif getattr(estimator, "selected_feature_indices_", None) is not None:
+        X_arr = X_arr[:, estimator.selected_feature_indices_]
+    if hasattr(estimator, "_prepare_X_for_prediction"):
+        X_arr = estimator._prepare_X_for_prediction(X_arr)
+    return X_arr
+
+
+def _harvest_variants(fitted: Any) -> dict[tuple, ScoredRuleSet]:
+    """Return all rule sets a fitted wrapper offers, keyed stably across refits.
+
+    Backends exposing an internal Pareto front (``pareto_archive_``, keyed by
+    complexity) contribute every front member; all others contribute their
+    single fitted rule set.
+    """
+    underlying = getattr(fitted, "estimator_", fitted)
+    front = getattr(underlying, "pareto_archive_", None)
+    if isinstance(front, dict) and front:
+        return {("front", int(comp)): rs for comp, rs in front.items()}
+    return {("model",): fitted.to_ruleset()}
+
+
+def _macro_f1(y_true, y_pred) -> float:
+    return float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+
+
+def _r2(y_true, y_pred) -> float:
+    return float(r2_score(y_true, y_pred))
+
+
+def _oof_evaluate_config(
+    make_estimator: Callable[[], Any],
+    X: np.ndarray,
+    y: np.ndarray,
+    splitter: Any,
+    *,
+    main_scorer: Callable | None,
+    archive_metric: Callable[[Any, Any], float],
+    predict_fn: Callable[[ScoredRuleSet, np.ndarray], Any],
+) -> tuple[float, dict[tuple, list[float]]]:
+    """Cross-validate one backend configuration.
+
+    Returns the mean held-out ``main_scorer`` score of the fitted model (NaN if
+    no scorer is given) and, for every harvested variant key, the list of
+    held-out ``archive_metric`` scores.  Every variant is evaluated through its
+    own rule set in its own estimator's input space, so backend-internal fronts
+    are scored member by member.
+    """
+    main_scores: list[float] = []
+    per_key: dict[tuple, list[float]] = defaultdict(list)
+    for train_idx, val_idx in splitter.split(X, y):
+        est = make_estimator()
+        est.fit(X[train_idx], y[train_idx])
+        X_val, y_val = X[val_idx], y[val_idx]
+        if main_scorer is not None:
+            main_scores.append(float(main_scorer(est, X_val, y_val)))
+        X_val_t = _transform_for_estimator(est, X_val)
+        for key, rs in _harvest_variants(est).items():
+            per_key[key].append(archive_metric(y_val, predict_fn(rs, X_val_t)))
+    main = float(np.mean(main_scores)) if main_scores else float("nan")
+    return main, dict(per_key)
+
+
+def _admit_full_fit(
+    archive: "MasterParetoArchive",
+    est_full: Any,
+    label: str,
+    per_key: dict[tuple, list[float]],
+    *,
+    n_splits: int,
+) -> int:
+    """Offer the full-data rule sets of ``est_full`` to the archive with OOF scores.
+
+    Complexity is taken from the full-data rule set (the one actually served);
+    the score is the mean out-of-fold score of the same variant key.  Variants
+    observed in fewer than half of the folds are skipped as unreliable.
+    """
+    min_folds = max(1, (n_splits + 1) // 2)
+    admitted = 0
+    for key, rs in _harvest_variants(est_full).items():
+        scores = per_key.get(key)
+        if not scores or len(scores) < min_folds:
+            continue
+        if archive.add(
+            rs,
+            float(np.mean(scores)),
+            backend=label,
+            metadata={
+                "estimator": est_full,
+                "variant": key,
+                "oof_folds": len(scores),
+                "oof_std": float(np.std(scores)),
+            },
+        ):
+            admitted += 1
+    return admitted
+
+
 @dataclass
 class ParetoCandidate:
     """A single non-dominated ScoredRuleSet candidate."""
@@ -56,8 +169,9 @@ class ParetoCandidate:
 class MasterParetoArchive:
     """Maintains a non-dominated Pareto front over complexity (atoms) and performance."""
 
-    def __init__(self, higher_is_better: bool = True):
+    def __init__(self, higher_is_better: bool = True, compact_tolerance: float = 0.02):
         self.higher_is_better = higher_is_better
+        self.compact_tolerance = float(compact_tolerance)
         self.candidates_: list[ParetoCandidate] = []
 
     def _dominates(self, a_atoms: int, a_score: float, b_atoms: int, b_score: float) -> bool:
@@ -137,6 +251,33 @@ class MasterParetoArchive:
         max_atoms: int | None = None,
     ) -> ScoredRuleSet:
         """Select a single model from the archive according to user intent."""
+        return self.select_candidate(preference, max_rules=max_rules, max_atoms=max_atoms).ruleset
+
+    def _signed(self, score: float) -> float:
+        return score if self.higher_is_better else -score
+
+    def _select_compact(self, eligible: list[ParetoCandidate]) -> ParetoCandidate:
+        """Most parsimonious candidate within ``compact_tolerance`` of the best score."""
+        best = max(self._signed(c.score) for c in eligible)
+        within = [c for c in eligible if self._signed(c.score) >= best - self.compact_tolerance]
+        return min(within, key=lambda c: (c.atoms, -self._signed(c.score)))
+
+    def select_candidate(
+        self,
+        preference: str = "balanced",
+        max_rules: int | None = None,
+        max_atoms: int | None = None,
+    ) -> ParetoCandidate:
+        """Select a single archive candidate according to user intent.
+
+        - ``compact``: fewest atoms among candidates whose score lies within
+          ``compact_tolerance`` of the best score.
+        - ``accuracy`` / ``manual``: highest score.
+        - ``balanced``: knee point, i.e. the candidate with maximal signed
+          distance above the chord between the two extreme front points in
+          min-max normalized (atoms, score) space.  Falls back to ``compact``
+          for fronts with fewer than three points or without a convex knee.
+        """
         if not self.candidates_:
             raise RuntimeError("MasterParetoArchive is empty; no models available.")
 
@@ -154,42 +295,34 @@ class MasterParetoArchive:
             )
             eligible = list(self.candidates_)
 
+        eligible = sorted(eligible, key=lambda c: (c.atoms, -self._signed(c.score)))
+
         if preference == "compact":
-            # Highest score among solutions with atoms <= 6 (or minimum available)
-            compact_set = [c for c in eligible if c.atoms <= 6]
-            pool = compact_set if compact_set else eligible
-            chosen = max(pool, key=lambda c: c.score if self.higher_is_better else -c.score)
-            return chosen.ruleset
+            return self._select_compact(eligible)
 
-        if preference == "accuracy":
-            chosen = max(eligible, key=lambda c: c.score if self.higher_is_better else -c.score)
-            return chosen.ruleset
+        if preference in ("accuracy", "manual", "custom"):
+            return max(eligible, key=lambda c: (self._signed(c.score), -c.atoms))
 
-        if preference in ("manual", "custom"):
-            chosen = max(eligible, key=lambda c: c.score if self.higher_is_better else -c.score)
-            return chosen.ruleset
-
-        # Default: "balanced" (knee / elbow point)
+        # Default: "balanced" (knee point in normalized objective space)
         if len(eligible) <= 2:
-            chosen = max(eligible, key=lambda c: c.score if self.higher_is_better else -c.score)
-            return chosen.ruleset
+            return self._select_compact(eligible)
 
-        # Multi-objective knee point via perpendicular distance to chord
         atoms_arr = np.array([c.atoms for c in eligible], dtype=float)
-        scores_arr = np.array([c.score for c in eligible], dtype=float)
+        scores_arr = np.array([self._signed(c.score) for c in eligible], dtype=float)
+        a_span = atoms_arr[-1] - atoms_arr[0]
+        s_span = scores_arr[-1] - scores_arr[0]
+        if a_span <= 0 or s_span <= 1e-12:
+            return self._select_compact(eligible)
 
-        c_min, c_max = atoms_arr[0], atoms_arr[-1]
-        s_min, s_max = scores_arr[0], scores_arr[-1]
-
-        denom = np.hypot(c_max - c_min, s_max - s_min)
-        if denom < 1e-9:
-            chosen = max(eligible, key=lambda c: c.score if self.higher_is_better else -c.score)
-            return chosen.ruleset
-
-        # Distance from (c_i, s_i) to line (c_min, s_min)-(c_max, s_max)
-        distances = np.abs((s_max - s_min) * atoms_arr - (c_max - c_min) * scores_arr + c_max * s_min - s_max * c_min) / denom
-        best_idx = int(np.argmax(distances))
-        return eligible[best_idx].ruleset
+        # After min-max normalization the extremes are (0, 0) and (1, 1); the
+        # signed distance above the chord y = x is proportional to (s - a).
+        a_norm = (atoms_arr - atoms_arr[0]) / a_span
+        s_norm = (scores_arr - scores_arr[0]) / s_span
+        gain = s_norm - a_norm
+        best_idx = int(np.argmax(gain))
+        if gain[best_idx] <= 1e-12:
+            return self._select_compact(eligible)
+        return eligible[best_idx]
 
     def plot_pareto_front(
         self,
@@ -333,11 +466,15 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         Master Pareto Archive unless ``max_atoms_per_rule`` is set explicitly
         in ``backend_params``.
     preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual"}, default="balanced"
-        Operational intent profile:
-        - "compact": minimizes rule complexity (target atoms <= 6).
-        - "balanced": knee point of Pareto front (optimal marginal utility).
-        - "accuracy": pushes performance to maximum on validation score.
+        Operational intent profile (all evaluated on out-of-fold archive scores):
+        - "compact": fewest atoms within ``compact_tolerance`` of the best score.
+        - "balanced": knee point of the normalized Pareto front (falls back to
+          "compact" when the front has fewer than three points).
+        - "accuracy": highest out-of-fold score.
         - "pareto_menu": fits full front for interactive post-fit inspection.
+    compact_tolerance : float, default=0.02
+        Score tolerance used by the "compact" intent (and the "balanced"
+        fallback), in units of the archive metric (macro-F1).
     enable_pareto_fusion : bool, default=True
         Whether to merge non-dominated rule sets across all evaluated backends
         into a unified Master Pareto Front.
@@ -385,6 +522,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         probing_strategy: Literal["none", "subsample"] = "none",
         probing_subsample: float = 0.25,
         probing_threshold_samples: int = 500,
+        compact_tolerance: float = 0.02,
         random_state: int | None = None,
     ):
         self.candidate_backends = candidate_backends
@@ -402,6 +540,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         self.probing_strategy = probing_strategy
         self.probing_subsample = probing_subsample
         self.probing_threshold_samples = probing_threshold_samples
+        self.compact_tolerance = compact_tolerance
         self.random_state = random_state
 
     def _resolve_feature_selection(self, n_samples: int, n_features: int) -> dict[str, Any] | None:
@@ -520,102 +659,90 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         cv_splitter = StratifiedKFold(
             n_splits=self.cv, shuffle=True, random_state=self.random_state
         )
+        scorer = get_scorer(self.scoring)
 
-        self.master_archive_ = MasterParetoArchive(higher_is_better=True)
+        self.master_archive_ = MasterParetoArchive(
+            higher_is_better=True, compact_tolerance=self.compact_tolerance
+        )
         fitted_estimators: dict[str, Any] = {}
 
         for backend in backends:
             bp = per_backend_params.get(backend)
             if bp is None and backend == "cart":
                 bp = {"max_depth": 3}
-            clf = ScoredRuleSetClassifier(
-                backend=backend,
-                backend_params=bp,
-                preprocessing=self.effective_preprocessing_,
-                random_state=self.random_state,
-            )
-            t0 = time.monotonic()
-            try:
-                scores = cross_val_score(
-                    clf, X_valid, y_valid,
-                    cv=cv_splitter,
-                    scoring=self.scoring,
-                    error_score="raise",
-                )
-                elapsed = time.monotonic() - t0
-                if (
-                    self.timeout_per_backend is not None
-                    and elapsed > self.timeout_per_backend
-                ):
-                    warnings.warn(
-                        f"AutoScoredRuleSet: backend '{backend}' exceeded "
-                        f"timeout ({elapsed:.1f}s > {self.timeout_per_backend:.1f}s).",
-                        UserWarning,
-                    )
-                mean_score = float(scores.mean())
-            except Exception as exc:  # noqa: BLE001
-                warnings.warn(
-                    f"AutoScoredRuleSet: backend '{backend}' failed during CV: {exc}",
-                    UserWarning,
-                )
-                mean_score = float("-inf")
 
-            cv_results[backend] = mean_score
-            if mean_score > best_score:
-                best_score = mean_score
-                best_backend = backend
+            # Configurations evaluated for this backend.  The neural backend
+            # additionally contributes an architectural top-k sweep; each k is
+            # its own candidate point and the archive prunes dominated widths.
+            configs: list[tuple[str, dict[str, Any] | None]] = [(backend, bp)]
+            if backend == "rulenln" and not (bp or {}).get("max_atoms_per_rule"):
+                configs += [
+                    (f"rulenln(k={k})", {**(bp or {}), "max_atoms_per_rule": k})
+                    for k in _RULENLN_SWEEP_K
+                ]
 
-            # If pareto fusion is active, fit on full data and harvest models
-            if self.enable_pareto_fusion and mean_score > float("-inf"):
-                try:
-                    fitted_clf = ScoredRuleSetClassifier(
+            for label, params in configs:
+                is_main = label == backend
+
+                def make(params=params, backend=backend):
+                    return ScoredRuleSetClassifier(
                         backend=backend,
-                        backend_params=bp,
+                        backend_params=params,
                         preprocessing=self.effective_preprocessing_,
                         random_state=self.random_state,
                     )
-                    fitted_clf.fit(X_valid, y_valid)
-                    fitted_estimators[backend] = fitted_clf
 
-                    # Check for multi-model Pareto front on underlying estimator
-                    underlying = getattr(fitted_clf, "estimator_", fitted_clf)
-                    pareto_dict = getattr(underlying, "pareto_archive_", None)
-                    if isinstance(pareto_dict, dict) and pareto_dict:
-                        for comp, rs in pareto_dict.items():
-                            preds_cand = fitted_clf.predict(X_valid)
-                            cand_s = float(f1_score(y_valid, preds_cand, average="macro", zero_division=0))
-                            self.master_archive_.add(rs, cand_s, backend=backend)
-                    else:
-                        rs = fitted_clf.to_ruleset()
-                        preds_cand = fitted_clf.predict(X_valid)
-                        cand_s = float(f1_score(y_valid, preds_cand, average="macro", zero_division=0))
-                        self.master_archive_.add(rs, cand_s, backend=backend)
+                t0 = time.monotonic()
+                try:
+                    main_score, per_key = _oof_evaluate_config(
+                        make, X_valid, y_valid, cv_splitter,
+                        main_scorer=scorer if is_main else None,
+                        archive_metric=_macro_f1,
+                        predict_fn=predict_from_ruleset,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    if is_main:
+                        warnings.warn(
+                            f"AutoScoredRuleSet: backend '{backend}' failed during CV: {exc}",
+                            UserWarning,
+                        )
+                        cv_results[backend] = float("-inf")
+                        break  # skip sweep variants of a failing backend
+                    warnings.warn(
+                        f"AutoScoredRuleSet: {label} harvest failed: {exc}",
+                        UserWarning,
+                    )
+                    continue
 
-                        # Neural top-k sweep: each k is a candidate point on the
-                        # compactness/accuracy front; the archive prunes any
-                        # variant dominated by another k or backend.
-                        if backend == "rulenln" and not (bp or {}).get("max_atoms_per_rule"):
-                            for k in _RULENLN_SWEEP_K:
-                                try:
-                                    sweep_clf = ScoredRuleSetClassifier(
-                                        backend="rulenln",
-                                        backend_params={**(bp or {}), "max_atoms_per_rule": k},
-                                        preprocessing=self.effective_preprocessing_,
-                                        random_state=self.random_state,
-                                    )
-                                    sweep_clf.fit(X_valid, y_valid)
-                                    rs_k = sweep_clf.to_ruleset()
-                                    preds_k = sweep_clf.predict(X_valid)
-                                    s_k = float(f1_score(y_valid, preds_k, average="macro", zero_division=0))
-                                    self.master_archive_.add(rs_k, s_k, backend=f"rulenln(k={k})")
-                                except Exception as exc:  # noqa: BLE001
-                                    warnings.warn(
-                                        f"AutoScoredRuleSet: rulenln top-k={k} harvest failed: {exc}",
-                                        UserWarning,
-                                    )
+                if is_main:
+                    elapsed = time.monotonic() - t0
+                    if self.timeout_per_backend is not None and elapsed > self.timeout_per_backend:
+                        warnings.warn(
+                            f"AutoScoredRuleSet: backend '{backend}' exceeded "
+                            f"timeout ({elapsed:.1f}s > {self.timeout_per_backend:.1f}s).",
+                            UserWarning,
+                        )
+                    cv_results[backend] = main_score
+                    if main_score > best_score:
+                        best_score = main_score
+                        best_backend = backend
+
+                if not (self.enable_pareto_fusion or is_main):
+                    continue
+                # Refit on all data for serving; archive scores stay OOF.
+                try:
+                    est_full = make()
+                    est_full.fit(X_valid, y_valid)
+                    if is_main:
+                        fitted_estimators[backend] = est_full
+                    if self.enable_pareto_fusion:
+                        _admit_full_fit(
+                            self.master_archive_, est_full, label, per_key,
+                            n_splits=cv_splitter.get_n_splits(),
+                        )
                 except Exception as exc:  # noqa: BLE001
                     warnings.warn(
-                        f"AutoScoredRuleSet: failed to harvest Pareto models from '{backend}': {exc}",
+                        f"AutoScoredRuleSet: failed to harvest Pareto models from '{label}': {exc}",
                         UserWarning,
                     )
 
@@ -649,15 +776,23 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
 
         # Select model according to preference and Pareto fusion
         if self.enable_pareto_fusion and self.master_archive_.candidates_:
-            self.ruleset_ = self.master_archive_.select(
+            chosen = self.master_archive_.select_candidate(
                 preference=self.preference,
                 max_rules=self.max_rules,
                 max_atoms=self.max_atoms,
             )
+            self._activate(chosen)
         else:
             self.ruleset_ = winner.ruleset_
+            self.active_estimator_ = winner
+            self.active_backend_ = best_backend
 
         return self
+
+    def _activate(self, candidate: ParetoCandidate) -> None:
+        self.ruleset_ = candidate.ruleset
+        self.active_estimator_ = candidate.metadata.get("estimator", self.best_estimator_)
+        self.active_backend_ = candidate.backend
 
     def get_pareto_spectrum(self) -> list[dict[str, Any]]:
         """Return the Master Pareto spectrum of non-dominated rule sets."""
@@ -673,7 +808,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
 
         # Find closest match by complexity
         closest = min(candidates, key=lambda c: abs(c.atoms - complexity))
-        self.ruleset_ = closest.ruleset
+        self._activate(closest)
         return self
 
     def export_index_card(self) -> str:
@@ -682,21 +817,9 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         return format_ruleset_markdown(self.ruleset_)
 
     def _prepare_X_for_prediction(self, X) -> np.ndarray:
-        """Apply fitted preprocessing, feature selection, and backend encoding to X."""
-        X_arr = np.asarray(X)
-        winner = getattr(self, "best_estimator_", None)
-        if winner is not None:
-            pipeline = getattr(winner, "preprocess_pipeline_", None)
-            if pipeline is not None:
-                X_arr = np.asarray(pipeline.transform(X_arr), dtype=None)
-            selector = getattr(winner, "feature_selector_", None)
-            if selector is not None:
-                X_arr = np.asarray(selector.transform(X_arr), dtype=None)
-            elif getattr(winner, "selected_feature_indices_", None) is not None:
-                X_arr = X_arr[:, winner.selected_feature_indices_]
-            if hasattr(winner, "_prepare_X_for_prediction"):
-                X_arr = winner._prepare_X_for_prediction(X_arr)
-        return X_arr
+        """Transform X into the input space of the estimator that produced the active rule set."""
+        est = getattr(self, "active_estimator_", None) or getattr(self, "best_estimator_", None)
+        return _transform_for_estimator(est, X)
 
     def predict(self, X):
         check_is_fitted(self, ["ruleset_"])
@@ -743,6 +866,11 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         Cross-validation folds.
     scoring : str, default="r2"
         Regression scoring metric.
+    compact_tolerance : float, default=0.02
+        Score tolerance used by the "compact" intent (and the "balanced"
+        fallback), in units of the archive metric (R^2).
+    timeout_per_backend : float | None
+        Warn if a single backend's CV loop exceeds this many seconds.
     random_state : int | None
         Random seed for splitting.
     """
@@ -760,6 +888,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         probing_strategy: Literal["none", "subsample"] = "none",
         probing_subsample: float = 0.25,
         probing_threshold_samples: int = 500,
+        compact_tolerance: float = 0.02,
+        timeout_per_backend: float | None = None,
         random_state: int | None = None,
     ):
         self.candidate_backends = candidate_backends
@@ -773,6 +903,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         self.probing_strategy = probing_strategy
         self.probing_subsample = probing_subsample
         self.probing_threshold_samples = probing_threshold_samples
+        self.compact_tolerance = compact_tolerance
+        self.timeout_per_backend = timeout_per_backend
         self.random_state = random_state
 
     def fit(self, X, y):
@@ -829,52 +961,66 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         cv_splitter = KFold(
             n_splits=self.cv, shuffle=True, random_state=self.random_state
         )
+        scorer = get_scorer(self.scoring)
 
-        self.master_archive_ = MasterParetoArchive(higher_is_better=True)
+        self.master_archive_ = MasterParetoArchive(
+            higher_is_better=True, compact_tolerance=self.compact_tolerance
+        )
         fitted_estimators: dict[str, Any] = {}
 
         for backend in backends:
             bp = per_backend_params.get(backend)
             if bp is None and backend == "cart":
                 bp = {"max_depth": 3}
-            reg = ScoredRuleSetRegressor(
-                backend=backend,
-                backend_params=bp,
-                random_state=self.random_state,
-            )
-            try:
-                scores = cross_val_score(
-                    reg, X_valid, y_valid,
-                    cv=cv_splitter,
-                    scoring=self.scoring,
-                    error_score="raise",
+
+            def make(params=bp, backend=backend):
+                return ScoredRuleSetRegressor(
+                    backend=backend,
+                    backend_params=params,
+                    random_state=self.random_state,
                 )
-                mean_score = float(scores.mean())
+
+            t0 = time.monotonic()
+            try:
+                main_score, per_key = _oof_evaluate_config(
+                    make, X_valid, y_valid, cv_splitter,
+                    main_scorer=scorer,
+                    archive_metric=_r2,
+                    predict_fn=predict_regression_from_ruleset,
+                )
             except Exception as exc:  # noqa: BLE001
                 warnings.warn(
                     f"AutoScoredRuleSetRegressor: backend '{backend}' failed during CV: {exc}",
                     UserWarning,
                 )
-                mean_score = float("-inf")
+                main_score = float("-inf")
+                per_key = {}
 
-            cv_results[backend] = mean_score
-            if mean_score > best_score:
-                best_score = mean_score
+            elapsed = time.monotonic() - t0
+            if (
+                self.timeout_per_backend is not None
+                and elapsed > self.timeout_per_backend
+            ):
+                warnings.warn(
+                    f"AutoScoredRuleSetRegressor: backend '{backend}' exceeded "
+                    f"timeout ({elapsed:.1f}s > {self.timeout_per_backend:.1f}s).",
+                    UserWarning,
+                )
+
+            cv_results[backend] = main_score
+            if main_score > best_score:
+                best_score = main_score
                 best_backend = backend
 
-            if self.enable_pareto_fusion and mean_score > float("-inf"):
+            if self.enable_pareto_fusion and main_score > float("-inf"):
                 try:
-                    fitted_reg = ScoredRuleSetRegressor(
-                        backend=backend,
-                        backend_params=bp,
-                        random_state=self.random_state,
-                    )
+                    fitted_reg = make()
                     fitted_reg.fit(X_valid, y_valid)
                     fitted_estimators[backend] = fitted_reg
-                    rs = fitted_reg.to_ruleset()
-                    preds_cand = predict_regression_from_ruleset(rs, X_valid)
-                    cand_s = float(r2_score(y_valid, preds_cand))
-                    self.master_archive_.add(rs, cand_s, backend=backend)
+                    _admit_full_fit(
+                        self.master_archive_, fitted_reg, backend, per_key,
+                        n_splits=cv_splitter.get_n_splits(),
+                    )
                 except Exception as exc:  # noqa: BLE001
                     warnings.warn(
                         f"AutoScoredRuleSetRegressor: failed to harvest model from '{backend}': {exc}",
@@ -905,13 +1051,18 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         self.feature_names_in_ = winner.feature_names_in_
 
         if self.enable_pareto_fusion and self.master_archive_.candidates_:
-            self.ruleset_ = self.master_archive_.select(
+            chosen = self.master_archive_.select_candidate(
                 preference=self.preference,
                 max_rules=self.max_rules,
                 max_atoms=self.max_atoms,
             )
+            self.ruleset_ = chosen.ruleset
+            self.active_estimator_ = chosen.metadata.get("estimator", winner)
+            self.active_backend_ = chosen.backend
         else:
             self.ruleset_ = winner.ruleset_
+            self.active_estimator_ = winner
+            self.active_backend_ = best_backend
 
         return self
 
@@ -926,6 +1077,9 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
             raise RuntimeError("No models available in Master Pareto Archive.")
         closest = min(candidates, key=lambda c: abs(c.atoms - complexity))
         self.ruleset_ = closest.ruleset
+        self.active_estimator_ = closest.metadata.get(
+            "estimator", self.best_estimator_)
+        self.active_backend_ = closest.backend
         return self
 
     def export_index_card(self) -> str:

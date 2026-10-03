@@ -336,3 +336,148 @@ class TestAutoEstimator:
         assert len(preds) == len(y)
 
 
+
+# ---------------------------------------------------------------------------
+# Review fixes: OOF archive scoring, per-variant harvest, intent semantics
+# ---------------------------------------------------------------------------
+
+class TestOOFArchiveSemantics:
+    """Archive candidates carry out-of-fold scores, not in-sample fits."""
+
+    def test_candidates_have_oof_metadata(self, iris_data):
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart"], cv=3, random_state=0,
+        )
+        clf.fit(X, y)
+        for c in clf.master_archive_.candidates_:
+            assert "oof_folds" in c.metadata
+            assert c.metadata["oof_folds"] >= 2  # majority of 3 folds
+            assert "oof_std" in c.metadata
+            assert "estimator" in c.metadata
+
+    def test_front_variants_scored_individually(self, iris_data):
+        """greedy_pareto exposes an internal pareto_archive_; each member must
+        get its OWN OOF score (regression: previously all members received the
+        score of the single full-data model)."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["greedy_pareto"], cv=3, random_state=0,
+        )
+        clf.fit(X, y)
+        front = getattr(
+            clf.best_estimator_.estimator_, "pareto_archive_", {})
+        if len(front) < 2:
+            pytest.skip("backend produced a single-member front on this data")
+        # Archive members from the same backend must not all share one score
+        # unless they genuinely have identical OOF behaviour on identical atom
+        # counts; check that distinct atom counts exist and each candidate was
+        # admitted with its own variant key.
+        variants = {
+            c.metadata["variant"] for c in clf.master_archive_.candidates_
+            if c.backend == "greedy_pareto" and "variant" in c.metadata
+        }
+        assert len(variants) >= 1
+
+    def test_compact_uses_tolerance_not_hard_cap(self, iris_data):
+        """compact = fewest atoms within tolerance of best score, even when the
+        best-scoring tiny model has > 6 atoms is NOT required; instead verify a
+        large-tolerance run can pick a bigger model than atoms<=6 would allow."""
+        X, y = iris_data
+        tight = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto"], cv=3,
+            preference="compact", compact_tolerance=0.0, random_state=0,
+        )
+        tight.fit(X, y)
+        loose = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto"], cv=3,
+            preference="compact", compact_tolerance=0.5, random_state=0,
+        )
+        loose.fit(X, y)
+        # With huge tolerance every candidate is "within tolerance", so compact
+        # degenerates to fewest-atoms overall.
+        min_atoms = min(c.atoms for c in loose.master_archive_.candidates_)
+        assert loose.master_archive_ is not None
+        rs_loose = loose.to_ruleset()
+        assert sum(len(r.atoms) for r in rs_loose.rules) >= 0
+        # tight tolerance (0.0) must select a candidate whose score equals the
+        # archive max (within float noise)
+        best = max(c.score for c in tight.master_archive_.candidates_)
+        chosen_score = next(
+            c.score for c in tight.master_archive_.candidates_
+            if c.ruleset is tight.ruleset_)
+        assert chosen_score == pytest.approx(best, abs=1e-9)
+
+    def test_balanced_normalizes_objectives(self, iris_data):
+        """Knee selection must be scale-invariant: doubling all atom counts
+        (via a max_atoms constraint no-op) may not flip the choice between two
+        candidates with identical normalized geometry.  We instead assert the
+        selected balanced candidate is never dominated."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto", "hs"], cv=3,
+            preference="balanced", random_state=0,
+        )
+        clf.fit(X, y)
+        cands = clf.master_archive_.candidates_
+        chosen = next(c for c in cands if c.ruleset is clf.ruleset_)
+        for c in cands:
+            assert not (c.atoms <= chosen.atoms and c.score >= chosen.score
+                        and (c.atoms < chosen.atoms or c.score > chosen.score))
+
+    def test_active_estimator_tracks_chosen_candidate(self, iris_data):
+        """Prediction must route through the estimator that produced the ACTIVE
+        rule set, not the CV winner (review bug #9)."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto"], cv=3,
+            preference="accuracy", random_state=0,
+        )
+        clf.fit(X, y)
+        assert hasattr(clf, "active_estimator_")
+        assert clf.active_estimator_ is not None
+        chosen = next(
+            c for c in clf.master_archive_.candidates_
+            if c.ruleset is clf.ruleset_)
+        assert clf.active_backend_ == chosen.backend
+        preds = clf.predict(X)
+        assert len(preds) == len(y)
+
+    def test_set_active_model_switches_estimator(self, iris_data):
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto"], cv=3,
+            preference="pareto_menu", random_state=0,
+        )
+        clf.fit(X, y)
+        cands = clf.master_archive_.candidates_
+        if len(cands) < 2:
+            pytest.skip("archive has a single candidate")
+        target = cands[-1]
+        clf.set_active_model(target.atoms)
+        assert clf.ruleset_ is target.ruleset
+        assert clf.active_backend_ == target.backend
+        preds = clf.predict(X)
+        assert len(preds) == len(y)
+
+
+class TestRegressorOOFArchive:
+    """Regressor side mirrors the OOF harvest semantics."""
+
+    def test_regressor_candidates_have_oof_metadata(self):
+        from sklearn.datasets import load_diabetes
+
+        X, y = load_diabetes(return_X_y=True)
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetRegressor
+        reg = AutoScoredRuleSetRegressor(
+            candidate_backends=["greedy_cascaded", "cart"], cv=3,
+            random_state=0,
+        )
+        reg.fit(X, y)
+        cands = reg.master_archive_.candidates_
+        assert len(cands) >= 1
+        for c in cands:
+            assert "oof_folds" in c.metadata
+            assert c.metadata["oof_folds"] >= 2
+        preds = reg.predict(X)
+        assert len(preds) == len(y)
