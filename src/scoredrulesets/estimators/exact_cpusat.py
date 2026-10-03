@@ -44,6 +44,7 @@ at most max_rules rules, at most max_atoms_per_class atoms — per class".
 from __future__ import annotations
 
 import itertools
+import sys
 from typing import NamedTuple
 
 import numpy as np
@@ -287,6 +288,18 @@ class ExactCPSATClassifier(BaseRuleSetEstimator):
     # ------------------------------------------------------------------
 
     def fit(self, X, y):
+        # OR-Tools <= 9.15 deadlocks on Python 3.14: the first CpSolver.Solve
+        # call blocks indefinitely in native code (not even SIGALRM-based
+        # watchdogs interrupt it).  Fail fast with an actionable error instead
+        # of hanging the caller's process.
+        if sys.version_info >= (3, 14):
+            raise ImportError(
+                "backend='exact' is unavailable on Python 3.14+: OR-Tools "
+                "(<= 9.15) deadlocks in CpSolver.Solve on this interpreter "
+                "(first solve blocks forever in native code).  Run on Python "
+                "<= 3.13 until OR-Tools ships a fixed wheel.  The rest of "
+                "scoredrulesets is unaffected."
+            )
         try:
             import ortools  # noqa: F401
         except ImportError as exc:  # pragma: no cover - env dependent

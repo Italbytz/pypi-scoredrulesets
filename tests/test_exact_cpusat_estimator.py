@@ -16,9 +16,45 @@ from scoredrulesets.estimators.exact_cpusat import (
 from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
 from scoredrulesets.schema import ScoredRuleSet
 
-ortools = pytest.importorskip(
-    "ortools", reason="exact backend requires 'scoredrulesets[exact]'"
+import importlib.util
+
+HAS_ORTOOLS = importlib.util.find_spec("ortools") is not None
+needs_ortools = pytest.mark.skipif(
+    not HAS_ORTOOLS, reason="exact backend requires 'scoredrulesets[exact]'"
 )
+
+
+class TestPython314Guard:
+    """The version guard must fail fast (never hang) on Python 3.14+.
+
+    Runs on every interpreter: it monkeypatches sys.version_info, so it does
+    not need a working solver and cannot deadlock.
+    """
+
+    def test_raises_import_error_on_py314(self, monkeypatch):
+        import sys as _sys
+        from scoredrulesets.estimators import exact_cpusat as mod
+
+        monkeypatch.setattr(mod.sys, "version_info", (3, 14, 0))
+        clf = ExactCPSATClassifier(max_width=1, max_rules=1, max_atoms_per_class=1)
+        with pytest.raises(ImportError, match="deadlock"):
+            clf.fit(np.array([[0.0, 1.0], [1.0, 0.0]]), np.array([0, 1]))
+
+    def test_guard_passes_on_py313(self, monkeypatch):
+        pytest.importorskip("ortools")
+        from scoredrulesets.estimators import exact_cpusat as mod
+
+        monkeypatch.setattr(mod.sys, "version_info", (3, 13, 0))
+        # No ImportError from the guard; proceeds to ortools import (present
+        # here because the module-level importorskip already ran).
+        clf = ExactCPSATClassifier(
+            max_width=1, max_rules=1, max_atoms_per_class=1,
+            n_bins=2, time_limit_per_solve=2.0, random_state=0,
+        )
+        X = np.array([[0.0], [1.0], [2.0], [3.0]])
+        y = np.array([0, 0, 1, 1])
+        clf.fit(X, y)
+        assert clf.ruleset_ is not None
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +110,7 @@ def _binary_split(random_state: int = 42):
     )
 
 
+@needs_ortools
 class TestExactCPSATClassifier:
     def test_fit_predict_binary(self):
         X_train, X_test, y_train, y_test = _binary_split()
@@ -185,6 +222,7 @@ class TestExactCPSATClassifier:
 # Wrapper integration
 # ---------------------------------------------------------------------------
 
+@needs_ortools
 class TestExactWrapper:
     def test_wrapper_backend_exact(self):
         X_train, X_test, y_train, y_test = _binary_split()
@@ -201,6 +239,10 @@ class TestExactWrapper:
         assert pred.shape == y_test.shape
         rs = clf.to_ruleset()
         assert rs.metadata["backend"] == "exact_cpusat"
+
+
+class TestExactDispatch:
+    """Dispatcher error message — runs without ortools installed."""
 
     def test_unknown_backend_error_mentions_exact(self):
         with pytest.raises(ValueError, match="'exact'"):
