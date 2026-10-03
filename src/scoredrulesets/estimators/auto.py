@@ -33,7 +33,7 @@ from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 
 _DEFAULT_CLASSIFIER_BACKENDS = ["greedy_pareto", "cart", "hs", "ruleplcs", "rulenln"]
-_DEFAULT_REGRESSOR_BACKENDS = ["greedy_cascaded", "cart"]
+_DEFAULT_REGRESSOR_BACKENDS = ["greedy_cascaded", "cart", "ruleplcs"]
 
 # Architectural top-k sweep harvested for the neural backend when the user
 # does not pin ``max_atoms_per_rule`` explicitly.  Each k contributes its own
@@ -461,10 +461,14 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
     ----------
     candidate_backends : list[str] | None
         List of backend names to evaluate (default: ``["greedy_pareto", "cart",
-        "hs", "ruleplcs", "rulenln"]``).  For the neural ``rulenln`` backend an
-        architectural top-k sweep (k in {2, 3, 4, 6}) is harvested into the
-        Master Pareto Archive unless ``max_atoms_per_rule`` is set explicitly
-        in ``backend_params``.
+        "hs", "ruleplcs", "rulenln"]``).  For the neural ``rulenln``
+        backend an architectural top-k sweep (k in {2, 3, 4, 6}) is harvested
+        into the Master Pareto Archive unless ``max_atoms_per_rule`` is set
+        explicitly in ``backend_params``.  Evolutionary backends (``rulegp``,
+        ``rulensga2``) and the certified exact backend (``exact``, requires
+        ``scoredrulesets[exact]``) are available on request via
+        ``candidate_backends`` but excluded from the default for runtime
+        reasons.
     preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual"}, default="balanced"
         Operational intent profile (all evaluated on out-of-fold archive scores):
         - "compact": fewest atoms within ``compact_tolerance`` of the best score.
@@ -851,7 +855,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     Parameters
     ----------
     candidate_backends : list[str] | None
-        List of backend names to evaluate (default: ``["greedy_cascaded", "cart"]``).
+        List of backend names to evaluate (default: ``["greedy_cascaded",
+        "cart", "ruleplcs"]``).
     preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual"}, default="balanced"
         Operational intent profile.
     enable_pareto_fusion : bool, default=True
