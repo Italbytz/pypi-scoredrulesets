@@ -238,13 +238,23 @@ class GreedyParetoClassifier(BaseRuleSetEstimator, ClassifierMixin):
                         if not new_mask.any():
                             continue
 
-                        new_rules = sorted(parent_rules + [(aid,)])
+                        # Keep rules and masks paired through the sort: the
+                        # weight vector returned by _evaluate_rule_masks is
+                        # aligned with the MASK order.  Sorting rules without
+                        # permuting masks accordingly (the historical bug)
+                        # scrambles rule<->weight pairing for every
+                        # multi-rule candidate whose sort order differs from
+                        # insertion order, silently corrupting the archive.
+                        pairs = list(zip(parent_rules, parent_masks))
+                        pairs.append(((aid,), new_mask))
+                        pairs.sort(key=lambda p: p[0])
+                        new_rules = [p[0] for p in pairs]
+                        new_masks = [p[1] for p in pairs]
                         sig = tuple(new_rules)
                         if sig in seen_signatures:
                             continue
                         seen_signatures.add(sig)
 
-                        new_masks = list(parent_masks) + [new_mask]
                         f1, r_w, d_w = _evaluate_rule_masks(new_masks)
                         next_candidates.append((f1, new_rules, new_masks, r_w, d_w))
 

@@ -62,3 +62,31 @@ def test_greedy_cascaded_regressor():
     # Basic sanity: correlation with true target should be positive
     corr = np.corrcoef(y, preds)[0, 1]
     assert corr > 0.5
+
+
+def test_archive_pairing_invariant():
+    """Every archived rule set must reproduce its recorded train_macro_f1.
+
+    Regression guard for the Op-B pairing bug: new_rules were sorted while
+    new_masks kept insertion order, so rule<->weight vectors were scrambled
+    for multi-rule candidates whose sorted order differed from insertion
+    order.  The stored ScoredRuleSet then predicted differently from the
+    F1 recorded in its metadata.
+    """
+    from sklearn.datasets import load_breast_cancer
+    from sklearn.metrics import f1_score
+
+    from scoredrulesets.runtime import predict as predict_from_ruleset
+
+    X, y = load_breast_cancer(return_X_y=True)
+    clf = GreedyParetoClassifier(random_state=0)
+    clf.fit(X, y)
+    assert clf.pareto_archive_, "empty archive"
+    for comp, rs in clf.pareto_archive_.items():
+        recorded = rs.metadata.get("train_macro_f1")
+        assert recorded is not None
+        actual = f1_score(y, predict_from_ruleset(rs, X), average="macro")
+        assert abs(actual - recorded) < 0.01, (
+            f"archive[{comp}]: stored ruleset reproduces F1 {actual:.4f} "
+            f"but metadata records {recorded:.4f} (rule<->weight pairing bug)"
+        )
