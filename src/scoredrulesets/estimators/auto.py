@@ -82,6 +82,34 @@ def _macro_f1(y_true, y_pred) -> float:
     return float(f1_score(y_true, y_pred, average="macro", zero_division=0))
 
 
+def _archive_metric_from_scoring(scoring: str | None) -> Callable[[Any, Any], float]:
+    """Derive the archive metric from the estimator's ``scoring`` string.
+
+    Historically the Master Pareto Archive was always scored with macro-F1
+    while backend ranking used ``self.scoring`` (default ``f1_weighted``).
+    The two metrics can disagree by a hair (Ionosphere: greedy's 7-atom front
+    member beats CART on weighted but loses on macro), flipping the accuracy
+    profile's pick.  Harmonize: the archive now follows ``scoring`` for the
+    f1/accuracy families; unknown scorers fall back to macro-F1 with a warning.
+    """
+    s = (scoring or "f1_weighted").lower()
+    base = s.split("@")[0]  # strip possible decorator suffix
+    if base.startswith("f1"):
+        average = base.split("_", 1)[1] if "_" in base else "binary"
+        return lambda y_true, y_pred, _a=average: float(
+            f1_score(y_true, y_pred, average=_a, zero_division=0)
+        )
+    if base in ("accuracy", "acc"):
+        from sklearn.metrics import accuracy_score
+        return lambda y_true, y_pred: float(accuracy_score(y_true, y_pred))
+    warnings.warn(
+        f"AutoScoredRuleSet: archive metric falls back to macro-F1 for "
+        f"scoring='{scoring}'.",
+        UserWarning,
+    )
+    return _macro_f1
+
+
 def _r2(y_true, y_pred) -> float:
     return float(r2_score(y_true, y_pred))
 
@@ -665,6 +693,11 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
             n_splits=self.cv, shuffle=True, random_state=self.random_state
         )
         scorer = get_scorer(self.scoring)
+        # Archive metric follows the estimator's scoring so the Pareto front
+        # and the backend ranking never disagree on which candidate is best
+        # (review finding: macro-F1 archive vs f1_weighted ranking flipped the
+        # Ionosphere accuracy pick by 0.004).
+        archive_metric = _archive_metric_from_scoring(self.scoring)
 
         self.master_archive_ = MasterParetoArchive(
             higher_is_better=True, compact_tolerance=self.compact_tolerance
@@ -702,7 +735,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                     main_score, per_key = _oof_evaluate_config(
                         make, X_valid, y_valid, cv_splitter,
                         main_scorer=scorer if is_main else None,
-                        archive_metric=_macro_f1,
+                        archive_metric=archive_metric,
                         predict_fn=predict_from_ruleset,
                     )
                 except Exception as exc:  # noqa: BLE001

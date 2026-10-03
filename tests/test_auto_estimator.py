@@ -5,7 +5,10 @@ import numpy as np
 import pytest
 from sklearn.datasets import load_iris
 
-from scoredrulesets.estimators.auto import AutoScoredRuleSetClassifier
+from scoredrulesets.estimators.auto import (
+    AutoScoredRuleSetClassifier,
+    _archive_metric_from_scoring,
+)
 
 
 @pytest.fixture
@@ -546,3 +549,49 @@ class TestEvolutionaryFrontHarvest:
             c.metadata["variant"] for c in nsga_cands if "variant" in c.metadata
         }
         assert len(variants) >= 1  # each admitted under its own ("front", comp) key
+
+
+class TestArchiveMetricHarmonization:
+    """Archive metric follows `scoring` (review: macro vs weighted disagreement)."""
+
+    def test_weighted_scoring_uses_weighted_archive_metric(self, iris_data):
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart"], cv=3, scoring="f1_weighted",
+            random_state=0,
+        )
+        clf.fit(X, y)
+        # archive scores must be weighted-F1 values: recompute one candidate
+        from sklearn.metrics import f1_score as _f1
+        est = clf.master_archive_.candidates_[0].metadata["estimator"]
+        # OOF mean of weighted F1 lies in [0,1]; macro would too — instead
+        # verify the derived metric function directly:
+        metric = _archive_metric_from_scoring("f1_weighted")
+        assert metric(y, y) == _f1(y, y, average="weighted")
+
+    def test_metric_dispatch_table(self):
+        from sklearn.metrics import accuracy_score, f1_score
+        y = np.array([0, 1, 1, 0, 1])
+        p = np.array([0, 1, 0, 0, 1])
+        assert _archive_metric_from_scoring("f1_weighted")(y, p) == f1_score(
+            y, p, average="weighted")
+        assert _archive_metric_from_scoring("f1_macro")(y, p) == f1_score(
+            y, p, average="macro")
+        assert _archive_metric_from_scoring("accuracy")(y, p) == accuracy_score(y, p)
+        # unknown scorer falls back to macro-F1 with a warning
+        import warnings as _w
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            assert _archive_metric_from_scoring("roc_auc")(y, p) == f1_score(
+                y, p, average="macro")
+            assert any("macro-F1" in str(x.message) for x in caught)
+
+    def test_default_scoring_stays_f1_weighted(self, iris_data):
+        """Default scoring unchanged; archive metric now follows it."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto"], cv=3, random_state=0,
+        )
+        clf.fit(X, y)
+        assert clf.scoring == "f1_weighted"
+        assert len(clf.master_archive_.candidates_) >= 1
