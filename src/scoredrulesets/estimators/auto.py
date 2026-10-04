@@ -114,6 +114,102 @@ def _r2(y_true, y_pred) -> float:
     return float(r2_score(y_true, y_pred))
 
 
+def _hypervolume_2d(points: list[tuple[float, float]], ref: tuple[float, float]) -> float:
+    """HV of 2D points (complexity minimized, score maximized) vs reference.
+
+    ``points`` are ``(atoms, score)`` pairs; ``ref`` is the dominated reference
+    point ``(atoms_ref, score_ref)`` with ``atoms_ref`` >= every considered
+    complexity and ``score_ref`` below every score.  Returns 0.0 for an empty
+    or fully dominated front.
+    """
+    if not points:
+        return 0.0
+    # Keep non-dominated staircase: sort by atoms asc, keep strictly rising scores
+    staircase: list[tuple[float, float]] = []
+    best = -np.inf
+    for atoms, score in sorted(points, key=lambda p: (p[0], -p[1])):
+        if score > best:
+            staircase.append((atoms, score))
+            best = score
+    hv = 0.0
+    for i, (atoms, score) in enumerate(staircase):
+        next_atoms = staircase[i + 1][0] if i + 1 < len(staircase) else ref[0]
+        width = next_atoms - atoms
+        if width <= 0:
+            continue
+        height = score - ref[1]
+        if height <= 0:
+            continue
+        hv += width * height
+    return float(hv)
+
+
+def _probe_hv_contribution(
+    make_estimator: Callable[[], Any],
+    X_probe: np.ndarray,
+    y_probe: np.ndarray,
+    splitter: Any,
+    *,
+    archive_metric: Callable[[Any, Any], float],
+    predict_fn: Callable[[ScoredRuleSet, np.ndarray], Any],
+) -> dict[str, float]:
+    """Per-backend hypervolume contribution on the probe set.
+
+    For every backend: fit per probe fold, harvest all rule sets the wrapper
+    offers (front members where exposed, else the single served model), score
+    each on the held-out fold, and collect ``(atoms, score)`` points.  The
+    backend's contribution is the hypervolume *gain* its points add to the
+    union front of all other backends (leave-one-out).  Backends that only
+    produce dominated candidates contribute 0.0; a backend holding a unique
+    front corner contributes that corner's slab.
+
+    This is the fusion-aware probing criterion: unlike mean-score ranking, it
+    retains engines that are weak on average but non-dominated at one end of
+    the complexity spectrum (e.g. greedy at the compact end).
+    """
+    per_backend: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for train_idx, val_idx in splitter.split(X_probe, y_probe):
+        X_tr, y_tr = X_probe[train_idx], y_probe[train_idx]
+        X_val, y_val = X_probe[val_idx], y_probe[val_idx]
+        for backend, mk in make_estimator.items():
+            try:
+                est = mk()
+                est.fit(X_tr, y_tr)
+            except Exception:
+                continue
+            X_val_t = _transform_for_estimator(est, X_val)
+            for rs in _harvest_variants(est).values():
+                try:
+                    score = float(archive_metric(y_val, predict_fn(rs, X_val_t)))
+                except Exception:
+                    continue
+                atoms = sum(len(r.atoms) for r in rs.rules)
+                per_backend[backend].append((float(atoms), score))
+    # Collapse per-backend points to one (atoms, mean score) staircase per atom count
+    collapsed: dict[str, list[tuple[float, float]]] = {}
+    for backend, pts in per_backend.items():
+        by_atoms: dict[float, list[float]] = defaultdict(list)
+        for atoms, score in pts:
+            by_atoms[atoms].append(score)
+        collapsed[backend] = [(a, float(np.mean(v))) for a, v in sorted(by_atoms.items())]
+    # Leave-one-out HV contribution
+    all_backends = list(collapsed.keys())
+    contributions: dict[str, float] = {}
+    for backend in all_backends:
+        others = [p for b in all_backends if b != backend for p in collapsed[b]]
+        own = collapsed[backend]
+        if not own:
+            contributions[backend] = 0.0
+            continue
+        max_atoms = max(p[0] for p in (others + own)) + 1
+        min_score = min(p[1] for p in (others + own)) - 1e-6
+        ref = (max_atoms, min_score)
+        hv_without = _hypervolume_2d(others, ref) if others else 0.0
+        hv_with = _hypervolume_2d(others + own, ref)
+        contributions[backend] = max(0.0, hv_with - hv_without)
+    return contributions
+
+
 def _oof_evaluate_config(
     make_estimator: Callable[[], Any],
     X: np.ndarray,
@@ -552,7 +648,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         max_features: int | float | None = None,
         preprocessing: dict[str, Any] | None = None,
         timeout_per_backend: float | None = None,
-        probing_strategy: Literal["none", "subsample"] = "none",
+        probing_strategy: Literal["none", "subsample", "hv_contribution"] = "none",
         probing_subsample: float = 0.25,
         probing_threshold_samples: int = 500,
         compact_tolerance: float = 0.02,
@@ -644,9 +740,14 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         backends = list(self.candidate_backends or _DEFAULT_CLASSIFIER_BACKENDS)
         per_backend_params = dict(self.backend_params or {})
 
-        # Multi-fidelity probing to filter unpromising backends on larger datasets
+        # Multi-fidelity probing to filter unpromising backends on larger datasets.
+        # ``subsample`` ranks by mean held-out score; ``hv_contribution`` ranks by
+        # the hypervolume a backend adds to the pooled probe front (leave-one-out).
+        # The latter is fusion-aware: an engine that is weak on average but owns
+        # one end of the complexity spectrum (e.g. greedy at the compact end)
+        # survives HV probing and is evicted by mean-score probing.
         if (
-            self.probing_strategy == "subsample"
+            self.probing_strategy in ("subsample", "hv_contribution")
             and len(X_valid) >= self.probing_threshold_samples
             and len(backends) > 2
         ):
@@ -657,31 +758,49 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
             X_probe, y_probe = X_valid[probe_idx], y_valid[probe_idx]
             probe_splitter = StratifiedKFold(n_splits=2, shuffle=True, random_state=self.random_state)
 
-            probe_scores: dict[str, float] = {}
-            for backend in backends:
-                bp = per_backend_params.get(backend)
-                if bp is None and backend == "cart":
-                    bp = {"max_depth": 3}
-                clf = ScoredRuleSetClassifier(
+            def _probe_factory(backend: str, bp: dict[str, Any] | None):
+                return lambda: ScoredRuleSetClassifier(
                     backend=backend,
                     backend_params=bp,
                     preprocessing=self.effective_preprocessing_,
                     random_state=self.random_state,
                 )
-                try:
-                    sc = cross_val_score(
-                        clf, X_probe, y_probe,
-                        cv=probe_splitter,
-                        scoring=self.scoring,
-                        error_score="raise",
-                    )
-                    probe_scores[backend] = float(np.mean(sc))
-                except Exception:
-                    probe_scores[backend] = float("-inf")
 
-            sorted_backends = sorted(backends, key=lambda b: probe_scores.get(b, float("-inf")), reverse=True)
+            probe_ranks: dict[str, float] = {}
+            if self.probing_strategy == "hv_contribution":
+                factories = {}
+                for backend in backends:
+                    bp = per_backend_params.get(backend)
+                    if bp is None and backend == "cart":
+                        bp = {"max_depth": 3}
+                    factories[backend] = _probe_factory(backend, bp)
+                try:
+                    probe_ranks = _probe_hv_contribution(
+                        factories, X_probe, y_probe, probe_splitter,
+                        archive_metric=_archive_metric_from_scoring(self.scoring),
+                        predict_fn=predict_from_ruleset,
+                    )
+                except Exception:
+                    probe_ranks = {}
+            if not probe_ranks:  # "subsample" or HV probing failed -> mean-score fallback
+                for backend in backends:
+                    bp = per_backend_params.get(backend)
+                    if bp is None and backend == "cart":
+                        bp = {"max_depth": 3}
+                    try:
+                        sc = cross_val_score(
+                            _probe_factory(backend, bp)(), X_probe, y_probe,
+                            cv=probe_splitter,
+                            scoring=self.scoring,
+                            error_score="raise",
+                        )
+                        probe_ranks[backend] = float(np.mean(sc))
+                    except Exception:
+                        probe_ranks[backend] = float("-inf")
+
+            sorted_backends = sorted(backends, key=lambda b: probe_ranks.get(b, float("-inf")), reverse=True)
             cutoff = max(2, len(backends) // 2)
-            survivors = [b for b in sorted_backends[:cutoff] if probe_scores.get(b, float("-inf")) > float("-inf")]
+            survivors = [b for b in sorted_backends[:cutoff] if probe_ranks.get(b, float("-inf")) > float("-inf")]
             if survivors:
                 backends = survivors
 
@@ -924,7 +1043,7 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         backend_params: dict[str, dict[str, Any]] | None = None,
         cv: int = 5,
         scoring: str = "r2",
-        probing_strategy: Literal["none", "subsample"] = "none",
+        probing_strategy: Literal["none", "subsample", "hv_contribution"] = "none",
         probing_subsample: float = 0.25,
         probing_threshold_samples: int = 500,
         compact_tolerance: float = 0.02,
@@ -953,9 +1072,10 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         backends = list(self.candidate_backends or _DEFAULT_REGRESSOR_BACKENDS)
         per_backend_params = dict(self.backend_params or {})
 
-        # Multi-fidelity probing to filter unpromising backends on larger datasets
+        # Multi-fidelity probing (see classifier: "subsample" = mean score,
+        # "hv_contribution" = leave-one-out hypervolume gain on the probe set)
         if (
-            self.probing_strategy == "subsample"
+            self.probing_strategy in ("subsample", "hv_contribution")
             and len(X_valid) >= self.probing_threshold_samples
             and len(backends) > 2
         ):
@@ -966,30 +1086,48 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
             X_probe, y_probe = X_valid[probe_idx], y_valid[probe_idx]
             probe_splitter = KFold(n_splits=2, shuffle=True, random_state=self.random_state)
 
-            probe_scores_reg: dict[str, float] = {}
-            for backend in backends:
-                bp = per_backend_params.get(backend)
-                if bp is None and backend == "cart":
-                    bp = {"max_depth": 3}
-                reg = ScoredRuleSetRegressor(
+            def _probe_factory_reg(backend: str, bp: dict[str, Any] | None):
+                return lambda: ScoredRuleSetRegressor(
                     backend=backend,
                     backend_params=bp,
                     random_state=self.random_state,
                 )
-                try:
-                    sc = cross_val_score(
-                        reg, X_probe, y_probe,
-                        cv=probe_splitter,
-                        scoring=self.scoring,
-                        error_score="raise",
-                    )
-                    probe_scores_reg[backend] = float(np.mean(sc))
-                except Exception:
-                    probe_scores_reg[backend] = float("-inf")
 
-            sorted_backends = sorted(backends, key=lambda b: probe_scores_reg.get(b, float("-inf")), reverse=True)
+            probe_ranks_reg: dict[str, float] = {}
+            if self.probing_strategy == "hv_contribution":
+                factories = {}
+                for backend in backends:
+                    bp = per_backend_params.get(backend)
+                    if bp is None and backend == "cart":
+                        bp = {"max_depth": 3}
+                    factories[backend] = _probe_factory_reg(backend, bp)
+                try:
+                    probe_ranks_reg = _probe_hv_contribution(
+                        factories, X_probe, y_probe, probe_splitter,
+                        archive_metric=_r2,
+                        predict_fn=predict_regression_from_ruleset,
+                    )
+                except Exception:
+                    probe_ranks_reg = {}
+            if not probe_ranks_reg:  # "subsample" or HV probing failed -> mean-score fallback
+                for backend in backends:
+                    bp = per_backend_params.get(backend)
+                    if bp is None and backend == "cart":
+                        bp = {"max_depth": 3}
+                    try:
+                        sc = cross_val_score(
+                            _probe_factory_reg(backend, bp)(), X_probe, y_probe,
+                            cv=probe_splitter,
+                            scoring=self.scoring,
+                            error_score="raise",
+                        )
+                        probe_ranks_reg[backend] = float(np.mean(sc))
+                    except Exception:
+                        probe_ranks_reg[backend] = float("-inf")
+
+            sorted_backends = sorted(backends, key=lambda b: probe_ranks_reg.get(b, float("-inf")), reverse=True)
             cutoff = max(2, len(backends) // 2)
-            survivors = [b for b in sorted_backends[:cutoff] if probe_scores_reg.get(b, float("-inf")) > float("-inf")]
+            survivors = [b for b in sorted_backends[:cutoff] if probe_ranks_reg.get(b, float("-inf")) > float("-inf")]
             if survivors:
                 backends = survivors
 

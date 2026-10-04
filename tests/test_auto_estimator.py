@@ -595,3 +595,109 @@ class TestArchiveMetricHarmonization:
         clf.fit(X, y)
         assert clf.scoring == "f1_weighted"
         assert len(clf.master_archive_.candidates_) >= 1
+
+
+class TestHVContributionProbing:
+    """Review 3.3: probing must rank by fusion value (HV contribution), not mean score."""
+
+    def test_helper_hypervolume_basic(self):
+        from scoredrulesets.estimators.auto import _hypervolume_2d
+        # staircase: (1, 0.9), (3, 0.95); ref (5, 0)
+        # slab 1: width 3-1=2, height 0.9 -> 1.8; slab 2: width 5-3=2, height 0.95 -> 1.9
+        hv = _hypervolume_2d([(1, 0.9), (3, 0.95)], (5, 0.0))
+        assert abs(hv - 3.7) < 1e-9
+        # dominated point adds nothing
+        hv2 = _hypervolume_2d([(1, 0.9), (3, 0.95), (2, 0.5)], (5, 0.0))
+        assert abs(hv2 - 3.7) < 1e-9
+        assert _hypervolume_2d([], (5, 0.0)) == 0.0
+
+    def test_helper_leave_one_out_identifies_unique_corner(self):
+        from sklearn.datasets import make_classification
+        from sklearn.metrics import f1_score
+        from sklearn.model_selection import StratifiedKFold
+        from scoredrulesets.estimators.auto import _probe_hv_contribution
+        from scoredrulesets.estimators.sklearn_wrapper import ScoredRuleSetClassifier
+        from scoredrulesets.runtime import predict as predict_from_ruleset
+
+        X, y = make_classification(n_samples=200, n_features=6, n_informative=3,
+                                   random_state=0)
+        splitter = StratifiedKFold(n_splits=2, shuffle=True, random_state=0)
+
+        def mk(backend):
+            return lambda: ScoredRuleSetClassifier(
+                backend=backend, random_state=0)
+
+        contrib = _probe_hv_contribution(
+            {"cart": mk("cart"), "greedy_pareto": mk("greedy_pareto")},
+            X, y, splitter,
+            archive_metric=lambda yt, yp: float(
+                f1_score(yt, yp, average="macro", zero_division=0)),
+            predict_fn=predict_from_ruleset,
+        )
+        assert set(contrib) == {"cart", "greedy_pareto"}
+        # at least one backend must contribute positively (pooled front non-empty)
+        assert sum(contrib.values()) > 0.0
+
+    def test_classifier_accepts_hv_strategy(self, iris_data):
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetClassifier
+        X, y = iris_data
+        if len(X) < 100:
+            pytest.skip("iris_data too small for probing threshold")
+        clf = AutoScoredRuleSetClassifier(
+            probing_strategy="hv_contribution",
+            probing_threshold_samples=50,
+            probing_subsample=0.5,
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+        assert clf.best_backend_ is not None
+        assert len(clf.master_archive_.candidates_) >= 1
+
+    def test_hv_strategy_survives_failing_backend(self, iris_data):
+        """A backend that throws on the probe must not poison HV ranking."""
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetClassifier
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "hs", "ruleplcs", "greedy_pareto"],
+            probing_strategy="hv_contribution",
+            probing_threshold_samples=50,
+            probing_subsample=0.5,
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+        assert clf.best_backend_ in ("cart", "hs", "ruleplcs", "greedy_pareto")
+
+    def test_regressor_accepts_hv_strategy(self):
+        from sklearn.datasets import load_diabetes
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetRegressor
+        X, y = load_diabetes(return_X_y=True)
+        reg = AutoScoredRuleSetRegressor(
+            probing_strategy="hv_contribution",
+            probing_threshold_samples=50,
+            probing_subsample=0.5,
+            cv=2,
+            random_state=42,
+        )
+        reg.fit(X, y)
+        assert reg.best_backend_ is not None
+
+    def test_subsample_actually_filters_large_data(self):
+        """Regression: the probe factory must hand cross_val_score an
+        instantiated estimator, not the factory lambda (silent no-op
+        fallback evicted nothing and hid the bug from small-data tests)."""
+        from sklearn.datasets import make_classification
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetClassifier
+        X, y = make_classification(n_samples=600, n_features=10,
+                                   n_informative=5, random_state=0)
+        clf = AutoScoredRuleSetClassifier(
+            probing_strategy="subsample",
+            probing_threshold_samples=500,
+            probing_subsample=0.25,
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+        # 4 backends -> cutoff keeps exactly 2
+        assert len(clf.cv_results_) == 2
