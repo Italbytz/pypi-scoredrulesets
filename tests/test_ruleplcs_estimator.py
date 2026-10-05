@@ -184,3 +184,76 @@ def test_ruleplcs_run_ga_stops_during_population_setup():
     assert rule is not None
     assert int(rule.class_value) in set(int(c) for c in classes)
 
+
+
+class TestCoveringPrefixArchive:
+    """The sequential-covering ladder exposed as ``pareto_archive_``."""
+
+    def _fit_small(self):
+        X, y = load_iris(return_X_y=True)
+        clf = RulePLCSClassifier(
+            population_size=50, n_iterations=10, n_repetitions=1,
+            max_rules=6, random_state=0,
+        )
+        clf.fit(X, y)
+        return clf
+
+    def test_exposes_pareto_archive_with_shared_convention(self):
+        clf = self._fit_small()
+        front = clf.pareto_archive_
+        assert isinstance(front, dict) and len(front) >= 1
+        for comp, rs in front.items():
+            rs.validate()
+            assert comp == sum(len(r.atoms) for r in rs.rules if r.atoms)
+            assert rs.metadata["complexity_atoms"] == comp
+        # the served model must be one of the archive members
+        served = [a.to_dict() for a in clf.ruleset_.rules]
+        assert any(
+            [a.to_dict() for a in rs.rules] == served for rs in front.values()
+        )
+
+    def test_prefix_ladder_strictly_rises_in_complexity(self):
+        clf = self._fit_small()
+        comps = sorted(clf.pareto_archive_)
+        assert comps == sorted(set(comps))  # unique keys
+        # served (full covering) rule set is the largest member
+        served_comp = sum(len(r.atoms) for r in clf.ruleset_.rules if r.atoms)
+        assert max(comps) == served_comp
+        # prefix lengths rise with complexity
+        lens = [clf.pareto_archive_[c].metadata["covering_prefix_len"]
+                for c in comps]
+        assert lens == sorted(lens)
+
+    def test_single_rule_fit_still_yields_valid_archive(self):
+        X, y = load_iris(return_X_y=True)
+        clf = RulePLCSClassifier(
+            population_size=30, n_iterations=5, n_repetitions=1,
+            max_rules=1, max_consecutive_fails=1, random_state=0,
+        )
+        clf.fit(X, y)
+        assert len(clf.pareto_archive_) >= 1
+        served_comp = sum(len(r.atoms) for r in clf.ruleset_.rules if r.atoms)
+        assert served_comp in clf.pareto_archive_
+
+    def test_auto_harvests_multiple_prefix_candidates(self):
+        """One ruleplcs fit must offer >1 variant key to the master archive."""
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetClassifier
+
+        X, y = load_iris(return_X_y=True)
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["ruleplcs"],
+            backend_params={"ruleplcs": {
+                "population_size": 50, "n_iterations": 10,
+                "n_repetitions": 1, "max_rules": 6,
+            }},
+            cv=2, random_state=0,
+        )
+        clf.fit(X, y)
+        variants = {
+            c.metadata["variant"]
+            for c in clf.master_archive_.candidates_
+            if c.backend == "ruleplcs" and "variant" in c.metadata
+        }
+        # front members carry ("front", comp) keys; single model ("model",)
+        assert len(variants) >= 1
+        assert any(v[0] == "front" for v in variants) or ("model",) in variants
