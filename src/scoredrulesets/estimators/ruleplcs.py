@@ -1011,7 +1011,56 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         self.default_class_ = default_class_final
         self.ruleset_ = self._build_ruleset(rules, default_class_final)
         self.ruleset_.validate()
+        self.pareto_archive_ = self._build_prefix_archive(X, y, rules)
         return self
+
+    def _build_prefix_archive(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        rules: list[_Individual],
+    ) -> dict[int, ScoredRuleSet]:
+        """Expose the sequential-covering ladder as a Pareto-keyed archive.
+
+        Sequential covering tends to overfit in its final steps: once the
+        well-separated structure is covered, the GA searches the residual
+        (shrinking, noisier) remainder and often adds rules that hurt
+        held-out accuracy at extra complexity.  Every prefix
+        ``rules[:k]`` is a valid scored rule set — the default class is
+        recomputed from the rows the prefix leaves uncovered — so the
+        covering trajectory forms a natural complexity ladder in the
+        mid-atom region between compact beam fronts and the dense final
+        rule set.
+
+        Keyed by total atom count (the shared ``pareto_archive_``
+        convention used by RuleGP/RuleNSGA-II), and the served full rule
+        set is always a member.  Prefixes are *not* locally pruned:
+        quality ordering along the ladder is dataset-dependent, and the
+        consumer-side Master Pareto Archive applies the authoritative
+        dominance filter with out-of-fold scores.
+        """
+        n_classes = len(self.classes_)
+        covered = np.zeros(len(y), dtype=bool)
+        archive: dict[int, ScoredRuleSet] = {}
+        for k, rule in enumerate(rules, start=1):
+            covered |= _matches_mask(rule, X) & (y == rule.class_value)
+            remaining = ~covered
+            base = y[remaining] if remaining.any() else y
+            default_class = int(
+                np.argmax(np.bincount(base.astype(int), minlength=n_classes)))
+            rs = self._build_ruleset(rules[:k], default_class)
+            comp = sum(len(r.atoms) for r in rs.rules if r.atoms)
+            rs.metadata["complexity_atoms"] = comp
+            rs.metadata["covering_prefix_len"] = k
+            # Strictly rising complexity by construction (each covering rule
+            # adds >= 1 atom); duplicate keys keep the later (longer) prefix.
+            archive[comp] = rs
+        # The served rule set must remain an archive member (convention).
+        served_comp = sum(len(r.atoms) for r in self.ruleset_.rules if r.atoms)
+        self.ruleset_.metadata["complexity_atoms"] = served_comp
+        self.ruleset_.metadata["covering_prefix_len"] = len(rules)
+        archive[served_comp] = self.ruleset_
+        return archive
 
     # ------------------------------------------------------------- predict
     def predict(self, X):
