@@ -33,7 +33,7 @@ from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 
 _DEFAULT_CLASSIFIER_BACKENDS = ["greedy_pareto", "cart", "hs", "ruleplcs"]
-_DEFAULT_REGRESSOR_BACKENDS = ["greedy_cascaded", "cart", "ruleplcs"]
+_DEFAULT_REGRESSOR_BACKENDS = ["greedy_cascaded", "greedy_pareto", "cart", "ruleplcs"]
 
 # Architectural top-k sweep harvested for the neural backend when the user
 # does not pin ``max_atoms_per_rule`` explicitly.  Each k contributes its own
@@ -1027,6 +1027,16 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     compact_tolerance : float, default=0.02
         Score tolerance used by the "compact" intent (and the "balanced"
         fallback), in units of the archive metric (R^2).
+    feature_selection : {"auto", "none", "kbest_mi", "kbest_f", "variance", "tree"} | Any, default="auto"
+        Upstream search-space reduction strategy. When set to "auto", automatically
+        activates mutual-information regression feature selection if n_features >= 50 or
+        n_features > n_samples.
+    max_features : int | float | None, default=None
+        Maximum features to retain when feature selection is active.
+        If float between 0.0 and 1.0, treated as percentage of input features.
+        If None, adaptively scales (min 10, max 50).
+    preprocessing : dict | None
+        Preprocessing configuration forwarded to backends.
     timeout_per_backend : float | None
         Warn if a single backend's CV loop exceeds this many seconds.
     random_state : int | None
@@ -1043,6 +1053,9 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         backend_params: dict[str, dict[str, Any]] | None = None,
         cv: int = 5,
         scoring: str = "r2",
+        feature_selection: Literal["auto", "none", "kbest_mi", "kbest_f", "variance", "tree"] | Any = "auto",
+        max_features: int | float | None = None,
+        preprocessing: dict[str, Any] | None = None,
         probing_strategy: Literal["none", "subsample", "hv_contribution"] = "none",
         probing_subsample: float = 0.25,
         probing_threshold_samples: int = 500,
@@ -1058,6 +1071,9 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         self.backend_params = backend_params
         self.cv = cv
         self.scoring = scoring
+        self.feature_selection = feature_selection
+        self.max_features = max_features
+        self.preprocessing = preprocessing
         self.probing_strategy = probing_strategy
         self.probing_subsample = probing_subsample
         self.probing_threshold_samples = probing_threshold_samples
@@ -1065,9 +1081,68 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         self.timeout_per_backend = timeout_per_backend
         self.random_state = random_state
 
+    def _resolve_feature_selection(self, n_samples: int, n_features: int) -> dict[str, Any] | None:
+        """Derive upstream feature selection settings based on data dimensionality.
+
+        For continuous regression in high-D regimes (D >= 50 or D > N), applying
+        coarse variable-level selection via mutual information or F-regression
+        prevents exponential growth in quantile thresholds and beam-search paths.
+        """
+        fs = self.feature_selection
+        if fs in (None, False, "none"):
+            return None
+
+        if not isinstance(fs, str):
+            return {"feature_selector": fs}
+
+        fs_str = fs.lower()
+        if fs_str == "auto":
+            if n_features < 50 and n_features <= n_samples:
+                return None
+            method = "kbest"
+            from sklearn.feature_selection import mutual_info_regression
+            score_func = mutual_info_regression
+        elif fs_str in ("kbest_mi", "kbest"):
+            method = "kbest"
+            from sklearn.feature_selection import mutual_info_regression
+            score_func = mutual_info_regression
+        elif fs_str == "kbest_f":
+            method = "kbest"
+            from sklearn.feature_selection import f_regression
+            score_func = f_regression
+        elif fs_str == "variance":
+            from sklearn.feature_selection import VarianceThreshold
+            return {"feature_selector": VarianceThreshold()}
+        elif fs_str == "tree":
+            method = "boruta"
+            score_func = None
+        else:
+            method = fs_str
+            score_func = None
+
+        if self.max_features is None:
+            k = min(n_features, max(10, min(50, max(20, n_samples // 4))))
+        elif isinstance(self.max_features, float) and 0.0 < self.max_features <= 1.0:
+            k = max(2, int(n_features * self.max_features))
+        else:
+            k = min(n_features, int(self.max_features))
+
+        cfg: dict[str, Any] = {"feature_selection": method, "k": k}
+        if score_func is not None:
+            cfg["feature_selection_params"] = {"score_func": score_func}
+        return cfg
+
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None, y_numeric=True)
         self.n_features_in_ = X_valid.shape[1]
+
+        # Resolve automated upstream search-space reduction
+        effective_preprocessing = dict(self.preprocessing or {})
+        if "feature_selection" not in effective_preprocessing and "feature_selector" not in effective_preprocessing:
+            fs_cfg = self._resolve_feature_selection(len(X_valid), self.n_features_in_)
+            if fs_cfg is not None:
+                effective_preprocessing.update(fs_cfg)
+        self.effective_preprocessing_ = effective_preprocessing
 
         backends = list(self.candidate_backends or _DEFAULT_REGRESSOR_BACKENDS)
         per_backend_params = dict(self.backend_params or {})
@@ -1090,6 +1165,7 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 return lambda: ScoredRuleSetRegressor(
                     backend=backend,
                     backend_params=bp,
+                    preprocessing=self.effective_preprocessing_,
                     random_state=self.random_state,
                 )
 
@@ -1154,6 +1230,7 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 return ScoredRuleSetRegressor(
                     backend=backend,
                     backend_params=params,
+                    preprocessing=self.effective_preprocessing_,
                     random_state=self.random_state,
                 )
 
@@ -1217,6 +1294,7 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
             winner = ScoredRuleSetRegressor(
                 backend=best_backend,
                 backend_params=bp,
+                preprocessing=self.effective_preprocessing_,
                 random_state=self.random_state,
             )
             winner.fit(X_valid, y_valid)
@@ -1226,6 +1304,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         self.cv_results_ = cv_results
         self.best_estimator_ = winner
         self.feature_names_in_ = winner.feature_names_in_
+        self.selected_feature_indices_ = getattr(winner, "selected_feature_indices_", None)
+        self.feature_selector_ = getattr(winner, "feature_selector_", None)
 
         if self.enable_pareto_fusion and self.master_archive_.candidates_:
             chosen = self.master_archive_.select_candidate(
@@ -1263,9 +1343,15 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         check_is_fitted(self, ["ruleset_"])
         return format_ruleset_markdown(self.ruleset_)
 
+    def _prepare_X_for_prediction(self, X) -> np.ndarray:
+        """Transform X into the input space of the estimator that produced the active rule set."""
+        est = getattr(self, "active_estimator_", None) or getattr(self, "best_estimator_", None)
+        return _transform_for_estimator(est, X)
+
     def predict(self, X):
         check_is_fitted(self, ["ruleset_"])
-        return predict_regression_from_ruleset(self.ruleset_, X)
+        X_prep = self._prepare_X_for_prediction(X)
+        return predict_regression_from_ruleset(self.ruleset_, X_prep)
 
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, ["ruleset_"])

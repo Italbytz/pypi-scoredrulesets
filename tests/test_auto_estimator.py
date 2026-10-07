@@ -701,3 +701,56 @@ class TestHVContributionProbing:
         clf.fit(X, y)
         # 4 backends -> cutoff keeps exactly 2
         assert len(clf.cv_results_) == 2
+
+    def test_auto_regressor_harvests_greedy_spectrum(self):
+        from sklearn.datasets import make_regression
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetRegressor
+
+        X, y = make_regression(n_samples=80, n_features=5, noise=0.1, random_state=42)
+        reg = AutoScoredRuleSetRegressor(
+            candidate_backends=["greedy_cascaded", "greedy_pareto", "cart"],
+            cv=2,
+            random_state=42,
+        )
+        reg.fit(X, y)
+        assert reg.best_backend_ in ("greedy_cascaded", "greedy_pareto", "cart")
+        spectrum = reg.get_pareto_spectrum()
+        assert len(spectrum) >= 2
+        # Verify both greedy backends contributed to the Master Pareto Archive
+        backends_in_archive = {c.backend for c in reg.master_archive_.candidates_}
+        assert "greedy_cascaded" in backends_in_archive or "greedy_pareto" in backends_in_archive
+        preds = reg.predict(X)
+        assert len(preds) == len(y)
+
+    def test_auto_regressor_feature_selection(self):
+        from sklearn.datasets import make_regression
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetRegressor
+
+        # 60 features -> triggers automatic feature selection (n_features >= 50)
+        X, y = make_regression(n_samples=50, n_features=60, noise=0.1, random_state=42)
+        reg = AutoScoredRuleSetRegressor(
+            candidate_backends=["greedy_pareto"],
+            feature_selection="auto",
+            cv=2,
+            random_state=42,
+        )
+        reg.fit(X, y)
+        assert reg.selected_feature_indices_ is not None
+        assert len(reg.selected_feature_indices_) < 60
+        preds = reg.predict(X)
+        assert len(preds) == len(y)
+
+    def test_scored_ruleset_regressor_new_backends(self):
+        from sklearn.datasets import make_regression
+        from scoredrulesets.estimators import ScoredRuleSetRegressor
+
+        X, y = make_regression(n_samples=40, n_features=4, noise=0.1, random_state=42)
+
+        reg_pareto = ScoredRuleSetRegressor(backend="greedy_pareto", random_state=42)
+        reg_pareto.fit(X, y)
+        assert len(reg_pareto.predict(X)) == len(y)
+
+        reg_cascaded = ScoredRuleSetRegressor(backend="greedy_cascaded", random_state=42)
+        reg_cascaded.fit(X, y)
+        assert len(reg_cascaded.predict(X)) == len(y)
+

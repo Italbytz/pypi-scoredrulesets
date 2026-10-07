@@ -107,6 +107,15 @@ class CascadedRuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
 
         # Fuse both stages into a unified ScoredRuleSet
         self.ruleset_ = self._fuse_rulesets(self.stage1_.ruleset_, self.stage2_.ruleset_)
+
+        # Expose internal Pareto front combining Stage 1 model and the fused model
+        self.pareto_archive_: dict[int, ScoredRuleSet] = {}
+        if hasattr(self.stage1_, "ruleset_") and self.stage1_.ruleset_ is not None:
+            c1 = sum(len(r.atoms) for r in self.stage1_.ruleset_.rules)
+            self.pareto_archive_[c1] = self.stage1_.ruleset_
+        c_fused = sum(len(r.atoms) for r in self.ruleset_.rules)
+        self.pareto_archive_[c_fused] = self.ruleset_
+
         return self
 
     def _fuse_rulesets(self, rs1: ScoredRuleSet, rs2: ScoredRuleSet) -> ScoredRuleSet:

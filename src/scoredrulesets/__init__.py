@@ -32,6 +32,11 @@ from .benchmarking import (
 from .estimators.auto import AutoScoredRuleSetClassifier
 from .estimators.cluster_wrapper import ScoredRuleSetClusterer
 from .estimators.exact_cpusat import ExactCPSATClassifier
+from .estimators.greedy_pareto import (
+    GreedyCascadedRegressor,
+    GreedyParetoClassifier,
+    GreedyParetoRegressor,
+)
 from .estimators.logicgp import GPASClassifier, LogicGPClassifier
 from .estimators.rulenln import RuleNLNClassifier
 from .estimators.rulegp import RuleGPClassifier
@@ -75,6 +80,9 @@ __all__ = [
     "ClusterApproxSummary",
     "BorutaSelector",
     "GPASClassifier",
+    "GreedyCascadedRegressor",
+    "GreedyParetoClassifier",
+    "GreedyParetoRegressor",
     "LogicGPClassifier",
     "RuleGPClassifier",
     "RuleGPRegressor",

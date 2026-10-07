@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 from sklearn.datasets import load_iris, make_classification, make_regression
 
-from scoredrulesets.estimators.greedy_pareto import GreedyCascadedRegressor, GreedyParetoClassifier
+from scoredrulesets import (
+    GreedyCascadedRegressor,
+    GreedyParetoClassifier,
+    GreedyParetoRegressor,
+)
 
 
 def test_greedy_pareto_classifier_iris():
@@ -46,8 +50,28 @@ def test_greedy_pareto_classifier_preferences():
     assert atoms_compact <= atoms_accuracy
 
 
-def test_greedy_cascaded_regressor():
+def test_greedy_pareto_regressor():
     X, y = make_regression(n_samples=100, n_features=6, noise=0.1, random_state=42)
+    reg = GreedyParetoRegressor(max_complexity=8, beam_width=4, preference="balanced")
+    reg.fit(X, y)
+
+    ruleset = reg.to_ruleset()
+    assert ruleset is not None
+    assert ruleset.task_type == "regression"
+    assert len(ruleset.rules) >= 2
+
+    # Check Pareto archive
+    assert hasattr(reg, "pareto_archive_")
+    assert len(reg.pareto_archive_) >= 1
+
+    preds = reg.predict(X)
+    assert len(preds) == len(y)
+    corr = np.corrcoef(y, preds)[0, 1]
+    assert corr > 0.7
+
+
+def test_greedy_cascaded_regressor():
+    X, y = make_regression(n_samples=120, n_features=6, noise=0.1, random_state=42)
     reg = GreedyCascadedRegressor(k_stage1=3, k_stage2=3, beam_width=4)
     reg.fit(X, y)
 
@@ -56,12 +80,15 @@ def test_greedy_cascaded_regressor():
     assert ruleset.task_type == "regression"
     assert len(ruleset.rules) >= 2
 
-    # Check predictions
+    # Check that stage tags exist in metadata
+    stage1_rules = [r for r in ruleset.rules if r.metadata.get("stage") == 1]
+    assert len(stage1_rules) >= 1
+
+    # Check predictions and fit quality
     preds = reg.predict(X)
     assert len(preds) == len(y)
-    # Basic sanity: correlation with true target should be positive
     corr = np.corrcoef(y, preds)[0, 1]
-    assert corr > 0.5
+    assert corr > 0.7
 
 
 def test_archive_pairing_invariant():

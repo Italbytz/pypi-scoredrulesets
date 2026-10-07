@@ -7,7 +7,7 @@ from .atom_selection import (
 from .base import BaseRuleSetEstimator
 from .cluster_wrapper import ScoredRuleSetClusterer
 from .exact_cpusat import ExactCPSATClassifier
-from .greedy_pareto import GreedyParetoClassifier, GreedyCascadedRegressor
+from .greedy_pareto import GreedyCascadedRegressor, GreedyParetoClassifier, GreedyParetoRegressor
 from .logicgp import GPASClassifier, LogicGPClassifier
 from .rulenln import RuleNLNClassifier
 from .rulegp import RuleGPClassifier
@@ -27,6 +27,7 @@ __all__ = [
 	"AutoScoredRuleSetRegressor",
 	"MasterParetoArchive",
 	"GreedyParetoClassifier",
+	"GreedyParetoRegressor",
 	"GreedyCascadedRegressor",
 	"available_atom_selection_strategies",
 	"BaseRuleSetEstimator",

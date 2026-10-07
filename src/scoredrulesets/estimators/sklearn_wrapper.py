@@ -545,19 +545,80 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         backend: str = "cart",
         backend_params: dict[str, Any] | None = None,
         estimator: Any | None = None,
+        preprocessing: dict[str, Any] | None = None,
         random_state: int | None = None,
         target_bins: int = 8,
     ):
         self.backend = backend
         self.backend_params = backend_params
         self.estimator = estimator
+        self.preprocessing = preprocessing
         self.random_state = random_state
         self.target_bins = target_bins
+
+    def _apply_feature_selection(self, X: np.ndarray) -> np.ndarray:
+        """Slice X to the features selected during fit(), if applicable."""
+        selector = getattr(self, "feature_selector_", None)
+        if selector is not None:
+            return selector.transform(X)
+        indices = getattr(self, "selected_feature_indices_", None)
+        if indices is not None:
+            return X[:, indices]
+        return X
 
     def fit(self, X, y):
         X_valid, y_valid = check_X_y(X, y, dtype=None, y_numeric=True)
         self.n_features_in_ = X_valid.shape[1]
         self.feature_names_in_ = ScoredRuleSetClassifier._infer_feature_names(X_valid)
+
+        preproc = self.preprocessing or {}
+        self.selected_feature_indices_: np.ndarray | None = None
+        self.feature_selector_ = None
+        self.preprocess_pipeline_ = None
+
+        pipeline_steps = preproc.get("pipeline_steps")
+        if pipeline_steps is not None:
+            self.preprocess_pipeline_ = build_preprocessing_pipeline(
+                pipeline_steps,
+                random_state=self.random_state,
+            )
+            X_pipeline = self.preprocess_pipeline_.fit_transform(X_valid, y_valid)
+            X_valid = np.asarray(X_pipeline, dtype=None)
+            self.feature_names_in_ = ScoredRuleSetClassifier._infer_pipeline_feature_names(
+                self.preprocess_pipeline_,
+                list(self.feature_names_in_),
+                transformed_width=int(X_valid.shape[1]),
+            )
+
+        fs_method = preproc.get("feature_selection")
+        fs_selector = preproc.get("feature_selector")
+        if fs_method is not None and fs_selector is not None:
+            raise ValueError(
+                "Use either preprocessing['feature_selection'] or "
+                "preprocessing['feature_selector'], not both."
+            )
+        if fs_method is not None or fs_selector is not None:
+            k = int(preproc.get("k", min(20, X_valid.shape[1])))
+            selector_params = preproc.get("feature_selection_params") or {}
+            if fs_selector is not None:
+                self.feature_selector_ = clone(fs_selector)
+            else:
+                self.feature_selector_ = build_feature_selector(
+                    method=str(fs_method),
+                    k=k,
+                    random_state=self.random_state,
+                    params=selector_params,
+                )
+
+            X_reduced = self.feature_selector_.fit_transform(X_valid, y_valid)
+            selected_names, selected_indices = get_selected_feature_names(
+                self.feature_selector_,
+                list(self.feature_names_in_),
+                transformed_width=int(np.asarray(X_reduced).shape[1]),
+            )
+            self.selected_feature_indices_ = selected_indices
+            X_valid = X_reduced
+            self.feature_names_in_ = list(selected_names)
 
         if self.estimator is not None:
             self.estimator_ = clone(self.estimator)
@@ -585,6 +646,14 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 self.estimator_ = RuleGPRegressor(**params)
                 self.estimator_.fit(X_valid, y_valid)
                 self.ruleset_ = self.estimator_.to_ruleset()
+            elif backend_key in {"cascaded_rulegp", "cascaded_gp", "cascaded_rulegp_regressor"}:
+                from .cascaded_rulegp_regressor import CascadedRuleGPRegressor
+                params = dict(self.backend_params or {})
+                params.setdefault("random_state", self.random_state)
+                params.setdefault("feature_names", self.feature_names_in_)
+                self.estimator_ = CascadedRuleGPRegressor(**params)
+                self.estimator_.fit(X_valid, y_valid)
+                self.ruleset_ = self.estimator_.to_ruleset()
             elif backend_key in {"rulensga2", "rulensga2_native"}:
                 from .rulensga2_regressor import RuleNSGA2Regressor
                 params = dict(self.backend_params or {})
@@ -600,6 +669,13 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 params.setdefault("feature_names", self.feature_names_in_)
                 self.estimator_ = RulePLCSRegressor(**params)
                 self.estimator_.fit(X_valid, y_valid)
+                self.ruleset_ = self.estimator_.to_ruleset()
+            elif backend_key in {"greedy_pareto", "greedy_pareto_regressor", "greedy_regressor"}:
+                from .greedy_pareto import GreedyParetoRegressor
+                params = dict(self.backend_params or {})
+                params.setdefault("random_state", self.random_state)
+                self.estimator_ = GreedyParetoRegressor(**params)
+                self.estimator_.fit(X_valid, y_valid, feature_names=self.feature_names_in_)
                 self.ruleset_ = self.estimator_.to_ruleset()
             elif backend_key in {"greedy_cascaded", "greedy_cascaded_native", "greedycascaded", "greedy_reg"}:
                 from .greedy_pareto import GreedyCascadedRegressor
@@ -636,7 +712,8 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
             else:
                 raise ValueError(
                     f"ScoredRuleSetRegressor unsupported backend '{self.backend}'. "
-                    "Supported: 'cart', 'rulegp', 'rulensga2', 'projection_rulegp', 'projection_rulensga2'."
+                    "Supported: 'cart', 'greedy_cascaded', 'greedy_pareto', 'cascaded_rulegp', "
+                    "'rulegp', 'rulensga2', 'ruleplcs', 'projection_rulegp', 'projection_rulensga2'."
                 )
         return self
 
@@ -648,6 +725,10 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 f"X has {X_valid.shape[1]} features, but {self.__class__.__name__} "
                 f"is expecting {self.n_features_in_} features as input"
             )
+        pipeline = getattr(self, "preprocess_pipeline_", None)
+        if pipeline is not None:
+            X_valid = np.asarray(pipeline.transform(X_valid), dtype=None)
+        X_valid = self._apply_feature_selection(X_valid)
         return predict_regression_from_ruleset(self.ruleset_, X_valid)
 
     def to_ruleset(self) -> ScoredRuleSet:
