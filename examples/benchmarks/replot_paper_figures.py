@@ -3,7 +3,7 @@
 Usage (from pypi-scoredrulesets root):
     python examples/benchmarks/replot_paper_figures.py \
         --checkpoint benchmarks/checkpoint_paper.jsonl \
-        --output-dir articles/2026/ecta
+        --output-dir articles/2026/ecta-evoscoredrulesets
 """
 import argparse
 from pathlib import Path
@@ -43,7 +43,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="articles/2026/ecta",
+        default="articles/2026/ecta-evoscoredrulesets",
         help="Output directory for the regenerated figures.",
     )
     args = parser.parse_args()
