@@ -386,6 +386,28 @@ class MasterParetoArchive:
         within = [c for c in eligible if self._signed(c.score) >= best - self.compact_tolerance]
         return min(within, key=lambda c: (c.atoms, -self._signed(c.score)))
 
+    def _select_balanced(self, eligible: list[ParetoCandidate]) -> ParetoCandidate:
+        """Knee point in normalized objective space (maximal gain above chord)."""
+        if len(eligible) <= 2:
+            return self._select_compact(eligible)
+
+        atoms_arr = np.array([c.atoms for c in eligible], dtype=float)
+        scores_arr = np.array([self._signed(c.score) for c in eligible], dtype=float)
+        a_span = atoms_arr[-1] - atoms_arr[0]
+        s_span = scores_arr[-1] - scores_arr[0]
+        if a_span <= 0 or s_span <= 1e-12:
+            return self._select_compact(eligible)
+
+        # After min-max normalization the extremes are (0, 0) and (1, 1); the
+        # signed distance above the chord y = x is proportional to (s - a).
+        a_norm = (atoms_arr - atoms_arr[0]) / a_span
+        s_norm = (scores_arr - scores_arr[0]) / s_span
+        gain = s_norm - a_norm
+        best_idx = int(np.argmax(gain))
+        if gain[best_idx] <= 1e-12:
+            return self._select_compact(eligible)
+        return eligible[best_idx]
+
     def select_candidate(
         self,
         preference: str = "balanced",
@@ -395,7 +417,8 @@ class MasterParetoArchive:
         """Select a single archive candidate according to user intent.
 
         - ``compact``: fewest atoms among candidates whose score lies within
-          ``compact_tolerance`` of the best score.
+          ``compact_tolerance`` of the best score, bounded above by ``balanced``
+          to guarantee monotonicity (atoms(compact) <= atoms(balanced)).
         - ``accuracy`` / ``manual``: highest score.
         - ``balanced``: knee point, i.e. the candidate with maximal signed
           distance above the chord between the two extreme front points in
@@ -422,31 +445,24 @@ class MasterParetoArchive:
         eligible = sorted(eligible, key=lambda c: (c.atoms, -self._signed(c.score)))
 
         if preference == "compact":
-            return self._select_compact(eligible)
+            cand = self._select_compact(eligible)
+            # Monotonicity guard: when using a positive tolerance, a user requesting
+            # "compact" expects a model at least as parsimonious as "balanced".
+            if self.compact_tolerance > 0.0:
+                bal = self._select_balanced(eligible)
+                if cand.atoms > bal.atoms:
+                    return bal
+            return cand
 
         if preference in ("accuracy", "manual", "custom"):
             return max(eligible, key=lambda c: (self._signed(c.score), -c.atoms))
 
         # Default: "balanced" (knee point in normalized objective space)
-        if len(eligible) <= 2:
-            return self._select_compact(eligible)
-
-        atoms_arr = np.array([c.atoms for c in eligible], dtype=float)
-        scores_arr = np.array([self._signed(c.score) for c in eligible], dtype=float)
-        a_span = atoms_arr[-1] - atoms_arr[0]
-        s_span = scores_arr[-1] - scores_arr[0]
-        if a_span <= 0 or s_span <= 1e-12:
-            return self._select_compact(eligible)
-
-        # After min-max normalization the extremes are (0, 0) and (1, 1); the
-        # signed distance above the chord y = x is proportional to (s - a).
-        a_norm = (atoms_arr - atoms_arr[0]) / a_span
-        s_norm = (scores_arr - scores_arr[0]) / s_span
-        gain = s_norm - a_norm
-        best_idx = int(np.argmax(gain))
-        if gain[best_idx] <= 1e-12:
-            return self._select_compact(eligible)
-        return eligible[best_idx]
+        bal = self._select_balanced(eligible)
+        acc = max(eligible, key=lambda c: (self._signed(c.score), -c.atoms))
+        if bal.atoms > acc.atoms:
+            return acc
+        return bal
 
     def plot_pareto_front(
         self,

@@ -428,6 +428,36 @@ class TestOOFArchiveSemantics:
             assert not (c.atoms <= chosen.atoms and c.score >= chosen.score
                         and (c.atoms < chosen.atoms or c.score > chosen.score))
 
+    def test_selection_intent_monotonicity(self, iris_data):
+        """Monotonicity invariant: atoms(compact) <= atoms(balanced) <= atoms(accuracy)."""
+        from sklearn.datasets import load_wine, load_diabetes
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetRegressor
+
+        # 1. Classification (Iris)
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto"], cv=3, random_state=0,
+        )
+        clf.fit(X, y)
+        arch = clf.master_archive_
+        assert arch.select_candidate("compact").atoms <= arch.select_candidate("balanced").atoms <= arch.select_candidate("accuracy").atoms
+
+        # 2. Classification (Wine)
+        X_w, y_w = load_wine(return_X_y=True)
+        clf_w = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto"], cv=3, random_state=42,
+        )
+        clf_w.fit(X_w, y_w)
+        arch_w = clf_w.master_archive_
+        assert arch_w.select_candidate("compact").atoms <= arch_w.select_candidate("balanced").atoms <= arch_w.select_candidate("accuracy").atoms
+
+        # 3. Regression (Diabetes)
+        X_d, y_d = load_diabetes(return_X_y=True)
+        reg_d = AutoScoredRuleSetRegressor(cv=3, random_state=42)
+        reg_d.fit(X_d, y_d)
+        arch_d = reg_d.master_archive_
+        assert arch_d.select_candidate("compact").atoms <= arch_d.select_candidate("balanced").atoms <= arch_d.select_candidate("accuracy").atoms
+
     def test_active_estimator_tracks_chosen_candidate(self, iris_data):
         """Prediction must route through the estimator that produced the ACTIVE
         rule set, not the CV winner (review bug #9)."""
