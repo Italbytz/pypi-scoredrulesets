@@ -168,3 +168,24 @@ def test_rulekit_wrapper_passes_training_labels_to_transform(monkeypatch):
     np.testing.assert_array_equal(captured["y_train"], y)
 
 
+def test_cart_classifier_pareto_archive_ladder():
+    from sklearn.datasets import load_wine
+    X, y = load_wine(return_X_y=True)
+    clf = ScoredRuleSetClassifier(backend="cart", random_state=42)
+    clf.fit(X, y)
+
+    assert hasattr(clf, "pareto_archive_")
+    assert hasattr(clf.estimator_, "pareto_archive_")
+    assert len(clf.pareto_archive_) >= 3
+
+    comps = sorted(clf.pareto_archive_.keys())
+    assert comps[0] <= 3  # Contains stump / very small subtree
+    assert comps[-1] >= 15  # Spans up to full tree
+
+    for comp, rs in clf.pareto_archive_.items():
+        assert rs.task_type == "classification"
+        atoms = sum(len(r.atoms) for r in rs.rules)
+        assert atoms == comp
+
+
+

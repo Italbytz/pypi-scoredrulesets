@@ -580,6 +580,25 @@ class TestEvolutionaryFrontHarvest:
         }
         assert len(variants) >= 1  # each admitted under its own ("front", comp) key
 
+    def test_auto_harvests_cart_pruning_variants(self):
+        """CART cost-complexity pruning path variants must be harvested into Master Archive."""
+        from sklearn.datasets import load_wine
+        X, y = load_wine(return_X_y=True)
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart"],
+            cv=2, random_state=42,
+        )
+        clf.fit(X, y)
+        cart_cands = [
+            c for c in clf.master_archive_.candidates_ if c.backend == "cart"
+        ]
+        assert len(cart_cands) >= 2, f"Expected multiple CART variants, got {len(cart_cands)}"
+        variants = {
+            c.metadata["variant"] for c in cart_cands if "variant" in c.metadata
+        }
+        assert len(variants) >= 2
+
+
 
 class TestArchiveMetricHarmonization:
     """Archive metric follows `scoring` (review: macro vs weighted disagreement)."""

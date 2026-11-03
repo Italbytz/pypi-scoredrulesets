@@ -720,7 +720,11 @@ class GreedyCascadedRegressor(BaseRuleSetEstimator, RegressorMixin):
             meta["stage"] = 2
             tagged_rules.append(Rule(atoms=list(r.atoms), scores=list(r.scores), metadata=meta))
 
-        # Joint Ridge recalibration across all rules simultaneously
+        # Expose internal Pareto front combining Stage 1 models and incremental cascaded models
+        self.pareto_archive_: dict[int, ScoredRuleSet] = dict(getattr(self.stage1_, "pareto_archive_", {}))
+        self.archive_scores_: dict[int, float] = dict(getattr(self.stage1_, "archive_scores_", {}))
+
+        # Joint Ridge recalibration across incremental prefixes of Stage 2 rules
         if tagged_rules:
             feature_idx_map = {name: i for i, name in enumerate(self.feature_names_)}
             masks = []
@@ -739,48 +743,87 @@ class GreedyCascadedRegressor(BaseRuleSetEstimator, RegressorMixin):
                         mask &= (val != atom.value)
                 masks.append(mask)
 
-            M = np.column_stack(masks).astype(float)
-            M_ext = np.column_stack([np.ones(n_samples), M])
-            K_ext = M_ext.shape[1]
+            M_all = np.column_stack(masks).astype(float)
+            n_r1 = len(rules1)
 
-            MtM = M_ext.T @ M_ext + self.ridge_alpha * np.eye(K_ext)
-            Mty = M_ext.T @ y_arr
-            weights = np.linalg.solve(MtM, Mty)
+            # Build intermediate prefix models: start from Stage 1 rules, add Stage 2 rules one by one
+            # If Stage 1 has no rules, calibrate each Stage 2 prefix from 1..len(rules2)
+            # If Stage 1 has rules, calibrate stage1 + stage2[:j] for j = 1..len(rules2)
+            prefix_cutoffs = []
+            if n_r1 > 0 and len(rules2) > 0:
+                for j in range(1, len(rules2) + 1):
+                    prefix_cutoffs.append(n_r1 + j)
+            else:
+                prefix_cutoffs = list(range(1, len(tagged_rules) + 1))
 
-            w0 = float(weights[0])
-            rw = [float(w) for w in weights[1:]]
+            for k_rules in prefix_cutoffs:
+                sub_tagged = tagged_rules[:k_rules]
+                M_sub = M_all[:, :k_rules]
+                M_ext = np.column_stack([np.ones(n_samples), M_sub])
+                K_ext = M_ext.shape[1]
 
-            # Update scores with optimal joint weights
-            for r_idx, r in enumerate(tagged_rules):
-                r.scores = [rw[r_idx]]
+                MtM = M_ext.T @ M_ext + self.ridge_alpha * np.eye(K_ext)
+                Mty = M_ext.T @ y_arr
+                weights = np.linalg.solve(MtM, Mty)
 
-            combined_rules = tagged_rules + [Rule(atoms=[], scores=[w0], metadata={"is_default": True})]
+                w0 = float(weights[0])
+                rw = [float(w) for w in weights[1:]]
+
+                calibrated_rules = [
+                    Rule(atoms=list(r.atoms), scores=[rw[idx]], metadata=dict(getattr(r, "metadata", {})))
+                    for idx, r in enumerate(sub_tagged)
+                ]
+                calibrated_rules.append(Rule(atoms=[], scores=[w0], metadata={"is_default": True}))
+
+                cand_atoms = sum(len(r.atoms) for r in calibrated_rules)
+                preds = M_ext @ weights
+                cand_r2 = float(r2_score(y_arr, preds))
+
+                cand_rs = ScoredRuleSet(
+                    class_labels=[],
+                    rules=calibrated_rules,
+                    task_type="regression",
+                    feature_names=list(self.feature_names_),
+                    aggregation=AggregationSpec(type="default_plus_sum"),
+                    metadata={
+                        "total_atoms": cand_atoms,
+                        "n_rules_stage1": min(n_r1, k_rules),
+                        "n_rules_stage2": max(0, k_rules - n_r1),
+                        "train_r2": cand_r2,
+                        "complexity_atoms": cand_atoms,
+                    },
+                )
+
+                if cand_atoms not in self.pareto_archive_ or cand_r2 > self.archive_scores_.get(cand_atoms, -1e9):
+                    self.pareto_archive_[cand_atoms] = cand_rs
+                    self.archive_scores_[cand_atoms] = cand_r2
+
+                if k_rules == len(tagged_rules):
+                    self.ruleset_ = cand_rs
         else:
             w0 = float(np.mean(y_arr))
             combined_rules = [Rule(atoms=[], scores=[w0], metadata={"is_default": True})]
-
-        total_atoms = sum(len(r.atoms) for r in combined_rules)
-
-        self.ruleset_ = ScoredRuleSet(
-            class_labels=[],
-            rules=combined_rules,
-            task_type="regression",
-            feature_names=list(self.feature_names_),
-            aggregation=AggregationSpec(type="default_plus_sum"),
-            metadata={
-                "total_atoms": total_atoms,
-                "n_rules_stage1": len(rules1),
-                "n_rules_stage2": len(rules2),
-            },
-        )
+            total_atoms = 0
+            base_r2 = float(r2_score(y_arr, np.full(n_samples, w0)))
+            self.ruleset_ = ScoredRuleSet(
+                class_labels=[],
+                rules=combined_rules,
+                task_type="regression",
+                feature_names=list(self.feature_names_),
+                aggregation=AggregationSpec(type="default_plus_sum"),
+                metadata={
+                    "total_atoms": total_atoms,
+                    "n_rules_stage1": 0,
+                    "n_rules_stage2": 0,
+                    "train_r2": base_r2,
+                    "complexity_atoms": total_atoms,
+                },
+            )
+            self.pareto_archive_[0] = self.ruleset_
+            self.archive_scores_[0] = base_r2
 
         self.reg1_ = self.stage1_
         self.reg2_ = self.stage2_
-
-        # Expose internal Pareto front combining Stage 1 models and the final cascaded model
-        self.pareto_archive_: dict[int, ScoredRuleSet] = dict(getattr(self.stage1_, "pareto_archive_", {}))
-        self.pareto_archive_[total_atoms] = self.ruleset_
-
         return self
 
     def get_pareto_spectrum(self) -> list[dict[str, Any]]:
@@ -797,12 +840,36 @@ class GreedyCascadedRegressor(BaseRuleSetEstimator, RegressorMixin):
 
     def select_ruleset(self, preference: str = "balanced") -> ScoredRuleSet:
         check_is_fitted(self, ["pareto_archive_"])
+        if not self.pareto_archive_:
+            return self.ruleset_
         if preference == "accuracy":
             return self.ruleset_
         if preference == "compact":
-            min_c = min(self.pareto_archive_.keys())
-            return self.pareto_archive_[min_c]
-        return self.ruleset_
+            comps = sorted(self.pareto_archive_.keys())
+            compact_comps = [c for c in comps if c <= 4]
+            chosen = max(compact_comps or comps, key=lambda c: self.archive_scores_.get(c, -1e9))
+            return self.pareto_archive_[chosen]
+
+        # Balanced: knee-point selection
+        comps = sorted(self.pareto_archive_.keys())
+        if len(comps) <= 2:
+            return self.ruleset_
+        c_min, c_max = comps[0], comps[-1]
+        s_min = self.archive_scores_.get(c_min, 0.0)
+        s_max = self.archive_scores_.get(c_max, 0.0)
+        denom = float(np.hypot(c_max - c_min, s_max - s_min))
+        if denom < 1e-9:
+            return self.ruleset_
+        best_dist = -1.0
+        chosen = comps[-1]
+        for c in comps:
+            s = self.archive_scores_.get(c, 0.0)
+            num = abs((s_max - s_min) * c - (c_max - c_min) * s + c_max * s_min - s_max * c_min)
+            dist = num / denom
+            if dist > best_dist:
+                best_dist = dist
+                chosen = c
+        return self.pareto_archive_[chosen]
 
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, ["ruleset_"])

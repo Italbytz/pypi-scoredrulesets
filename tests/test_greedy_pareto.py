@@ -117,3 +117,34 @@ def test_archive_pairing_invariant():
             f"archive[{comp}]: stored ruleset reproduces F1 {actual:.4f} "
             f"but metadata records {recorded:.4f} (rule<->weight pairing bug)"
         )
+
+
+def test_greedy_cascaded_pareto_archive_ladder():
+    """Verify that GreedyCascadedRegressor populates a rich Pareto archive across complexities."""
+    X, y = make_regression(n_samples=100, n_features=6, noise=0.1, random_state=42)
+    reg = GreedyCascadedRegressor(k_stage1=3, k_stage2=3, beam_width=4, random_state=42)
+    reg.fit(X, y)
+
+    assert hasattr(reg, "pareto_archive_")
+    assert len(reg.pareto_archive_) >= 3, f"Expected >= 3 rungs, got {len(reg.pareto_archive_)}"
+
+    comps = sorted(reg.pareto_archive_.keys())
+    assert comps[0] <= 1
+    assert comps[-1] >= 4
+
+    # Every member of the archive must be a valid ScoredRuleSet
+    for comp, rs in reg.pareto_archive_.items():
+        assert rs.task_type == "regression"
+        atoms = sum(len(r.atoms) for r in rs.rules)
+        assert atoms == comp
+
+    # Test preference selections
+    rs_compact = reg.select_ruleset(preference="compact")
+    rs_accuracy = reg.select_ruleset(preference="accuracy")
+    rs_balanced = reg.select_ruleset(preference="balanced")
+
+    atoms_compact = sum(len(r.atoms) for r in rs_compact.rules)
+    atoms_accuracy = sum(len(r.atoms) for r in rs_accuracy.rules)
+    assert atoms_compact <= atoms_accuracy
+    assert rs_balanced is not None
+

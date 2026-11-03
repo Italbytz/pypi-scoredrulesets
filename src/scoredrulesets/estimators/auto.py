@@ -73,6 +73,8 @@ def _harvest_variants(fitted: Any) -> dict[tuple, ScoredRuleSet]:
     """
     underlying = getattr(fitted, "estimator_", fitted)
     front = getattr(underlying, "pareto_archive_", None)
+    if not (isinstance(front, dict) and front):
+        front = getattr(fitted, "pareto_archive_", None)
     if isinstance(front, dict) and front:
         return {("front", int(comp)): rs for comp, rs in front.items()}
     return {("model",): fitted.to_ruleset()}

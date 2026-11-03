@@ -115,3 +115,24 @@ def test_rule_backends_regression_projection_path(monkeypatch, backend: str):
     pred = reg.predict(np.array([[-2.0], [1.0]], dtype=float))
     assert pred.shape == (2,)
     assert np.isfinite(pred).all()
+
+
+def test_cart_regressor_pareto_archive_ladder():
+    from sklearn.datasets import load_diabetes
+    X, y = load_diabetes(return_X_y=True)
+    reg = ScoredRuleSetRegressor(backend="cart", backend_params={"max_depth": 5}, random_state=42)
+    reg.fit(X, y)
+
+    assert hasattr(reg, "pareto_archive_")
+    assert hasattr(reg.estimator_, "pareto_archive_")
+    assert len(reg.pareto_archive_) >= 3
+
+    comps = sorted(reg.pareto_archive_.keys())
+    assert comps[0] <= 3  # Stump
+    assert comps[-1] >= 10
+
+    for comp, rs in reg.pareto_archive_.items():
+        assert rs.task_type == "regression"
+        atoms = sum(len(r.atoms) for r in rs.rules)
+        assert atoms == comp
+

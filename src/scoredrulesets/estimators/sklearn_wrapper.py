@@ -23,6 +23,29 @@ from .base import BaseRuleSetEstimator
 from .tree_transform import TreeTransformParams, estimator_to_scored_ruleset
 
 
+def _select_pruning_alphas(ccp_alphas: np.ndarray, max_variants: int = 12) -> list[float]:
+    """Select a diverse subset of ccp_alphas spanning the full complexity spectrum."""
+    if len(ccp_alphas) <= 1:
+        return []
+    # ccp_alphas[-1] prunes the tree completely down to root leaf (node_count=1)
+    cands = [float(a) for a in ccp_alphas[:-1]]
+    if len(cands) <= max_variants:
+        return cands
+
+    pos_cands = [a for a in cands if a > 0]
+    if not pos_cands:
+        return cands[:max_variants]
+
+    min_a, max_a = pos_cands[0], pos_cands[-1]
+    if min_a >= max_a:
+        return [min_a]
+
+    log_grid = np.geomspace(min_a, max_a, max_variants)
+    chosen = {min(cands, key=lambda a: abs(a - g)) for g in log_grid}
+    chosen.add(cands[-1])  # Always include the stump (largest candidate)
+    return sorted(chosen)
+
+
 class ScoredRuleSetClassifier(BaseRuleSetEstimator):
     """Sklearn-compatible wrapper with post-hoc transformation into Scored Rule Sets.
 
@@ -296,12 +319,59 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 params=transform_cfg,
                 X_ref=X_valid,
             )
+            if backend_lower == "cart":
+                self.pareto_archive_ = self._build_cart_pruning_archive(X_valid, y_valid, transform_cfg)
+                self.estimator_.pareto_archive_ = self.pareto_archive_
+
+        if hasattr(self.estimator_, "pareto_archive_") and not hasattr(self, "pareto_archive_"):
+            self.pareto_archive_ = self.estimator_.pareto_archive_
 
         # Route predictions through the ScoredRuleSet for all backends,
         # so benchmarks evaluate the actual transformed representation.
         self.is_ruleset_mode_ = True
         self.transformation_lossy_ = False
         return self
+
+    def _build_cart_pruning_archive(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        transform_cfg: TreeTransformParams,
+        max_variants: int = 12,
+    ) -> dict[int, ScoredRuleSet]:
+        """Expose decision tree minimal cost-complexity pruning path as a Pareto archive."""
+        archive: dict[int, ScoredRuleSet] = {}
+        full_atoms = sum(len(r.atoms) for r in self.ruleset_.rules)
+        archive[full_atoms] = self.ruleset_
+
+        if not hasattr(self.estimator_, "cost_complexity_pruning_path"):
+            return archive
+
+        try:
+            path = self.estimator_.cost_complexity_pruning_path(X, y)
+            selected_alphas = _select_pruning_alphas(path.ccp_alphas, max_variants=max_variants)
+
+            for alpha in selected_alphas:
+                sub_tree = clone(self.estimator_).set_params(ccp_alpha=alpha)
+                sub_tree.fit(X, y)
+                if getattr(sub_tree.tree_, "node_count", 0) <= 1:
+                    continue
+                sub_rs = estimator_to_scored_ruleset(
+                    estimator=sub_tree,
+                    class_labels=self.classes_.tolist(),
+                    feature_names=self.feature_names_in_,
+                    params=transform_cfg,
+                    X_ref=X,
+                )
+                comp = sum(len(r.atoms) for r in sub_rs.rules)
+                if comp > 0 and comp not in archive:
+                    sub_rs.metadata["ccp_alpha"] = float(alpha)
+                    sub_rs.metadata["complexity_atoms"] = comp
+                    archive[comp] = sub_rs
+        except Exception as e:
+            warnings.warn(f"CART pruning path extraction encountered an issue: {e}", UserWarning)
+
+        return archive
 
     def _apply_exstracs_shrinking(self, ruleset: ScoredRuleSet, X: np.ndarray, y: np.ndarray) -> ScoredRuleSet:
         """Apply ExSTraCS shrinking parameters."""
@@ -638,6 +708,8 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                     estimator=self.estimator_,
                     feature_names=self.feature_names_in_,
                 )
+                self.pareto_archive_ = self._build_cart_pruning_archive(X_valid, y_valid)
+                self.estimator_.pareto_archive_ = self.pareto_archive_
             elif backend_key in {"rulegp", "rulegp_native"}:
                 from .rulegp_regressor import RuleGPRegressor
                 params = dict(self.backend_params or {})
@@ -715,7 +787,48 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                     "Supported: 'cart', 'greedy_cascaded', 'greedy_pareto', 'cascaded_rulegp', "
                     "'rulegp', 'rulensga2', 'ruleplcs', 'projection_rulegp', 'projection_rulensga2'."
                 )
+
+        if hasattr(self.estimator_, "pareto_archive_") and not hasattr(self, "pareto_archive_"):
+            self.pareto_archive_ = self.estimator_.pareto_archive_
+
         return self
+
+    def _build_cart_pruning_archive(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        max_variants: int = 12,
+    ) -> dict[int, ScoredRuleSet]:
+        """Expose regression decision tree pruning path as a Pareto archive."""
+        archive: dict[int, ScoredRuleSet] = {}
+        full_atoms = sum(len(r.atoms) for r in self.ruleset_.rules)
+        archive[full_atoms] = self.ruleset_
+
+        if not hasattr(self.estimator_, "cost_complexity_pruning_path"):
+            return archive
+
+        try:
+            path = self.estimator_.cost_complexity_pruning_path(X, y)
+            selected_alphas = _select_pruning_alphas(path.ccp_alphas, max_variants=max_variants)
+
+            for alpha in selected_alphas:
+                sub_tree = clone(self.estimator_).set_params(ccp_alpha=alpha)
+                sub_tree.fit(X, y)
+                if getattr(sub_tree.tree_, "node_count", 0) <= 1:
+                    continue
+                sub_rs = _regressor_to_scored_ruleset(
+                    estimator=sub_tree,
+                    feature_names=self.feature_names_in_,
+                )
+                comp = sum(len(r.atoms) for r in sub_rs.rules)
+                if comp > 0 and comp not in archive:
+                    sub_rs.metadata["ccp_alpha"] = float(alpha)
+                    sub_rs.metadata["complexity_atoms"] = comp
+                    archive[comp] = sub_rs
+        except Exception as e:
+            warnings.warn(f"CART regression pruning path extraction encountered an issue: {e}", UserWarning)
+
+        return archive
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
