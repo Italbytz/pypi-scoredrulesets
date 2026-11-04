@@ -803,3 +803,49 @@ class TestHVContributionProbing:
         reg_cascaded.fit(X, y)
         assert len(reg_cascaded.predict(X)) == len(y)
 
+    def test_preference_best_single_cv_classifier(self, iris_data):
+        """Test preference='best_single_cv' activates winner while preserving archive."""
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "hs"],
+            preference="best_single_cv",
+            cv=3,
+            random_state=42,
+        )
+        clf.fit(X, y)
+
+        assert clf.preference == "best_single_cv"
+        assert clf.active_backend_ == clf.best_backend_
+        assert clf.active_estimator_ is clf.best_estimator_
+        assert clf.ruleset_ == clf.best_estimator_.ruleset_
+        # Archive was still harvested and is accessible for Pareto inspection
+        assert len(clf.master_archive_.candidates_) >= 1
+        spectrum = clf.get_pareto_spectrum()
+        assert len(spectrum) >= 1
+
+        preds = clf.predict(X)
+        assert len(preds) == len(y)
+        assert set(preds).issubset(set(y))
+
+    def test_preference_best_single_cv_regressor(self):
+        """Test preference='best_single_cv' for regression."""
+        from sklearn.datasets import make_regression
+        from scoredrulesets.estimators.auto import AutoScoredRuleSetRegressor
+
+        X, y = make_regression(n_samples=50, n_features=4, noise=0.1, random_state=42)
+        reg = AutoScoredRuleSetRegressor(
+            candidate_backends=["cart", "greedy_cascaded"],
+            preference="best_single_cv",
+            cv=2,
+            random_state=42,
+        )
+        reg.fit(X, y)
+
+        assert reg.preference == "best_single_cv"
+        assert reg.active_backend_ == reg.best_backend_
+        assert reg.ruleset_ == reg.best_estimator_.ruleset_
+        assert len(reg.master_archive_.candidates_) >= 1
+        preds = reg.predict(X)
+        assert len(preds) == len(y)
+
+

@@ -421,7 +421,7 @@ class MasterParetoArchive:
         - ``compact``: fewest atoms among candidates whose score lies within
           ``compact_tolerance`` of the best score, bounded above by ``balanced``
           to guarantee monotonicity (atoms(compact) <= atoms(balanced)).
-        - ``accuracy`` / ``manual``: highest score.
+        - ``accuracy`` / ``manual`` / ``best_single_cv``: highest score.
         - ``balanced``: knee point, i.e. the candidate with maximal signed
           distance above the chord between the two extreme front points in
           min-max normalized (atoms, score) space.  Falls back to ``compact``
@@ -456,7 +456,7 @@ class MasterParetoArchive:
                     return bal
             return cand
 
-        if preference in ("accuracy", "manual", "custom"):
+        if preference in ("accuracy", "manual", "custom", "best_single_cv"):
             return max(eligible, key=lambda c: (self._signed(c.score), -c.atoms))
 
         # Default: "balanced" (knee point in normalized objective space)
@@ -612,12 +612,14 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         fusion study showed zero non-dominated contributions once the greedy
         beam search's rule<->weight pairing defect was repaired; the
         evolutionary and exact families are excluded for runtime reasons.
-    preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual"}, default="balanced"
+    preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual", "best_single_cv"}, default="balanced"
         Operational intent profile (all evaluated on out-of-fold archive scores):
         - "compact": fewest atoms within ``compact_tolerance`` of the best score.
         - "balanced": knee point of the normalized Pareto front (falls back to
           "compact" when the front has fewer than three points).
-        - "accuracy": highest out-of-fold score.
+        - "accuracy": highest out-of-fold score on the Master Pareto Front.
+        - "best_single_cv": classical scalar CV winner across candidate backends,
+          activating the top-scoring single-backend model without Pareto pruning.
         - "pareto_menu": fits full front for interactive post-fit inspection.
     compact_tolerance : float, default=0.02
         Score tolerance used by the "compact" intent (and the "balanced"
@@ -655,7 +657,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
     def __init__(
         self,
         candidate_backends: list[str] | None = None,
-        preference: Literal["compact", "balanced", "accuracy", "pareto_menu", "manual"] = "balanced",
+        preference: Literal["compact", "balanced", "accuracy", "pareto_menu", "manual", "best_single_cv"] = "balanced",
         enable_pareto_fusion: bool = True,
         max_rules: int | None = None,
         max_atoms: int | None = None,
@@ -950,7 +952,11 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         self.feature_selector_ = getattr(winner, "feature_selector_", None)
 
         # Select model according to preference and Pareto fusion
-        if self.enable_pareto_fusion and self.master_archive_.candidates_:
+        if self.preference == "best_single_cv":
+            self.ruleset_ = winner.ruleset_
+            self.active_estimator_ = winner
+            self.active_backend_ = best_backend
+        elif self.enable_pareto_fusion and self.master_archive_.candidates_:
             chosen = self.master_archive_.select_candidate(
                 preference=self.preference,
                 max_rules=self.max_rules,
@@ -1028,8 +1034,14 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     candidate_backends : list[str] | None
         List of backend names to evaluate (default: ``["greedy_cascaded",
         "cart", "ruleplcs"]``).
-    preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual"}, default="balanced"
-        Operational intent profile.
+    preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual", "best_single_cv"}, default="balanced"
+        Operational intent profile:
+        - "compact": fewest atoms within ``compact_tolerance`` of the best score.
+        - "balanced": knee point of the normalized Pareto front.
+        - "accuracy": highest out-of-fold score on the Master Pareto Front.
+        - "best_single_cv": classical scalar CV winner across candidate backends,
+          activating the top-scoring single-backend model without Pareto pruning.
+        - "pareto_menu": fits full front for interactive post-fit inspection.
     enable_pareto_fusion : bool, default=True
         Whether to merge models into the Master Pareto Front.
     max_rules : int | None, default=None
@@ -1064,7 +1076,7 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     def __init__(
         self,
         candidate_backends: list[str] | None = None,
-        preference: Literal["compact", "balanced", "accuracy", "pareto_menu", "manual"] = "balanced",
+        preference: Literal["compact", "balanced", "accuracy", "pareto_menu", "manual", "best_single_cv"] = "balanced",
         enable_pareto_fusion: bool = True,
         max_rules: int | None = None,
         max_atoms: int | None = None,
@@ -1325,7 +1337,11 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         self.selected_feature_indices_ = getattr(winner, "selected_feature_indices_", None)
         self.feature_selector_ = getattr(winner, "feature_selector_", None)
 
-        if self.enable_pareto_fusion and self.master_archive_.candidates_:
+        if self.preference == "best_single_cv":
+            self.ruleset_ = winner.ruleset_
+            self.active_estimator_ = winner
+            self.active_backend_ = best_backend
+        elif self.enable_pareto_fusion and self.master_archive_.candidates_:
             chosen = self.master_archive_.select_candidate(
                 preference=self.preference,
                 max_rules=self.max_rules,
