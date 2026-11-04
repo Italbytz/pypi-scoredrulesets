@@ -357,8 +357,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
             for alpha in selected_alphas:
                 if self.backend.lower() == "hs":
-                    from sklearn.tree import DecisionTreeClassifier
-                    base_tree = DecisionTreeClassifier(ccp_alpha=alpha, random_state=self.random_state)
+                    base_tree = clone(tree_est).set_params(ccp_alpha=alpha)
                     reg_param = getattr(self.estimator_, "reg_param", 10.0)
                     shrinkage_scheme = getattr(self.estimator_, "shrinkage_scheme_", "node_based")
                     hs_cls = self.estimator_.__class__
