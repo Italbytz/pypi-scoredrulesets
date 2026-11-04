@@ -319,7 +319,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                 params=transform_cfg,
                 X_ref=X_valid,
             )
-            if backend_lower == "cart":
+            if backend_lower in {"cart", "hs"}:
                 self.pareto_archive_ = self._build_cart_pruning_archive(X_valid, y_valid, transform_cfg)
                 self.estimator_.pareto_archive_ = self.pareto_archive_
 
@@ -339,22 +339,40 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
         transform_cfg: TreeTransformParams,
         max_variants: int = 12,
     ) -> dict[int, ScoredRuleSet]:
-        """Expose decision tree minimal cost-complexity pruning path as a Pareto archive."""
+        """Expose decision tree / shrinkage tree minimal cost-complexity pruning path as a Pareto archive."""
         archive: dict[int, ScoredRuleSet] = {}
         full_atoms = sum(len(r.atoms) for r in self.ruleset_.rules)
         archive[full_atoms] = self.ruleset_
 
-        if not hasattr(self.estimator_, "cost_complexity_pruning_path"):
+        tree_est = self.estimator_
+        if not hasattr(tree_est, "cost_complexity_pruning_path") and hasattr(tree_est, "estimator_"):
+            tree_est = tree_est.estimator_
+
+        if not hasattr(tree_est, "cost_complexity_pruning_path"):
             return archive
 
         try:
-            path = self.estimator_.cost_complexity_pruning_path(X, y)
+            path = tree_est.cost_complexity_pruning_path(X, y)
             selected_alphas = _select_pruning_alphas(path.ccp_alphas, max_variants=max_variants)
 
             for alpha in selected_alphas:
-                sub_tree = clone(self.estimator_).set_params(ccp_alpha=alpha)
+                if self.backend.lower() == "hs":
+                    from sklearn.tree import DecisionTreeClassifier
+                    base_tree = DecisionTreeClassifier(ccp_alpha=alpha, random_state=self.random_state)
+                    reg_param = getattr(self.estimator_, "reg_param", 10.0)
+                    shrinkage_scheme = getattr(self.estimator_, "shrinkage_scheme_", "node_based")
+                    hs_cls = self.estimator_.__class__
+                    sub_tree = hs_cls(
+                        estimator_=base_tree,
+                        reg_param=reg_param,
+                        shrinkage_scheme_=shrinkage_scheme,
+                        random_state=self.random_state,
+                    )
+                else:
+                    sub_tree = clone(self.estimator_).set_params(ccp_alpha=alpha)
                 sub_tree.fit(X, y)
-                if getattr(sub_tree.tree_, "node_count", 0) <= 1:
+                inner_node_count = getattr(getattr(sub_tree, "estimator_", sub_tree).tree_, "node_count", 0)
+                if inner_node_count <= 1 or inner_node_count > 150:
                     continue
                 sub_rs = estimator_to_scored_ruleset(
                     estimator=sub_tree,
@@ -369,7 +387,7 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     sub_rs.metadata["complexity_atoms"] = comp
                     archive[comp] = sub_rs
         except Exception as e:
-            warnings.warn(f"CART pruning path extraction encountered an issue: {e}", UserWarning)
+            warnings.warn(f"Tree pruning path extraction encountered an issue: {e}", UserWarning)
 
         return archive
 
