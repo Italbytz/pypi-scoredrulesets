@@ -410,6 +410,41 @@ class MasterParetoArchive:
             return self._select_compact(eligible)
         return eligible[best_idx]
 
+    def _select_performance(
+        self, eligible: list[ParetoCandidate], weight: float = 0.70
+    ) -> ParetoCandidate:
+        """Asymmetric knee / weighted trade-off favoring performance (default weight=0.70)."""
+        if len(eligible) <= 2:
+            return max(eligible, key=lambda c: (self._signed(c.score), -c.atoms))
+
+        atoms_arr = np.array([c.atoms for c in eligible], dtype=float)
+        scores_arr = np.array([self._signed(c.score) for c in eligible], dtype=float)
+        a_span = atoms_arr[-1] - atoms_arr[0]
+        s_span = scores_arr[-1] - scores_arr[0]
+        if a_span <= 0 or s_span <= 1e-12:
+            return max(eligible, key=lambda c: (self._signed(c.score), -c.atoms))
+
+        a_norm = (atoms_arr - atoms_arr[0]) / a_span
+        s_norm = (scores_arr - scores_arr[0]) / s_span
+        gain = weight * s_norm - (1.0 - weight) * a_norm
+        best_idx = int(np.argmax(gain))
+        cand = eligible[best_idx]
+        bal = self._select_balanced(eligible)
+        if cand.atoms < bal.atoms:
+            return bal
+        return cand
+
+    def _select_expressive(self, eligible: list[ParetoCandidate]) -> ParetoCandidate:
+        """Parsimonious high-performance candidate within tighter tolerance (0.005) of apex, bounded below by balanced."""
+        best = max(self._signed(c.score) for c in eligible)
+        tight_tolerance = max(0.005, self.compact_tolerance * 0.25)
+        within = [c for c in eligible if self._signed(c.score) >= best - tight_tolerance]
+        cand = min(within, key=lambda c: (c.atoms, -self._signed(c.score)))
+        bal = self._select_balanced(eligible)
+        if cand.atoms < bal.atoms:
+            return bal
+        return cand
+
     def select_candidate(
         self,
         preference: str = "balanced",
@@ -455,6 +490,12 @@ class MasterParetoArchive:
                 if cand.atoms > bal.atoms:
                     return bal
             return cand
+
+        if preference in ("performance", "performance_tilted"):
+            return self._select_performance(eligible, weight=0.70)
+
+        if preference in ("expressive", "upper_knee"):
+            return self._select_expressive(eligible)
 
         if preference in ("accuracy", "manual", "custom", "best_single_cv"):
             return max(eligible, key=lambda c: (self._signed(c.score), -c.atoms))
@@ -612,11 +653,15 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         fusion study showed zero non-dominated contributions once the greedy
         beam search's rule<->weight pairing defect was repaired; the
         evolutionary and exact families are excluded for runtime reasons.
-    preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual", "best_single_cv"}, default="balanced"
+    preference : {"compact", "balanced", "performance", "expressive", "accuracy", "pareto_menu", "manual", "best_single_cv"}, default="balanced"
         Operational intent profile (all evaluated on out-of-fold archive scores):
         - "compact": fewest atoms within ``compact_tolerance`` of the best score.
         - "balanced": knee point of the normalized Pareto front (falls back to
           "compact" when the front has fewer than three points).
+        - "performance": asymmetric weighted knee (w=0.70) favoring predictive power
+          while penalizing gratuitous complexity explosions.
+        - "expressive": parsimonious high-performance candidate within tighter tolerance
+          (0.005) of the apex, bounded below by "balanced".
         - "accuracy": highest out-of-fold score on the Master Pareto Front.
         - "best_single_cv": classical scalar CV winner across candidate backends,
           activating the top-scoring single-backend model without Pareto pruning.
@@ -657,7 +702,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
     def __init__(
         self,
         candidate_backends: list[str] | None = None,
-        preference: Literal["compact", "balanced", "accuracy", "pareto_menu", "manual", "best_single_cv"] = "balanced",
+        preference: Literal["compact", "balanced", "performance", "expressive", "accuracy", "pareto_menu", "manual", "best_single_cv"] = "balanced",
         enable_pareto_fusion: bool = True,
         max_rules: int | None = None,
         max_atoms: int | None = None,
@@ -1034,10 +1079,12 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     candidate_backends : list[str] | None
         List of backend names to evaluate (default: ``["greedy_cascaded",
         "cart", "ruleplcs"]``).
-    preference : {"compact", "balanced", "accuracy", "pareto_menu", "manual", "best_single_cv"}, default="balanced"
+    preference : {"compact", "balanced", "performance", "expressive", "accuracy", "pareto_menu", "manual", "best_single_cv"}, default="balanced"
         Operational intent profile:
         - "compact": fewest atoms within ``compact_tolerance`` of the best score.
         - "balanced": knee point of the normalized Pareto front.
+        - "performance": asymmetric weighted knee (w=0.70) favoring predictive power.
+        - "expressive": parsimonious high-performance candidate within tighter tolerance (0.005) of apex.
         - "accuracy": highest out-of-fold score on the Master Pareto Front.
         - "best_single_cv": classical scalar CV winner across candidate backends,
           activating the top-scoring single-backend model without Pareto pruning.
@@ -1076,7 +1123,7 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     def __init__(
         self,
         candidate_backends: list[str] | None = None,
-        preference: Literal["compact", "balanced", "accuracy", "pareto_menu", "manual", "best_single_cv"] = "balanced",
+        preference: Literal["compact", "balanced", "performance", "expressive", "accuracy", "pareto_menu", "manual", "best_single_cv"] = "balanced",
         enable_pareto_fusion: bool = True,
         max_rules: int | None = None,
         max_atoms: int | None = None,

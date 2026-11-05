@@ -181,9 +181,9 @@ class TestAutoEstimator:
         assert len(preds) == len(y)
 
     def test_preferences(self, iris_data):
-        """Test different user intent profiles ('compact', 'balanced', 'accuracy')."""
+        """Test different user intent profiles ('compact', 'balanced', 'performance', 'expressive', 'accuracy')."""
         X, y = iris_data
-        for pref in ("compact", "balanced", "accuracy"):
+        for pref in ("compact", "balanced", "performance", "expressive", "accuracy"):
             clf = AutoScoredRuleSetClassifier(
                 candidate_backends=["greedy_pareto", "cart"],
                 preference=pref,
