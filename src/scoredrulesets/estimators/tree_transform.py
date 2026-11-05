@@ -49,7 +49,9 @@ def estimator_to_scored_ruleset(
     if params.aggressive_prune:
         rules = _deduplicate_atoms(rules)
 
-    return _assemble_ruleset(rules, class_labels, feature_names, params.depth_decay_lambda)
+    return _assemble_ruleset(
+        rules, class_labels, feature_names, params.depth_decay_lambda, tree_estimator=tree_estimator
+    )
 
 
 def _build_tree_rules(
@@ -104,18 +106,57 @@ def _build_tree_rules(
     return rules
 
 
+def serialize_canonical_tree(tree_estimator: Any) -> dict[str, Any]:
+    """Extract canonical, JSON-serializable structural representation of an sklearn tree_."""
+    unwrapped = _unwrap_tree_estimator(tree_estimator)
+    tree = getattr(unwrapped, "tree_", None)
+    if tree is None:
+        return {}
+    node_count = int(tree.node_count)
+    n_leaves = int(tree.n_leaves)
+    n_splits = int(node_count - n_leaves)
+    max_depth = int(tree.max_depth)
+    val = tree.value.squeeze(axis=1) if tree.value.ndim == 3 else tree.value
+    return {
+        "node_count": node_count,
+        "n_leaves": n_leaves,
+        "n_splits": n_splits,
+        "max_depth": max_depth,
+        "children_left": [int(x) for x in tree.children_left.tolist()],
+        "children_right": [int(x) for x in tree.children_right.tolist()],
+        "feature": [int(x) for x in tree.feature.tolist()],
+        "threshold": [float(x) for x in tree.threshold.tolist()],
+        "n_node_samples": [int(x) for x in tree.n_node_samples.tolist()],
+        "impurity": [float(x) for x in tree.impurity.tolist()],
+        "value": [[float(v) for v in row] for row in np.atleast_2d(val).tolist()],
+    }
+
+
 def _assemble_ruleset(
     rules: list[Rule],
     class_labels: list[Any],
     feature_names: list[str],
     depth_decay_lambda: float,
+    tree_estimator: Any | None = None,
 ) -> ScoredRuleSet:
+    meta: dict[str, Any] = {
+        "transform": "tree_to_scored_ruleset",
+        "depth_decay_lambda": depth_decay_lambda,
+    }
+    if tree_estimator is not None:
+        canon = serialize_canonical_tree(tree_estimator)
+        if canon:
+            meta["tree_node_count"] = canon["node_count"]
+            meta["tree_n_leaves"] = canon["n_leaves"]
+            meta["tree_n_splits"] = canon["n_splits"]
+            meta["tree_max_depth"] = canon["max_depth"]
+            meta["canonical_tree"] = canon
     rs = ScoredRuleSet(
         class_labels=class_labels,
         feature_names=feature_names,
         rules=rules,
         aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
-        metadata={"transform": "tree_to_scored_ruleset", "depth_decay_lambda": depth_decay_lambda},
+        metadata=meta,
     )
     rs.validate()
     return rs
@@ -156,7 +197,9 @@ def _build_best_pruned_ruleset(
         n_atoms = sum(len(r.atoms) for r in rules)
         if n_atoms < best_n_atoms:
             best_n_atoms = n_atoms
-            best_ruleset = _assemble_ruleset(rules, class_labels, feature_names, lam)
+            best_ruleset = _assemble_ruleset(
+                rules, class_labels, feature_names, lam, tree_estimator=tree_estimator
+            )
 
     assert best_ruleset is not None
     return best_ruleset

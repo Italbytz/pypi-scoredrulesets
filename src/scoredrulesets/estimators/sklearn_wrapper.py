@@ -20,7 +20,7 @@ from ..preprocessing.feature_selection import build_feature_selector, get_select
 from ..preprocessing.pipeline import build_preprocessing_pipeline
 from .backends import build_backend_estimator
 from .base import BaseRuleSetEstimator
-from .tree_transform import TreeTransformParams, estimator_to_scored_ruleset
+from .tree_transform import TreeTransformParams, estimator_to_scored_ruleset, serialize_canonical_tree
 
 
 def _select_pruning_alphas(ccp_alphas: np.ndarray, max_variants: int = 12) -> list[float]:
@@ -887,13 +887,21 @@ def _regressor_to_scored_ruleset(estimator: Any, feature_names: list[str]) -> Sc
         raise TypeError("Regressor could not be resolved to an object with tree_")
 
     rules = _build_tree_rules_regression(tree_estimator=tree_estimator, feature_names=feature_names)
+    meta: dict[str, Any] = {"transform": "tree_to_scored_ruleset_regression"}
+    canon = serialize_canonical_tree(tree_estimator)
+    if canon:
+        meta["tree_node_count"] = canon["node_count"]
+        meta["tree_n_leaves"] = canon["n_leaves"]
+        meta["tree_n_splits"] = canon["n_splits"]
+        meta["tree_max_depth"] = canon["max_depth"]
+        meta["canonical_tree"] = canon
     ruleset = ScoredRuleSet(
         class_labels=[],
         task_type="regression",
         feature_names=feature_names,
         rules=rules,
         aggregation=AggregationSpec(type="weighted_sum"),
-        metadata={"transform": "tree_to_scored_ruleset_regression"},
+        metadata=meta,
     )
     ruleset.validate()
     return ruleset

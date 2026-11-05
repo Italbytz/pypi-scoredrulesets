@@ -9,6 +9,27 @@ SUPPORTED_TASK_TYPES = {"classification", "regression"}
 TaskType = Literal["classification", "regression"]
 
 
+def _to_json_safe(val: Any) -> Any:
+    """Recursively convert numpy scalars/arrays and tuples into pure Python JSON primitives."""
+    if isinstance(val, (str, int, float, bool)) or val is None:
+        return val
+    if hasattr(val, "item") and callable(getattr(val, "item", None)):
+        try:
+            return val.item()
+        except Exception:
+            pass
+    if hasattr(val, "tolist") and callable(getattr(val, "tolist", None)):
+        try:
+            return _to_json_safe(val.tolist())
+        except Exception:
+            pass
+    if isinstance(val, dict):
+        return {str(k): _to_json_safe(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple, set)):
+        return [_to_json_safe(v) for v in val]
+    return str(val)
+
+
 @dataclass
 class AggregationSpec:
     type: str = "argmax_sum"
@@ -39,12 +60,12 @@ class Atom:
     def to_dict(self) -> Dict[str, Any]:
         self.validate()
         payload = {
-            "feature": self.feature,
-            "op": self.op,
-            "value": self.value,
+            "feature": _to_json_safe(self.feature),
+            "op": str(self.op),
+            "value": _to_json_safe(self.value),
         }
         if self.metadata:
-            payload["metadata"] = self.metadata
+            payload["metadata"] = _to_json_safe(self.metadata)
         return payload
 
     @classmethod
@@ -72,9 +93,9 @@ class Rule:
             "scores": [float(v) for v in self.scores],
         }
         if self.rule_id is not None:
-            payload["id"] = self.rule_id
+            payload["id"] = str(self.rule_id)
         if self.metadata:
-            payload["metadata"] = self.metadata
+            payload["metadata"] = _to_json_safe(self.metadata)
         return payload
 
     @classmethod
@@ -141,11 +162,11 @@ class ScoredRuleSet:
             "format": "scoredrulesets",
             "version": "0.1",
             "task_type": self.task_type,
-            "class_labels": list(self.class_labels),
-            "feature_names": list(self.feature_names),
+            "class_labels": [_to_json_safe(c) for c in self.class_labels],
+            "feature_names": [str(f) for f in self.feature_names],
             "aggregation": self.aggregation.to_dict(),
             "rules": [rule.to_dict() for rule in self.rules],
-            "metadata": dict(self.metadata),
+            "metadata": _to_json_safe(dict(self.metadata)),
         }
 
     @classmethod

@@ -252,6 +252,7 @@ def _admit_full_fit(
     per_key: dict[tuple, list[float]],
     *,
     n_splits: int,
+    candidate_pool: list["ParetoCandidate"] | None = None,
 ) -> int:
     """Offer the full-data rule sets of ``est_full`` to the archive with OOF scores.
 
@@ -265,16 +266,31 @@ def _admit_full_fit(
         scores = per_key.get(key)
         if not scores or len(scores) < min_folds:
             continue
+        mean_score = float(np.mean(scores))
+        meta = {
+            "estimator": est_full,
+            "variant": key,
+            "oof_folds": len(scores),
+            "oof_std": float(np.std(scores)),
+        }
+        if candidate_pool is not None:
+            atoms = sum(len(r.atoms) for r in rs.rules)
+            non_default_rules = len([r for r in rs.rules if r.atoms])
+            candidate_pool.append(
+                ParetoCandidate(
+                    ruleset=rs,
+                    score=mean_score,
+                    atoms=atoms,
+                    rules=non_default_rules,
+                    backend=label,
+                    metadata=dict(meta),
+                )
+            )
         if archive.add(
             rs,
-            float(np.mean(scores)),
+            mean_score,
             backend=label,
-            metadata={
-                "estimator": est_full,
-                "variant": key,
-                "oof_folds": len(scores),
-                "oof_std": float(np.std(scores)),
-            },
+            metadata=meta,
         ):
             admitted += 1
     return admitted
@@ -290,6 +306,51 @@ class ParetoCandidate:
     rules: int
     backend: str
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def effective_nodes(self) -> int:
+        """Return internal split-node count if candidate originates from a tree, else path atoms."""
+        if isinstance(self.ruleset.metadata, dict):
+            n_splits = self.ruleset.metadata.get("tree_n_splits")
+            if n_splits is not None:
+                return int(n_splits)
+        return int(self.atoms)
+
+    def to_dict(self) -> dict[str, Any]:
+        safe_meta: dict[str, Any] = {}
+        for k, v in (self.metadata or {}).items():
+            if k == "estimator":
+                continue
+            if isinstance(v, tuple):
+                safe_meta[k] = list(v)
+            elif isinstance(v, (str, int, float, bool, list, dict)) or v is None:
+                safe_meta[k] = v
+            else:
+                safe_meta[k] = str(v)
+        return {
+            "ruleset": self.ruleset.to_dict(),
+            "score": float(self.score),
+            "atoms": int(self.atoms),
+            "effective_nodes": int(self.effective_nodes),
+            "rules": int(self.rules),
+            "backend": str(self.backend),
+            "metadata": safe_meta,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ParetoCandidate":
+        rs = ScoredRuleSet.from_dict(payload["ruleset"])
+        meta = dict(payload.get("metadata", {}))
+        if "variant" in meta and isinstance(meta["variant"], list):
+            meta["variant"] = tuple(meta["variant"])
+        return cls(
+            ruleset=rs,
+            score=float(payload["score"]),
+            atoms=int(payload["atoms"]),
+            rules=int(payload["rules"]),
+            backend=str(payload["backend"]),
+            metadata=meta,
+        )
 
 
 class MasterParetoArchive:
@@ -362,6 +423,7 @@ class MasterParetoArchive:
         return [
             {
                 "complexity": c.atoms,
+                "effective_nodes": c.effective_nodes,
                 "rules": c.rules,
                 "score": c.score,
                 "backend": c.backend,
@@ -369,6 +431,28 @@ class MasterParetoArchive:
             }
             for c in self.candidates_
         ]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the Master Pareto Archive to a JSON-compatible dictionary."""
+        return {
+            "format": "master_pareto_archive",
+            "version": "1.0",
+            "higher_is_better": bool(self.higher_is_better),
+            "compact_tolerance": float(self.compact_tolerance),
+            "candidates": [c.to_dict() for c in self.candidates_],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "MasterParetoArchive":
+        """Reconstruct a MasterParetoArchive from a dictionary produced by ``to_dict()``."""
+        arch = cls(
+            higher_is_better=bool(payload.get("higher_is_better", True)),
+            compact_tolerance=float(payload.get("compact_tolerance", 0.02)),
+        )
+        arch.candidates_ = [
+            ParetoCandidate.from_dict(c) for c in payload.get("candidates", [])
+        ]
+        return arch
 
     def select(
         self,
@@ -886,6 +970,8 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         self.master_archive_ = MasterParetoArchive(
             higher_is_better=True, compact_tolerance=self.compact_tolerance
         )
+        self.all_harvested_candidates_: list[ParetoCandidate] = []
+        self.backend_timings_: dict[str, dict[str, float]] = {}
         fitted_estimators: dict[str, Any] = {}
 
         for backend in backends:
@@ -938,6 +1024,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
 
                 if is_main:
                     elapsed = time.monotonic() - t0
+                    self.backend_timings_.setdefault(backend, {})["cv_s"] = float(elapsed)
                     if self.timeout_per_backend is not None and elapsed > self.timeout_per_backend:
                         warnings.warn(
                             f"AutoScoredRuleSet: backend '{backend}' exceeded "
@@ -953,20 +1040,26 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                     continue
                 # Refit on all data for serving; archive scores stay OOF.
                 try:
+                    t_refit = time.monotonic()
                     est_full = make()
                     est_full.fit(X_valid, y_valid)
+                    refit_elapsed = time.monotonic() - t_refit
                     if is_main:
                         fitted_estimators[backend] = est_full
+                        self.backend_timings_.setdefault(backend, {})["refit_s"] = float(refit_elapsed)
                     if self.enable_pareto_fusion:
                         _admit_full_fit(
                             self.master_archive_, est_full, label, per_key,
                             n_splits=cv_splitter.get_n_splits(),
+                            candidate_pool=self.all_harvested_candidates_,
                         )
                 except Exception as exc:  # noqa: BLE001
                     warnings.warn(
                         f"AutoScoredRuleSet: failed to harvest Pareto models from '{label}': {exc}",
                         UserWarning,
                     )
+
+        self.fitted_estimators_ = fitted_estimators
 
         if best_backend is None:
             raise RuntimeError(
@@ -1296,6 +1389,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         self.master_archive_ = MasterParetoArchive(
             higher_is_better=True, compact_tolerance=self.compact_tolerance
         )
+        self.all_harvested_candidates_: list[ParetoCandidate] = []
+        self.backend_timings_: dict[str, dict[str, float]] = {}
         fitted_estimators: dict[str, Any] = {}
 
         for backend in backends:
@@ -1328,6 +1423,7 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 per_key = {}
 
             elapsed = time.monotonic() - t0
+            self.backend_timings_.setdefault(backend, {})["cv_s"] = float(elapsed)
             if (
                 self.timeout_per_backend is not None
                 and elapsed > self.timeout_per_backend
@@ -1345,18 +1441,24 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
 
             if self.enable_pareto_fusion and main_score > float("-inf"):
                 try:
+                    t_refit = time.monotonic()
                     fitted_reg = make()
                     fitted_reg.fit(X_valid, y_valid)
+                    refit_elapsed = time.monotonic() - t_refit
                     fitted_estimators[backend] = fitted_reg
+                    self.backend_timings_.setdefault(backend, {})["refit_s"] = float(refit_elapsed)
                     _admit_full_fit(
                         self.master_archive_, fitted_reg, backend, per_key,
                         n_splits=cv_splitter.get_n_splits(),
+                        candidate_pool=self.all_harvested_candidates_,
                     )
                 except Exception as exc:  # noqa: BLE001
                     warnings.warn(
                         f"AutoScoredRuleSetRegressor: failed to harvest model from '{backend}': {exc}",
                         UserWarning,
                     )
+
+        self.fitted_estimators_ = fitted_estimators
 
         if best_backend is None:
             raise RuntimeError(

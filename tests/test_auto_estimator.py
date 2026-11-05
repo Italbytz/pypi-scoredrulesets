@@ -848,4 +848,43 @@ class TestHVContributionProbing:
         preds = reg.predict(X)
         assert len(preds) == len(y)
 
+    def test_master_archive_json_roundtrip_and_canonical_trees(self, iris_data, tmp_path):
+        """Test JSON round-trip of MasterParetoArchive and canonical tree node metadata."""
+        from scoredrulesets.io import dump_archive_json, load_archive_json
+        from scoredrulesets.runtime import predict as predict_from_ruleset
+
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto"],
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+
+        arch_path = tmp_path / "archive.json"
+        dump_archive_json(clf.master_archive_, arch_path)
+        loaded_arch = load_archive_json(arch_path)
+
+        assert len(loaded_arch.candidates_) == len(clf.master_archive_.candidates_)
+        for pref in ("compact", "balanced", "performance", "expressive", "accuracy"):
+            orig_c = clf.master_archive_.select_candidate(pref)
+            load_c = loaded_arch.select_candidate(pref)
+            assert orig_c.atoms == load_c.atoms
+            assert orig_c.effective_nodes == load_c.effective_nodes
+            assert abs(orig_c.score - load_c.score) < 1e-9
+            np.testing.assert_array_equal(
+                predict_from_ruleset(orig_c.ruleset, X),
+                predict_from_ruleset(load_c.ruleset, X),
+            )
+
+        # Verify CART candidates carry canonical tree metadata (tree_n_splits <= atoms)
+        cart_cands = [c for c in clf.all_harvested_candidates_ if c.backend == "cart"]
+        assert len(cart_cands) >= 1
+        for cc in cart_cands:
+            assert "tree_n_splits" in cc.ruleset.metadata
+            assert "canonical_tree" in cc.ruleset.metadata
+            assert cc.effective_nodes == cc.ruleset.metadata["tree_n_splits"]
+            assert cc.effective_nodes <= cc.atoms
+
+
 
