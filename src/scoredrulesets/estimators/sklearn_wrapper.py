@@ -766,7 +766,7 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 self.estimator_ = GreedyParetoRegressor(**params)
                 self.estimator_.fit(X_valid, y_valid, feature_names=self.feature_names_in_)
                 self.ruleset_ = self.estimator_.to_ruleset()
-            elif backend_key in {"greedy_cascaded", "greedy_cascaded_native", "greedycascaded", "greedy_reg"}:
+            elif backend_key in {"greedy_cascaded", "greedy_cascaded_native", "greedycascaded", "greedy_reg", "greedy_residual", "greedyresidual", "residual_greedy"}:
                 from .greedy_pareto import GreedyCascadedRegressor
                 params = dict(self.backend_params or {})
                 params.setdefault("random_state", self.random_state)
@@ -801,7 +801,7 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
             else:
                 raise ValueError(
                     f"ScoredRuleSetRegressor unsupported backend '{self.backend}'. "
-                    "Supported: 'cart', 'greedy_cascaded', 'greedy_pareto', 'cascaded_rulegp', "
+                    "Supported: 'cart', 'greedy_cascaded', 'greedy_residual', 'greedy_pareto', 'cascaded_rulegp', "
                     "'rulegp', 'rulensga2', 'ruleplcs', 'projection_rulegp', 'projection_rulensga2'."
                 )
 
