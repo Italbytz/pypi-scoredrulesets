@@ -46,3 +46,29 @@ def load_archive_json(path: str | Path):
     return MasterParetoArchive.from_dict(payload)
 
 
+def dump_archive_zip(
+    archive: object,
+    path: str | Path,
+    *,
+    include_candidate_pool: bool = True,
+    include_markdown_reports: bool = True,
+) -> Path:
+    """Serialize a MasterParetoArchive to a structured ZIP archive bundle (.zip)."""
+    save_zip = getattr(archive, "save_zip", None)
+    if save_zip is None:
+        raise TypeError("Expected an archive object exposing save_zip().")
+    return save_zip(
+        path,
+        include_candidate_pool=include_candidate_pool,
+        include_markdown_reports=include_markdown_reports,
+    )
+
+
+def load_archive_zip(path: str | Path):
+    """Deserialize a MasterParetoArchive from a ZIP archive bundle (.zip)."""
+    from .estimators.auto import MasterParetoArchive
+
+    return MasterParetoArchive.load_zip(path)
+
+
+

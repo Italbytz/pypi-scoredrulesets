@@ -13,9 +13,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+import json
+from pathlib import Path
+import re
 import time
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Sequence
 import warnings
+import zipfile
 
 import numpy as np
 from sklearn.base import ClassifierMixin, RegressorMixin
@@ -273,19 +277,19 @@ def _admit_full_fit(
             "oof_folds": len(scores),
             "oof_std": float(np.std(scores)),
         }
+        atoms = sum(len(r.atoms) for r in rs.rules)
+        non_default_rules = len([r for r in rs.rules if r.atoms])
+        pool_cand = ParetoCandidate(
+            ruleset=rs,
+            score=mean_score,
+            atoms=atoms,
+            rules=non_default_rules,
+            backend=label,
+            metadata=dict(meta),
+        )
+        archive.candidate_pool_.append(pool_cand)
         if candidate_pool is not None:
-            atoms = sum(len(r.atoms) for r in rs.rules)
-            non_default_rules = len([r for r in rs.rules if r.atoms])
-            candidate_pool.append(
-                ParetoCandidate(
-                    ruleset=rs,
-                    score=mean_score,
-                    atoms=atoms,
-                    rules=non_default_rules,
-                    backend=label,
-                    metadata=dict(meta),
-                )
-            )
+            candidate_pool.append(pool_cand)
         if archive.add(
             rs,
             mean_score,
@@ -356,10 +360,22 @@ class ParetoCandidate:
 class MasterParetoArchive:
     """Maintains a non-dominated Pareto front over complexity (atoms) and performance."""
 
-    def __init__(self, higher_is_better: bool = True, compact_tolerance: float = 0.02):
+    def __init__(
+        self,
+        higher_is_better: bool = True,
+        compact_tolerance: float = 0.02,
+        metric_name: str = "Validation Score",
+        *,
+        candidates_: list[ParetoCandidate] | None = None,
+        candidate_pool_: list[ParetoCandidate] | None = None,
+        metadata_: dict[str, Any] | None = None,
+    ):
         self.higher_is_better = higher_is_better
         self.compact_tolerance = float(compact_tolerance)
-        self.candidates_: list[ParetoCandidate] = []
+        self.metric_name = str(metric_name)
+        self.candidates_: list[ParetoCandidate] = list(candidates_) if candidates_ else []
+        self.candidate_pool_: list[ParetoCandidate] = list(candidate_pool_) if candidate_pool_ else []
+        self.metadata_: dict[str, Any] = dict(metadata_) if metadata_ else {}
 
     def _dominates(self, a_atoms: int, a_score: float, b_atoms: int, b_score: float) -> bool:
         """Return True if candidate A strictly dominates candidate B."""
@@ -434,13 +450,18 @@ class MasterParetoArchive:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the Master Pareto Archive to a JSON-compatible dictionary."""
-        return {
+        payload: dict[str, Any] = {
             "format": "master_pareto_archive",
-            "version": "1.0",
+            "version": "1.1",
             "higher_is_better": bool(self.higher_is_better),
             "compact_tolerance": float(self.compact_tolerance),
+            "metric_name": str(self.metric_name),
+            "metadata": dict(self.metadata_),
             "candidates": [c.to_dict() for c in self.candidates_],
         }
+        if self.candidate_pool_:
+            payload["candidate_pool"] = [c.to_dict() for c in self.candidate_pool_]
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "MasterParetoArchive":
@@ -448,20 +469,331 @@ class MasterParetoArchive:
         arch = cls(
             higher_is_better=bool(payload.get("higher_is_better", True)),
             compact_tolerance=float(payload.get("compact_tolerance", 0.02)),
+            metric_name=str(payload.get("metric_name", "Validation Score")),
+            metadata_=dict(payload.get("metadata", {})),
         )
         arch.candidates_ = [
             ParetoCandidate.from_dict(c) for c in payload.get("candidates", [])
         ]
+        arch.candidate_pool_ = [
+            ParetoCandidate.from_dict(c) for c in payload.get("candidate_pool", [])
+        ]
         return arch
+
+    def get_profile_summary(
+        self,
+        profiles: Sequence[str] = ("compact", "balanced", "performance", "expressive", "accuracy"),
+    ) -> dict[str, dict[str, Any]]:
+        """Return a dictionary summarizing the candidate selected by each operational profile."""
+        if not self.candidates_:
+            return {}
+        summary: dict[str, dict[str, Any]] = {}
+        for prof in profiles:
+            cand = self.select_candidate(preference=prof)
+            idx = next(
+                (i for i, c in enumerate(self.candidates_) if c is cand or (c.atoms == cand.atoms and abs(c.score - cand.score) < 1e-12)),
+                0,
+            )
+            summary[prof] = {
+                "candidate_index": idx,
+                "atoms": int(cand.atoms),
+                "effective_nodes": int(cand.effective_nodes),
+                "rules": int(cand.rules),
+                "score": float(cand.score),
+                "backend": str(cand.backend),
+            }
+        return summary
+
+    def format_markdown_summary(self) -> str:
+        """Render a human-readable Markdown summary of the Master Pareto Archive and its profile menu."""
+        lines = [
+            "# Master Pareto Archive Summary",
+            "",
+            f"- **Metric:** `{self.metric_name}` ({'higher is better' if self.higher_is_better else 'lower is better'})",
+            f"- **Compact tolerance:** `{self.compact_tolerance}`",
+            f"- **Non-dominated Pareto candidates:** `{len(self.candidates_)}`",
+            f"- **Total harvested pool candidates:** `{len(self.candidate_pool_)}`",
+            "",
+            "## Post-Hoc Operational Profile Menu",
+            "",
+            "| Profile | Candidate # | Backend | Score | Path Atoms ($A$) | Split Nodes ($N_{\\text{split}}$) | Rules ($K$) |",
+            "| :--- | ---: | :--- | ---: | ---: | ---: | ---: |",
+        ]
+        prof_summary = self.get_profile_summary()
+        for prof, info in prof_summary.items():
+            lines.append(
+                f"| `{prof}` | {info['candidate_index']} | `{info['backend']}` | "
+                f"{info['score']:.4f} | {info['atoms']} | {info['effective_nodes']} | {info['rules']} |"
+            )
+        lines.extend([
+            "",
+            "## Non-Dominated Master Pareto Frontier",
+            "",
+            "| # | Backend | Score | Path Atoms ($A$) | Split Nodes ($N_{\\text{split}}$) | Rules ($K$) |",
+            "| ---: | :--- | ---: | ---: | ---: | ---: |",
+        ])
+        for idx, c in enumerate(self.candidates_):
+            lines.append(
+                f"| {idx} | `{c.backend}` | {c.score:.4f} | {c.atoms} | {c.effective_nodes} | {c.rules} |"
+            )
+        return "\n".join(lines) + "\n"
+
+    def save_zip(
+        self,
+        path: str | Path,
+        *,
+        include_candidate_pool: bool = True,
+        include_markdown_reports: bool = True,
+    ) -> Path:
+        """Save the entire MasterParetoArchive as a self-contained ZIP bundle.
+
+        The ZIP bundle contains:
+        - ``manifest.json``: Archive metadata, profile selections, and candidate descriptors.
+        - ``candidates/candidate_XXX_<backend>_a<atoms>_r<rules>.json``: Individual
+          JSON rule sets compatible with ``load_ruleset_json``.
+        - ``candidates/candidate_XXX_<backend>_a<atoms>_r<rules>.md``: Human-readable
+          Markdown index cards for each non-dominated rule set.
+        - ``candidate_pool.json``: All harvested per-backend candidates (when available)
+          so per-backend sub-fronts can be plotted post-hoc.
+        - ``archive.json``: Complete single-file JSON representation.
+        - ``SUMMARY.md``: Markdown report of the frontier and operational profiles.
+        """
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        task_type = (
+            self.candidates_[0].ruleset.task_type
+            if self.candidates_
+            else (self.candidate_pool_[0].ruleset.task_type if self.candidate_pool_ else "classification")
+        )
+
+        candidate_entries: list[dict[str, Any]] = []
+        with zipfile.ZipFile(target, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for idx, cand in enumerate(self.candidates_):
+                safe_backend = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(cand.backend)).strip("_") or "backend"
+                stem = f"candidates/candidate_{idx:03d}_{safe_backend}_a{cand.atoms}_r{cand.rules}"
+                rs_json_file = f"{stem}.json"
+                rs_md_file = f"{stem}.md"
+
+                zf.writestr(rs_json_file, json.dumps(cand.ruleset.to_dict(), indent=2))
+                if include_markdown_reports:
+                    try:
+                        zf.writestr(rs_md_file, format_ruleset_markdown(cand.ruleset))
+                    except Exception:
+                        pass
+
+                c_dict = cand.to_dict()
+                candidate_entries.append({
+                    "index": idx,
+                    "ruleset_file": rs_json_file,
+                    "markdown_file": rs_md_file if include_markdown_reports else None,
+                    "score": c_dict["score"],
+                    "atoms": c_dict["atoms"],
+                    "effective_nodes": c_dict["effective_nodes"],
+                    "rules": c_dict["rules"],
+                    "backend": c_dict["backend"],
+                    "metadata": c_dict["metadata"],
+                })
+
+            manifest = {
+                "format": "master_pareto_archive_zip",
+                "version": "1.1",
+                "task_type": task_type,
+                "higher_is_better": bool(self.higher_is_better),
+                "compact_tolerance": float(self.compact_tolerance),
+                "metric_name": str(self.metric_name),
+                "metadata": dict(self.metadata_),
+                "n_candidates": len(self.candidates_),
+                "n_pool_candidates": len(self.candidate_pool_),
+                "profiles": self.get_profile_summary(),
+                "candidates": candidate_entries,
+            }
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+            zf.writestr("archive.json", json.dumps(self.to_dict(), indent=2))
+            if include_candidate_pool and self.candidate_pool_:
+                zf.writestr(
+                    "candidate_pool.json",
+                    json.dumps([c.to_dict() for c in self.candidate_pool_], indent=2),
+                )
+            if include_markdown_reports:
+                zf.writestr("SUMMARY.md", self.format_markdown_summary())
+
+        return target
+
+    @classmethod
+    def load_zip(cls, path: str | Path) -> "MasterParetoArchive":
+        """Load a MasterParetoArchive from a ZIP bundle created by ``save_zip()``."""
+        source = Path(path)
+        with zipfile.ZipFile(source, mode="r") as zf:
+            names = set(zf.namelist())
+            if "manifest.json" in names:
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                if manifest.get("format") not in ("master_pareto_archive_zip", "master_pareto_archive"):
+                    raise ValueError(
+                        f"Unsupported archive format in manifest.json: {manifest.get('format')!r}"
+                    )
+                arch = cls(
+                    higher_is_better=bool(manifest.get("higher_is_better", True)),
+                    compact_tolerance=float(manifest.get("compact_tolerance", 0.02)),
+                    metric_name=str(manifest.get("metric_name", "Validation Score")),
+                    metadata_=dict(manifest.get("metadata", {})),
+                )
+                candidates: list[ParetoCandidate] = []
+                for entry in manifest.get("candidates", []):
+                    rs_file = entry.get("ruleset_file")
+                    if rs_file and rs_file in names:
+                        rs_payload = json.loads(zf.read(rs_file).decode("utf-8"))
+                    elif "ruleset" in entry:
+                        rs_payload = entry["ruleset"]
+                    else:
+                        raise ValueError(f"Missing ruleset file {rs_file!r} in archive ZIP.")
+                    cand_payload = {
+                        "ruleset": rs_payload,
+                        "score": entry["score"],
+                        "atoms": entry["atoms"],
+                        "rules": entry["rules"],
+                        "backend": entry["backend"],
+                        "metadata": entry.get("metadata", {}),
+                    }
+                    candidates.append(ParetoCandidate.from_dict(cand_payload))
+                arch.candidates_ = candidates
+                if "candidate_pool.json" in names:
+                    pool_list = json.loads(zf.read("candidate_pool.json").decode("utf-8"))
+                    arch.candidate_pool_ = [ParetoCandidate.from_dict(c) for c in pool_list]
+                return arch
+
+            if "archive.json" in names:
+                payload = json.loads(zf.read("archive.json").decode("utf-8"))
+                return cls.from_dict(payload)
+
+            raise ValueError(f"ZIP file {source} does not contain 'manifest.json' or 'archive.json'.")
+
+    def save(self, path: str | Path) -> Path:
+        """Save the archive to ``path`` (ZIP format by default, or JSON if path ends with ``.json``)."""
+        target = Path(path)
+        if target.suffix.lower() == ".json":
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+            return target
+        return self.save_zip(target)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "MasterParetoArchive":
+        """Load a MasterParetoArchive from a ``.zip`` bundle or ``.json`` file."""
+        source = Path(path)
+        if zipfile.is_zipfile(source):
+            return cls.load_zip(source)
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        return cls.from_dict(payload)
 
     def select(
         self,
         preference: str = "balanced",
         max_rules: int | None = None,
         max_atoms: int | None = None,
+        *,
+        max_effective_nodes: int | None = None,
+        target_atoms: int | None = None,
+        target_rules: int | None = None,
+        target_effective_nodes: int | None = None,
+        exact_size: bool = False,
     ) -> ScoredRuleSet:
-        """Select a single model from the archive according to user intent."""
-        return self.select_candidate(preference, max_rules=max_rules, max_atoms=max_atoms).ruleset
+        """Select a single ScoredRuleSet from the archive according to user intent or target size."""
+        return self.select_candidate(
+            preference=preference,
+            max_rules=max_rules,
+            max_atoms=max_atoms,
+            max_effective_nodes=max_effective_nodes,
+            target_atoms=target_atoms,
+            target_rules=target_rules,
+            target_effective_nodes=target_effective_nodes,
+            exact_size=exact_size,
+        ).ruleset
+
+    def select_by_size(
+        self,
+        *,
+        atoms: int | None = None,
+        rules: int | None = None,
+        effective_nodes: int | None = None,
+        mode: Literal["closest", "max", "exact"] = "closest",
+        preference: str = "accuracy",
+        return_candidate: bool = False,
+    ) -> ScoredRuleSet | ParetoCandidate:
+        """Post-hoc model selection by fixed or bounded model size.
+
+        Parameters
+        ----------
+        atoms : int | None
+            Desired path-expanded atom count $A(c)$.
+        rules : int | None
+            Desired rule count $K(c)$.
+        effective_nodes : int | None
+            Desired effective split-node count $N_{\\text{split}}(c)$.
+        mode : {"closest", "max", "exact"}, default="closest"
+            - ``"closest"``: candidate minimizing absolute distance to the requested size
+              (ties broken by best score, then smallest complexity).
+            - ``"max"``: candidate selected by ``preference`` (default ``"accuracy"``)
+              among all candidates whose complexity does not exceed the requested size budget(s).
+            - ``"exact"``: highest-scoring candidate matching the exact requested size(s);
+              raises ``ValueError`` if no candidate matches.
+        preference : str, default="accuracy"
+            Operational profile applied within the bounded subset when ``mode="max"``.
+        return_candidate : bool, default=False
+            If True, returns the ``ParetoCandidate`` wrapper; otherwise returns the ``ScoredRuleSet``.
+        """
+        if atoms is None and rules is None and effective_nodes is None:
+            raise ValueError(
+                "At least one size parameter ('atoms', 'rules', or 'effective_nodes') must be specified."
+            )
+        if mode == "max":
+            cand = self.select_candidate(
+                preference=preference,
+                max_atoms=atoms,
+                max_rules=rules,
+                max_effective_nodes=effective_nodes,
+            )
+        elif mode == "exact":
+            cand = self.select_candidate(
+                target_atoms=atoms,
+                target_rules=rules,
+                target_effective_nodes=effective_nodes,
+                exact_size=True,
+            )
+        elif mode == "closest":
+            cand = self.select_candidate(
+                target_atoms=atoms,
+                target_rules=rules,
+                target_effective_nodes=effective_nodes,
+                exact_size=False,
+            )
+        else:
+            raise ValueError(f"Unsupported size selection mode {mode!r}; expected 'closest', 'max', or 'exact'.")
+        return cand if return_candidate else cand.ruleset
+
+    def predict(
+        self,
+        X: Any,
+        preference: str = "balanced",
+        **select_kwargs: Any,
+    ) -> np.ndarray:
+        """Run inference directly using a model selected post-hoc from the archive."""
+        rs = self.select(preference=preference, **select_kwargs)
+        X_arr = np.asarray(X)
+        if rs.task_type == "regression":
+            return predict_regression_from_ruleset(rs, X_arr)
+        return predict_from_ruleset(rs, X_arr)
+
+    def predict_proba(
+        self,
+        X: Any,
+        preference: str = "balanced",
+        **select_kwargs: Any,
+    ) -> np.ndarray:
+        """Run probability inference directly using a classification model selected post-hoc."""
+        rs = self.select(preference=preference, **select_kwargs)
+        if rs.task_type == "regression":
+            raise ValueError("predict_proba is not available for regression archives.")
+        return predict_proba_from_ruleset(rs, np.asarray(X))
 
     def _signed(self, score: float) -> float:
         return score if self.higher_is_better else -score
@@ -534,17 +866,27 @@ class MasterParetoArchive:
         preference: str = "balanced",
         max_rules: int | None = None,
         max_atoms: int | None = None,
+        *,
+        max_effective_nodes: int | None = None,
+        target_atoms: int | None = None,
+        target_rules: int | None = None,
+        target_effective_nodes: int | None = None,
+        exact_size: bool = False,
     ) -> ParetoCandidate:
-        """Select a single archive candidate according to user intent.
+        """Select a single archive candidate according to user intent or size specification.
 
         - ``compact``: fewest atoms among candidates whose score lies within
           ``compact_tolerance`` of the best score, bounded above by ``balanced``
           to guarantee monotonicity (atoms(compact) <= atoms(balanced)).
+        - ``balanced``: knee point (maximal signed vertical gain above the chord).
+        - ``performance``: asymmetric 70/30 knee favoring predictive accuracy,
+          bounded below by ``balanced``.
+        - ``expressive``: fewest atoms within tight apex tolerance (0.005),
+          bounded below by ``balanced``.
         - ``accuracy`` / ``manual`` / ``best_single_cv``: highest score.
-        - ``balanced``: knee point, i.e. the candidate with maximal signed
-          distance above the chord between the two extreme front points in
-          min-max normalized (atoms, score) space.  Falls back to ``compact``
-          for fronts with fewer than three points or without a convex knee.
+        - Fixed / target size: if ``target_atoms``, ``target_rules``, or
+          ``target_effective_nodes`` is specified, selects the candidate matching
+          (or closest to) the requested size, breaking ties by highest score.
         """
         if not self.candidates_:
             raise RuntimeError("MasterParetoArchive is empty; no models available.")
@@ -554,16 +896,51 @@ class MasterParetoArchive:
             eligible = [c for c in eligible if c.rules <= max_rules]
         if max_atoms is not None:
             eligible = [c for c in eligible if c.atoms <= max_atoms]
+        if max_effective_nodes is not None:
+            eligible = [c for c in eligible if c.effective_nodes <= max_effective_nodes]
 
         if not eligible:
             warnings.warn(
-                f"No models satisfy constraints (max_rules={max_rules}, max_atoms={max_atoms}); "
-                f"falling back to unconstrained archive.",
+                f"No models satisfy constraints (max_rules={max_rules}, max_atoms={max_atoms}, "
+                f"max_effective_nodes={max_effective_nodes}); falling back to unconstrained archive.",
                 UserWarning,
             )
             eligible = list(self.candidates_)
 
         eligible = sorted(eligible, key=lambda c: (c.atoms, -self._signed(c.score)))
+
+        # Fixed / target size selection takes precedence when explicitly requested
+        if (
+            target_atoms is not None
+            or target_rules is not None
+            or target_effective_nodes is not None
+        ):
+            if exact_size:
+                exact_matches = [
+                    c for c in eligible
+                    if (target_atoms is None or c.atoms == target_atoms)
+                    and (target_rules is None or c.rules == target_rules)
+                    and (target_effective_nodes is None or c.effective_nodes == target_effective_nodes)
+                ]
+                if not exact_matches:
+                    raise ValueError(
+                        f"No candidate in MasterParetoArchive matches exact size "
+                        f"(target_atoms={target_atoms}, target_rules={target_rules}, "
+                        f"target_effective_nodes={target_effective_nodes})."
+                    )
+                return max(exact_matches, key=lambda c: (self._signed(c.score), -c.atoms))
+
+            def _size_dist_key(c: ParetoCandidate) -> tuple[float, float, int]:
+                dist = 0.0
+                if target_atoms is not None:
+                    dist += abs(c.atoms - target_atoms)
+                if target_rules is not None:
+                    dist += abs(c.rules - target_rules)
+                if target_effective_nodes is not None:
+                    dist += abs(c.effective_nodes - target_effective_nodes)
+                return (dist, -self._signed(c.score), c.atoms)
+
+            return min(eligible, key=_size_dist_key)
 
         if preference == "compact":
             cand = self._select_compact(eligible)
@@ -591,22 +968,51 @@ class MasterParetoArchive:
             return acc
         return bal
 
+    @staticmethod
+    def _candidate_complexity(
+        c: ParetoCandidate,
+        complexity_metric: Literal["atoms", "effective_nodes", "rules"],
+    ) -> int:
+        if complexity_metric == "effective_nodes":
+            return int(c.effective_nodes)
+        if complexity_metric == "rules":
+            return int(c.rules)
+        return int(c.atoms)
+
     def plot_pareto_front(
         self,
-        output_path: str | None = None,
+        output_path: str | Path | None = None,
         title: str = "Master Pareto Frontier",
-        metric_name: str = "Validation Score",
+        metric_name: str | None = None,
+        *,
+        complexity_metric: Literal["atoms", "effective_nodes", "rules"] = "atoms",
+        profiles: Sequence[str] = ("compact", "balanced", "performance", "expressive", "accuracy"),
+        show_backend_fronts: bool = True,
+        highlight_size: int | None = None,
+        ax: Any | None = None,
     ):
-        """Plot the non-dominated Pareto front with intent highlights.
+        """Plot the non-dominated Pareto front with post-hoc intent and size highlights.
 
         Parameters
         ----------
-        output_path : str | None
+        output_path : str | Path | None
             If provided, saves the figure to this file (PDF, PNG, SVG).
         title : str
             Title of the plot.
-        metric_name : str
-            Y-axis label.
+        metric_name : str | None
+            Y-axis label (defaults to ``self.metric_name``).
+        complexity_metric : {"atoms", "effective_nodes", "rules"}, default="atoms"
+            Structural complexity axis to plot on the X-axis.
+        profiles : Sequence[str]
+            Operational intent profiles to highlight on the frontier.
+        show_backend_fronts : bool, default=True
+            If True and ``self.candidate_pool_`` is populated, plots per-backend
+            Pareto fronts as dashed step curves beneath the Master Pareto Envelope.
+        highlight_size : int | None, default=None
+            If provided, highlights the candidate closest to ``highlight_size`` on the
+            chosen ``complexity_metric`` axis.
+        ax : matplotlib.axes.Axes | None, default=None
+            Optional existing Axes to draw on.
 
         Returns
         -------
@@ -617,99 +1023,143 @@ class MasterParetoArchive:
         if not self.candidates_:
             raise RuntimeError("Cannot plot empty MasterParetoArchive.")
 
-        fig, ax = plt.subplots(figsize=(7, 4.5), dpi=150)
+        y_label = metric_name or self.metric_name or "Validation Score"
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(7.5, 4.6), dpi=150)
+        else:
+            fig = ax.figure
 
-        # Distinct backend colors
-        unique_backends = sorted(list({c.backend for c in self.candidates_}))
+        all_cands_for_colors = list(self.candidate_pool_) + list(self.candidates_)
+        unique_backends = sorted({c.backend for c in all_cands_for_colors})
         cmap = plt.get_cmap("tab10")
         color_map = {b: cmap(i % 10) for i, b in enumerate(unique_backends)}
 
-        # Plot all candidates by backend
+        # Optional per-backend sub-fronts from candidate_pool_
+        if show_backend_fronts and self.candidate_pool_:
+            for b in unique_backends:
+                b_pool = [c for c in self.candidate_pool_ if c.backend == b]
+                if not b_pool:
+                    continue
+                pts = sorted(
+                    [(self._candidate_complexity(c, complexity_metric), c.score) for c in b_pool],
+                    key=lambda p: (p[0], -self._signed(p[1])),
+                )
+                front: list[tuple[int, float]] = []
+                best_s = -float("inf")
+                for comp_val, sc_val in pts:
+                    signed_s = self._signed(sc_val)
+                    if signed_s > best_s:
+                        front.append((comp_val, sc_val))
+                        best_s = signed_s
+                if len(front) > 1:
+                    ax.step(
+                        [p[0] for p in front],
+                        [p[1] for p in front],
+                        where="post",
+                        color=color_map[b],
+                        linestyle=":",
+                        linewidth=1.3,
+                        alpha=0.65,
+                        zorder=2,
+                    )
+
+        # Plot all Master Pareto candidates by backend
         for b in unique_backends:
             b_cands = [c for c in self.candidates_ if c.backend == b]
+            if not b_cands:
+                continue
             ax.scatter(
-                [c.atoms for c in b_cands],
+                [self._candidate_complexity(c, complexity_metric) for c in b_cands],
                 [c.score for c in b_cands],
                 label=f"Backend: {b}",
                 color=color_map[b],
                 s=70,
-                alpha=0.85,
-                edgecolors="none",
-                zorder=3,
+                alpha=0.88,
+                edgecolors="white",
+                linewidths=0.6,
+                zorder=4,
             )
 
-        # Plot Pareto step curve
-        sorted_cands = sorted(self.candidates_, key=lambda c: c.atoms)
-        x_steps = [c.atoms for c in sorted_cands]
+        # Plot Master Pareto step envelope
+        sorted_cands = sorted(
+            self.candidates_,
+            key=lambda c: (self._candidate_complexity(c, complexity_metric), -self._signed(c.score)),
+        )
+        x_steps = [self._candidate_complexity(c, complexity_metric) for c in sorted_cands]
         y_steps = [c.score for c in sorted_cands]
         ax.step(
             x_steps,
             y_steps,
             where="post",
-            color="gray",
+            color="#222222",
             linestyle="--",
-            alpha=0.6,
-            zorder=2,
+            linewidth=1.8,
+            alpha=0.75,
+            zorder=3,
             label="Pareto Envelope",
         )
 
-        # Highlight Intent profiles
-        try:
-            compact_rs = self.select("compact")
-            c_cand = next(c for c in self.candidates_ if c.ruleset is compact_rs)
-            ax.scatter(
-                [c_cand.atoms],
-                [c_cand.score],
-                s=160,
-                facecolors="none",
-                edgecolors="blue",
-                linewidths=2,
-                label="Intent: compact",
-                zorder=4,
-            )
-        except Exception:
-            pass
+        profile_styles: dict[str, dict[str, Any]] = {
+            "compact":     {"color": "#1b9e77", "marker": "o", "size": 155, "short": "c"},
+            "balanced":    {"color": "#e41a1c", "marker": "s", "size": 195, "short": "b"},
+            "performance": {"color": "#1f77b4", "marker": "D", "size": 175, "short": "p"},
+            "expressive":  {"color": "#d95f02", "marker": "P", "size": 185, "short": "e"},
+            "accuracy":    {"color": "#7570b3", "marker": "^", "size": 175, "short": "a"},
+        }
 
-        try:
-            balanced_rs = self.select("balanced")
-            b_cand = next(c for c in self.candidates_ if c.ruleset is balanced_rs)
-            ax.scatter(
-                [b_cand.atoms],
-                [b_cand.score],
-                s=200,
-                facecolors="none",
-                edgecolors="crimson",
-                linewidths=2.5,
-                marker="s",
-                label="Intent: balanced (knee)",
-                zorder=4,
-            )
-        except Exception:
-            pass
+        for prof in profiles:
+            try:
+                p_cand = self.select_candidate(prof)
+                style = profile_styles.get(
+                    prof,
+                    {"color": "black", "marker": "o", "size": 160, "short": prof[:1]},
+                )
+                x_val = self._candidate_complexity(p_cand, complexity_metric)
+                ax.scatter(
+                    [x_val],
+                    [p_cand.score],
+                    s=style["size"],
+                    facecolors="none",
+                    edgecolors=style["color"],
+                    linewidths=2.1,
+                    marker=style["marker"],
+                    label=f"Intent: {prof} ({x_val})",
+                    zorder=5,
+                )
+            except Exception:
+                pass
 
-        try:
-            acc_rs = self.select("accuracy")
-            a_cand = next(c for c in self.candidates_ if c.ruleset is acc_rs)
-            ax.scatter(
-                [a_cand.atoms],
-                [a_cand.score],
-                s=160,
-                facecolors="none",
-                edgecolors="forestgreen",
-                linewidths=2,
-                marker="^",
-                label="Intent: accuracy",
-                zorder=4,
-            )
-        except Exception:
-            pass
+        if highlight_size is not None:
+            try:
+                size_kwargs: dict[str, Any] = {complexity_metric: int(highlight_size), "return_candidate": True}
+                s_cand = self.select_by_size(**size_kwargs)
+                assert isinstance(s_cand, ParetoCandidate)
+                sx = self._candidate_complexity(s_cand, complexity_metric)
+                ax.scatter(
+                    [sx],
+                    [s_cand.score],
+                    s=230,
+                    facecolors="none",
+                    edgecolors="#ff9900",
+                    linewidths=2.6,
+                    marker="*",
+                    label=f"Size target ({complexity_metric}={highlight_size} -> {sx})",
+                    zorder=6,
+                )
+            except Exception:
+                pass
 
-        ax.set_xlabel("Complexity (Total Atoms in Rule Set)", fontsize=10)
-        ax.set_ylabel(metric_name, fontsize=10)
+        x_labels = {
+            "atoms": "Complexity (Total Path Atoms $A$ in Rule Set)",
+            "effective_nodes": "Complexity (Effective Split Nodes $N_{\\mathrm{split}}$)",
+            "rules": "Complexity (Non-Default Rules $K$)",
+        }
+        ax.set_xlabel(x_labels.get(complexity_metric, "Complexity"), fontsize=10)
+        ax.set_ylabel(y_label, fontsize=10)
         ax.set_title(title, fontsize=11, fontweight="bold")
         ax.grid(True, linestyle=":", alpha=0.5)
         ax.legend(frameon=True, fontsize=8, loc="best")
-        plt.tight_layout()
+        fig.tight_layout()
 
         if output_path is not None:
             fig.savefig(output_path, bbox_inches="tight")
@@ -968,7 +1418,9 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         archive_metric = _archive_metric_from_scoring(self.scoring)
 
         self.master_archive_ = MasterParetoArchive(
-            higher_is_better=True, compact_tolerance=self.compact_tolerance
+            higher_is_better=True,
+            compact_tolerance=self.compact_tolerance,
+            metric_name=str(self.scoring or "Validation Score"),
         )
         self.all_harvested_candidates_: list[ParetoCandidate] = []
         self.backend_timings_: dict[str, dict[str, float]] = {}
@@ -1109,8 +1561,9 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         return self
 
     def _activate(self, candidate: ParetoCandidate) -> None:
+        self.active_candidate_ = candidate
         self.ruleset_ = candidate.ruleset
-        self.active_estimator_ = candidate.metadata.get("estimator", self.best_estimator_)
+        self.active_estimator_ = candidate.metadata.get("estimator", getattr(self, "best_estimator_", None))
         self.active_backend_ = candidate.backend
 
     def get_pareto_spectrum(self) -> list[dict[str, Any]]:
@@ -1118,17 +1571,73 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         check_is_fitted(self, ["master_archive_"])
         return self.master_archive_.get_spectrum()
 
-    def set_active_model(self, complexity: int):
-        """Switch active rule set to a specific complexity point on the Pareto front."""
+    def set_active_model(
+        self,
+        complexity: int | None = None,
+        *,
+        preference: str | None = None,
+        max_atoms: int | None = None,
+        max_rules: int | None = None,
+        max_effective_nodes: int | None = None,
+        target_atoms: int | None = None,
+        target_rules: int | None = None,
+        target_effective_nodes: int | None = None,
+        exact_size: bool = False,
+    ):
+        """Switch active rule set post-hoc by operational intent profile or model size."""
         check_is_fitted(self, ["master_archive_"])
         candidates = self.master_archive_.candidates_
         if not candidates:
             raise RuntimeError("No models available in Master Pareto Archive.")
 
-        # Find closest match by complexity
-        closest = min(candidates, key=lambda c: abs(c.atoms - complexity))
-        self._activate(closest)
+        if complexity is not None and target_atoms is None:
+            target_atoms = int(complexity)
+
+        chosen = self.master_archive_.select_candidate(
+            preference=preference or self.preference,
+            max_atoms=max_atoms,
+            max_rules=max_rules,
+            max_effective_nodes=max_effective_nodes,
+            target_atoms=target_atoms,
+            target_rules=target_rules,
+            target_effective_nodes=target_effective_nodes,
+            exact_size=exact_size,
+        )
+        self._activate(chosen)
         return self
+
+    def save_archive(self, path: str | Path) -> Path:
+        """Save the fitted MasterParetoArchive to a ZIP bundle (or JSON if ``.json``)."""
+        check_is_fitted(self, ["master_archive_"])
+        return self.master_archive_.save(path)
+
+    @classmethod
+    def from_archive(
+        cls,
+        archive_or_path: str | Path | MasterParetoArchive,
+        preference: str = "balanced",
+        **select_kwargs: Any,
+    ) -> "AutoScoredRuleSetClassifier":
+        """Instantiate a ready-to-predict classifier post-hoc from a saved MasterParetoArchive."""
+        archive = (
+            archive_or_path
+            if isinstance(archive_or_path, MasterParetoArchive)
+            else MasterParetoArchive.load(archive_or_path)
+        )
+        if not archive.candidates_:
+            raise ValueError("Cannot instantiate AutoScoredRuleSetClassifier from an empty archive.")
+        est = cls(preference=preference, compact_tolerance=archive.compact_tolerance)  # type: ignore[arg-type]
+        est.master_archive_ = archive
+        est.all_harvested_candidates_ = list(archive.candidate_pool_) or list(archive.candidates_)
+        chosen = archive.select_candidate(preference=preference, **select_kwargs)
+        est.best_estimator_ = None
+        est.best_backend_ = chosen.backend
+        est.best_score_ = chosen.score
+        est.classes_ = np.asarray(chosen.ruleset.class_labels)
+        est.feature_names_in_ = np.asarray(chosen.ruleset.feature_names) if chosen.ruleset.feature_names else None
+        est.n_features_in_ = len(chosen.ruleset.feature_names) if chosen.ruleset.feature_names else None
+        est._activate(chosen)
+        return est
 
     def export_index_card(self) -> str:
         """Export active model formatted as a human-simulatable index card."""
@@ -1154,12 +1663,12 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
         check_is_fitted(self, ["ruleset_"])
         return self.ruleset_
 
-    def plot_pareto_front(self, output_path: str | None = None, title: str | None = None):
+    def plot_pareto_front(self, output_path: str | Path | None = None, title: str | None = None, **kwargs: Any):
         """Plot the non-dominated Master Pareto front."""
         check_is_fitted(self, ["master_archive_"])
         t = title or f"{self.__class__.__name__} Master Pareto Frontier"
         metric = "Validation Score" if self.scoring is None else str(self.scoring)
-        return self.master_archive_.plot_pareto_front(output_path=output_path, title=t, metric_name=metric)
+        return self.master_archive_.plot_pareto_front(output_path=output_path, title=t, metric_name=metric, **kwargs)
 
 
 class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
@@ -1387,7 +1896,9 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         scorer = get_scorer(self.scoring)
 
         self.master_archive_ = MasterParetoArchive(
-            higher_is_better=True, compact_tolerance=self.compact_tolerance
+            higher_is_better=True,
+            compact_tolerance=self.compact_tolerance,
+            metric_name=str(self.scoring or "Validation Score"),
         )
         self.all_harvested_candidates_: list[ParetoCandidate] = []
         self.backend_timings_: dict[str, dict[str, float]] = {}
@@ -1496,10 +2007,12 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 max_rules=self.max_rules,
                 max_atoms=self.max_atoms,
             )
+            self.active_candidate_ = chosen
             self.ruleset_ = chosen.ruleset
             self.active_estimator_ = chosen.metadata.get("estimator", winner)
             self.active_backend_ = chosen.backend
         else:
+            self.active_candidate_ = None
             self.ruleset_ = winner.ruleset_
             self.active_estimator_ = winner
             self.active_backend_ = best_backend
@@ -1510,17 +2023,78 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         check_is_fitted(self, ["master_archive_"])
         return self.master_archive_.get_spectrum()
 
-    def set_active_model(self, complexity: int):
+    def set_active_model(
+        self,
+        complexity: int | None = None,
+        *,
+        preference: str | None = None,
+        max_atoms: int | None = None,
+        max_rules: int | None = None,
+        max_effective_nodes: int | None = None,
+        target_atoms: int | None = None,
+        target_rules: int | None = None,
+        target_effective_nodes: int | None = None,
+        exact_size: bool = False,
+    ):
+        """Switch active regression rule set post-hoc by operational intent profile or model size."""
         check_is_fitted(self, ["master_archive_"])
         candidates = self.master_archive_.candidates_
         if not candidates:
             raise RuntimeError("No models available in Master Pareto Archive.")
-        closest = min(candidates, key=lambda c: abs(c.atoms - complexity))
-        self.ruleset_ = closest.ruleset
-        self.active_estimator_ = closest.metadata.get(
-            "estimator", self.best_estimator_)
-        self.active_backend_ = closest.backend
+        if complexity is not None and target_atoms is None:
+            target_atoms = int(complexity)
+        chosen = self.master_archive_.select_candidate(
+            preference=preference or self.preference,
+            max_atoms=max_atoms,
+            max_rules=max_rules,
+            max_effective_nodes=max_effective_nodes,
+            target_atoms=target_atoms,
+            target_rules=target_rules,
+            target_effective_nodes=target_effective_nodes,
+            exact_size=exact_size,
+        )
+        self.active_candidate_ = chosen
+        self.ruleset_ = chosen.ruleset
+        self.active_estimator_ = chosen.metadata.get(
+            "estimator", getattr(self, "best_estimator_", None)
+        )
+        self.active_backend_ = chosen.backend
         return self
+
+    def save_archive(self, path: str | Path) -> Path:
+        """Save the fitted MasterParetoArchive to a ZIP bundle (or JSON if ``.json``)."""
+        check_is_fitted(self, ["master_archive_"])
+        return self.master_archive_.save(path)
+
+    @classmethod
+    def from_archive(
+        cls,
+        archive_or_path: str | Path | MasterParetoArchive,
+        preference: str = "balanced",
+        **select_kwargs: Any,
+    ) -> "AutoScoredRuleSetRegressor":
+        """Instantiate a ready-to-predict regressor post-hoc from a saved MasterParetoArchive."""
+        archive = (
+            archive_or_path
+            if isinstance(archive_or_path, MasterParetoArchive)
+            else MasterParetoArchive.load(archive_or_path)
+        )
+        if not archive.candidates_:
+            raise ValueError("Cannot instantiate AutoScoredRuleSetRegressor from an empty archive.")
+        reg = cls(preference=preference, compact_tolerance=archive.compact_tolerance)  # type: ignore[arg-type]
+        reg.master_archive_ = archive
+        reg.all_harvested_candidates_ = list(archive.candidate_pool_) or list(archive.candidates_)
+        chosen = archive.select_candidate(preference=preference, **select_kwargs)
+        reg.best_estimator_ = None
+        reg.best_backend_ = chosen.backend
+        reg.best_score_ = chosen.score
+        reg.active_candidate_ = chosen
+        reg.ruleset_ = chosen.ruleset
+        reg.active_estimator_ = None
+        reg.active_backend_ = chosen.backend
+        reg.feature_names_in_ = np.asarray(chosen.ruleset.feature_names) if chosen.ruleset.feature_names else None
+        reg.n_features_in_ = len(chosen.ruleset.feature_names) if chosen.ruleset.feature_names else None
+        return reg
 
     def export_index_card(self) -> str:
         check_is_fitted(self, ["ruleset_"])
@@ -1540,9 +2114,9 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         check_is_fitted(self, ["ruleset_"])
         return self.ruleset_
 
-    def plot_pareto_front(self, output_path: str | None = None, title: str | None = None):
+    def plot_pareto_front(self, output_path: str | Path | None = None, title: str | None = None, **kwargs: Any):
         """Plot the non-dominated Master Pareto front."""
         check_is_fitted(self, ["master_archive_"])
         t = title or f"{self.__class__.__name__} Master Pareto Frontier"
         metric = "Validation Score" if self.scoring is None else str(self.scoring)
-        return self.master_archive_.plot_pareto_front(output_path=output_path, title=t, metric_name=metric)
+        return self.master_archive_.plot_pareto_front(output_path=output_path, title=t, metric_name=metric, **kwargs)

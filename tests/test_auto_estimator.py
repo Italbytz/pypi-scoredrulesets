@@ -879,12 +879,84 @@ class TestHVContributionProbing:
 
         # Verify CART candidates carry canonical tree metadata (tree_n_splits <= atoms)
         cart_cands = [c for c in clf.all_harvested_candidates_ if c.backend == "cart"]
-        assert len(cart_cands) >= 1
+        assert len(cart_cands >= 1) if isinstance(cart_cands, int) else len(cart_cands) >= 1
         for cc in cart_cands:
             assert "tree_n_splits" in cc.ruleset.metadata
             assert "canonical_tree" in cc.ruleset.metadata
             assert cc.effective_nodes == cc.ruleset.metadata["tree_n_splits"]
             assert cc.effective_nodes <= cc.atoms
+
+    def test_auto_estimator_zip_archive_post_hoc_selection_and_visualization(self, iris_data, tmp_path):
+        """End-to-end test of saving/loading MasterParetoArchive ZIP and post-hoc model selection."""
+        from sklearn.datasets import make_regression
+        from scoredrulesets import (
+            AutoScoredRuleSetRegressor,
+            MasterParetoArchive,
+            load_archive_zip,
+        )
+
+        X, y = iris_data
+        clf = AutoScoredRuleSetClassifier(
+            candidate_backends=["cart", "greedy_pareto"],
+            cv=2,
+            random_state=42,
+        )
+        clf.fit(X, y)
+
+        zip_path = tmp_path / "iris_master_archive.zip"
+        saved = clf.save_archive(zip_path)
+        assert saved == zip_path
+        assert zip_path.exists()
+
+        # Load archive directly and verify candidate_pool_ was preserved
+        arch = load_archive_zip(zip_path)
+        assert isinstance(arch, MasterParetoArchive)
+        assert len(arch.candidates_) == len(clf.master_archive_.candidates_)
+        assert len(arch.candidate_pool_) == len(clf.all_harvested_candidates_)
+
+        # Reconstruct classifier post-hoc from the ZIP archive without re-fitting
+        post_clf = AutoScoredRuleSetClassifier.from_archive(zip_path, preference="compact")
+        assert post_clf.ruleset_ == arch.select("compact")
+        np.testing.assert_array_equal(post_clf.predict(X), arch.predict(X, preference="compact"))
+        np.testing.assert_allclose(post_clf.predict_proba(X), arch.predict_proba(X, preference="compact"))
+
+        # Switch active model post-hoc by strategy and by target/bounded model size
+        target_atoms = arch.candidates_[-1].atoms
+        post_clf.set_active_model(target_atoms=target_atoms, exact_size=True)
+        assert post_clf.active_candidate_.atoms == target_atoms
+
+        min_atoms = arch.candidates_[0].atoms
+        post_clf.set_active_model(preference="accuracy", max_atoms=min_atoms)
+        assert post_clf.active_candidate_.atoms <= min_atoms
+
+        # Post-hoc visualization from loaded archive
+        plot_file = tmp_path / "iris_pareto.png"
+        fig = arch.plot_pareto_front(
+            output_path=plot_file,
+            complexity_metric="effective_nodes",
+            show_backend_fronts=True,
+            highlight_size=arch.candidates_[0].effective_nodes,
+        )
+        assert fig is not None
+        assert plot_file.exists()
+
+        # Also verify regression archive ZIP round-trip and from_archive
+        X_reg, y_reg = make_regression(n_samples=45, n_features=4, noise=0.1, random_state=42)
+        reg = AutoScoredRuleSetRegressor(
+            candidate_backends=["cart", "greedy_cascaded"],
+            cv=2,
+            random_state=42,
+        )
+        reg.fit(X_reg, y_reg)
+        reg_zip = reg.save_archive(tmp_path / "reg_archive.zip")
+        post_reg = AutoScoredRuleSetRegressor.from_archive(reg_zip, preference="balanced")
+        preds_reg = post_reg.predict(X_reg)
+        assert preds_reg.shape == (len(y_reg),)
+        np.testing.assert_allclose(
+            preds_reg,
+            post_reg.master_archive_.predict(X_reg, preference="balanced"),
+        )
+
 
 
 

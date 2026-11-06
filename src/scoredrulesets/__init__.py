@@ -29,7 +29,12 @@ from .benchmarking import (
     run_benchmarks,
     summarize_cluster_approximation_runs,
 )
-from .estimators.auto import AutoScoredRuleSetClassifier
+from .estimators.auto import (
+    AutoScoredRuleSetClassifier,
+    AutoScoredRuleSetRegressor,
+    MasterParetoArchive,
+    ParetoCandidate,
+)
 from .estimators.cluster_wrapper import ScoredRuleSetClusterer
 from .estimators.exact_cpusat import ExactCPSATClassifier
 from .estimators.greedy_pareto import (
@@ -58,7 +63,16 @@ from .estimators.atom_selection import (
 from .estimators.sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 from .estimators._time_budget import FitBudgetExceededError
 from .formatting import format_ruleset_latex, format_ruleset_markdown, format_ruleset_table
-from .io import dump_ruleset_json, dump_ruleset_latex, dump_ruleset_markdown, load_ruleset_json
+from .io import (
+    dump_archive_json,
+    dump_archive_zip,
+    dump_ruleset_json,
+    dump_ruleset_latex,
+    dump_ruleset_markdown,
+    load_archive_json,
+    load_archive_zip,
+    load_ruleset_json,
+)
 from .preprocessing import BorutaSelector, build_feature_selector, build_preprocessing_pipeline
 from .runtime import predict_regression
 from .schema import AggregationSpec, Atom, Rule, ScoredRuleSet
@@ -71,6 +85,9 @@ __all__ = [
     "ScoredRuleSet",
     "AggregatedBenchmarkResult",
     "AutoScoredRuleSetClassifier",
+    "AutoScoredRuleSetRegressor",
+    "MasterParetoArchive",
+    "ParetoCandidate",
     "available_atom_selection_strategies",
     "ScoredRuleSetClusterer",
     "BenchmarkComparisonRow",
@@ -108,6 +125,8 @@ __all__ = [
     "build_feature_selector",
     "build_preprocessing_pipeline",
     "compare_benchmark_runs",
+    "dump_archive_json",
+    "dump_archive_zip",
     "dump_ruleset_json",
     "dump_ruleset_latex",
     "dump_ruleset_markdown",
@@ -126,6 +145,8 @@ __all__ = [
     "format_ruleset_table",
     "import_logicgp_json",
     "load_aggregated_results_json",
+    "load_archive_json",
+    "load_archive_zip",
     "load_ruleset_json",
     "plot_benchmark_heatmap",
     "plot_benchmark_heatmap_combined",
