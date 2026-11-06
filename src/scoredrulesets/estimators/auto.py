@@ -37,7 +37,7 @@ from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 
 _DEFAULT_CLASSIFIER_BACKENDS = ["greedy_pareto", "cart", "hs", "ruleplcs"]
-_DEFAULT_REGRESSOR_BACKENDS = ["greedy_residual", "greedy_pareto", "cart", "ruleplcs"]
+_DEFAULT_REGRESSOR_BACKENDS = ["greedy_residual", "cart", "hs", "ruleplcs"]
 
 # Architectural top-k sweep harvested for the neural backend when the user
 # does not pin ``max_atoms_per_rule`` explicitly.  Each k contributes its own
@@ -236,6 +236,7 @@ def _oof_evaluate_config(
     """
     main_scores: list[float] = []
     per_key: dict[tuple, list[float]] = defaultdict(list)
+    fold_ladders: list[dict[int, float]] = []
     for train_idx, val_idx in splitter.split(X, y):
         est = make_estimator()
         est.fit(X[train_idx], y[train_idx])
@@ -243,8 +244,16 @@ def _oof_evaluate_config(
         if main_scorer is not None:
             main_scores.append(float(main_scorer(est, X_val, y_val)))
         X_val_t = _transform_for_estimator(est, X_val)
+        ladder_f: dict[int, float] = {}
         for key, rs in _harvest_variants(est).items():
-            per_key[key].append(archive_metric(y_val, predict_fn(rs, X_val_t)))
+            sc = float(archive_metric(y_val, predict_fn(rs, X_val_t)))
+            per_key[key].append(sc)
+            if len(key) == 2 and key[0] == "front":
+                ladder_f[int(key[1])] = sc
+        if ladder_f:
+            fold_ladders.append(ladder_f)
+    if fold_ladders:
+        per_key[("__fold_ladders__",)] = fold_ladders  # type: ignore[assignment]
     main = float(np.mean(main_scores)) if main_scores else float("nan")
     return main, dict(per_key)
 
@@ -262,13 +271,53 @@ def _admit_full_fit(
 
     Complexity is taken from the full-data rule set (the one actually served);
     the score is the mean out-of-fold score of the same variant key.  Variants
-    observed in fewer than half of the folds are skipped as unreliable.
+    observed in fewer than half of the folds are skipped as unreliable.  When a
+    surviving front tier ``k`` was skipped in a subset of folds (e.g. a 2-atom
+    rule jumped from ``k-1`` to ``k+1``), those missing folds are evaluated via
+    monotone step interpolation on that fold's ladder (largest ``k' <= k``) so
+    every candidate is scored across the identical full set of CV folds.
     """
     min_folds = max(1, (n_splits + 1) // 2)
+    fold_ladders: list[dict[int, float]] = per_key.get(("__fold_ladders__",), [])  # type: ignore[assignment]
+    harvested = _harvest_variants(est_full)
+    max_front_key = max(
+        (int(k[1]) for k in harvested if len(k) == 2 and k[0] == "front"),
+        default=None,
+    )
+    stable_front_keys = [
+        int(k[1]) for k in harvested
+        if len(k) == 2 and k[0] == "front" and len(per_key.get(k, [])) >= min_folds
+    ]
     admitted = 0
-    for key, rs in _harvest_variants(est_full).items():
-        scores = per_key.get(key)
-        if not scores or len(scores) < min_folds:
+    for key, rs in harvested.items():
+        raw_scores = per_key.get(key)
+        is_sparse_terminal = (
+            label == "ruleplcs"
+            and len(key) == 2 and key[0] == "front"
+            and int(key[1]) == max_front_key
+            and bool(fold_ladders)
+            and max(stable_front_keys, default=0) < 16
+        )
+        if (not raw_scores or len(raw_scores) < min_folds) and not is_sparse_terminal:
+            continue
+        if len(key) == 2 and key[0] == "front" and fold_ladders and (
+            not raw_scores or len(raw_scores) < len(fold_ladders)
+        ):
+            target_k = int(key[1])
+            interp_scores: list[float] = []
+            for lad in fold_ladders:
+                if target_k in lad:
+                    interp_scores.append(lad[target_k])
+                else:
+                    le_keys = [ck for ck in lad if ck <= target_k]
+                    if le_keys:
+                        interp_scores.append(lad[max(le_keys)])
+                    elif lad:
+                        interp_scores.append(lad[min(lad.keys())])
+            scores = interp_scores if len(interp_scores) >= min_folds else (raw_scores or [])
+        else:
+            scores = raw_scores or []
+        if not scores:
             continue
         mean_score = float(np.mean(scores))
         meta = {

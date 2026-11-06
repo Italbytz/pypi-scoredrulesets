@@ -180,41 +180,48 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
         deadline = resolve_deadline(self.max_fit_seconds)
 
         feature_info = build_ruleplcs_feature_info(X_arr, low_cardinality_threshold=10, deadline=deadline)
+        self._feature_info_ = feature_info
         
         discovered_rules: list[_IndividualReg] = []
-        remaining_indices = np.arange(X_arr.shape[0])
+        rule_masks: list[np.ndarray] = []
         global_mean = float(np.mean(y_arr))
+        residuals = y_arr - global_mean
+        ridge_alpha = 1.0
 
-        # Iterative Rule Learning (Sequential Covering)
+        # Iterative Rule Learning on Residuals with Joint Ridge Calibration
         for rule_iter in range(self.max_rules):
-            if deadline_reached(deadline) or len(remaining_indices) < max(20, self.min_samples_split * 2):
+            if deadline_reached(deadline):
                 break
 
-            X_rem = X_arr[remaining_indices]
-            y_rem = y_arr[remaining_indices]
+            # Seed GA population preferentially around high-residual instances
+            abs_res = np.abs(residuals)
+            res_sum = float(np.sum(abs_res))
+            if res_sum > 1e-12:
+                seed_probs = abs_res / res_sum
+            else:
+                seed_probs = np.full(X_arr.shape[0], 1.0 / X_arr.shape[0])
 
-            # 1. Initialize GA population seeded around remaining instances
+            # 1. Initialize GA population
             pop: list[_IndividualReg] = []
             for _ in range(self.pop_size):
-                seed_idx = rng.choice(len(remaining_indices))
-                inst = X_rem[seed_idx]
+                seed_idx = int(rng.choice(X_arr.shape[0], p=seed_probs))
+                inst = X_arr[seed_idx]
                 ind = _init_individual_reg(rng, inst, feature_info)
-                _evaluate_reg_individual(ind, X_rem, y_rem, feature_info, self.mdl_weight, min_samples=self.min_samples_split)
+                _evaluate_reg_individual(ind, X_arr, residuals, feature_info, self.mdl_weight, min_samples=self.min_samples_split)
                 pop.append(ind)
 
-            # 2. Evolve one best rule
+            # 2. Evolve one best rule on current residuals
             for gen in range(self.num_generations):
                 if deadline_reached(deadline):
                     break
 
                 offspring: list[_IndividualReg] = []
                 for _ in range(self.pop_size):
-                    # Tournament
                     cand_pos = rng.choice(len(pop), size=min(self.tournament_size, len(pop)), replace=False)
                     p1 = min([pop[p] for p in cand_pos], key=lambda ind: ind.fitness)
-                    
+
                     child = _IndividualReg(predicates=[_clone_pred(p) for p in p1.predicates])
-                    
+
                     # Mutate child
                     if rng.random() < self.prob_mutation and len(child.predicates) > 0:
                         p_idx = rng.integers(0, len(child.predicates))
@@ -224,8 +231,8 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
                             shift = rng.uniform(-0.15, 0.15) * dom
                             pred.lo = max(feature_info[pred.feature_idx]["min"], pred.lo + shift)
                             pred.hi = min(feature_info[pred.feature_idx]["max"], pred.hi + shift)
-                    elif rng.random() < 0.2:
-                        if len(child.predicates) > 1 and rng.random() < 0.5:
+                    elif rng.random() < 0.25:
+                        if len(child.predicates) > 1 and rng.random() < 0.55:
                             child.predicates.pop(rng.integers(0, len(child.predicates)))
                         else:
                             fi = rng.integers(0, self.n_features_in_)
@@ -233,14 +240,14 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
                             if info["numeric"]:
                                 dom = info["max"] - info["min"]
                                 sz = rng.uniform(0.35, 0.85) * dom
-                                c = X_rem[rng.choice(len(X_rem)), fi]
+                                c = X_arr[int(rng.choice(X_arr.shape[0], p=seed_probs)), fi]
                                 child.predicates.append(_Predicate(
                                     feature_idx=fi, is_numeric=True,
                                     lo=max(info["min"], c - sz / 2),
                                     hi=min(info["max"], c + sz / 2),
                                 ))
-                    
-                    _evaluate_reg_individual(child, X_rem, y_rem, feature_info, self.mdl_weight, min_samples=self.min_samples_split)
+
+                    _evaluate_reg_individual(child, X_arr, residuals, feature_info, self.mdl_weight, min_samples=self.min_samples_split)
                     offspring.append(child)
 
                 combined = pop + offspring
@@ -251,56 +258,113 @@ class RulePLCSRegressor(BaseRuleSetEstimator, RegressorMixin):
             if best_rule.coverage_count < self.min_samples_split or best_rule.fitness >= 0.0:
                 break
 
-            # Compute exact weight over full training set
             full_mask = _matches_mask(best_rule, X_arr)
-            if full_mask.any():
-                best_rule.weight = float(np.mean(y_arr[full_mask]))
-            else:
-                best_rule.weight = global_mean
+            if not full_mask.any() or np.all(full_mask):
+                break
 
             discovered_rules.append(best_rule)
+            rule_masks.append(full_mask)
 
-            # Sequential covering update: remove instances explained well by this rule
-            rem_mask = _matches_mask(best_rule, X_rem)
-            covered_orig_indices = remaining_indices[rem_mask]
-            
-            # Remove covered indices
-            remaining_indices = np.setdiff1d(remaining_indices, covered_orig_indices)
+            # Update residuals via closed-form joint Ridge calibration across discovered rules
+            M_sub = np.column_stack(rule_masks).astype(float)
+            M_ext = np.column_stack([np.ones(X_arr.shape[0]), M_sub])
+            K_ext = M_ext.shape[1]
+            reg_mat = ridge_alpha * np.eye(K_ext)
+            reg_mat[0, 0] = 1e-8  # Do not regularize intercept
+            weights = np.linalg.solve(M_ext.T @ M_ext + reg_mat, M_ext.T @ y_arr)
+            residuals = y_arr - (M_ext @ weights)
 
         self.discovered_rules_ = discovered_rules
         self.default_weight_ = global_mean
-        self.ruleset_ = self._to_schema_ruleset()
+        self.pareto_archive_: dict[int, ScoredRuleSet] = {}
+        self.ruleset_ = self._build_prefix_archive_and_final_ruleset(X_arr, y_arr, rule_masks, ridge_alpha=ridge_alpha)
         return self
 
-    def _to_schema_ruleset(self) -> ScoredRuleSet:
+    def _build_ruleset_from_prefix(
+        self,
+        rules_prefix: list[_IndividualReg],
+        weights: list[float],
+        intercept: float,
+    ) -> ScoredRuleSet:
         schema_rules: list[Rule] = []
-
-        for idx, ind in enumerate(self.discovered_rules_):
+        for idx, (ind, w) in enumerate(zip(rules_prefix, weights)):
             schema_atoms: list[Atom] = []
             for p in ind.predicates:
                 feat_name = self.feature_names_in_[p.feature_idx]
                 if p.is_numeric:
-                    schema_atoms.append(Atom(feature=feat_name, op="between", value=[float(p.lo), float(p.hi)]))
+                    info = self._feature_info_[p.feature_idx] if hasattr(self, "_feature_info_") else None
+                    if info is not None and p.lo <= info["min"] + 1e-9 and p.hi < info["max"] - 1e-9:
+                        schema_atoms.append(Atom(feature=feat_name, op="<=", value=float(p.hi)))
+                    elif info is not None and p.hi >= info["max"] - 1e-9 and p.lo > info["min"] + 1e-9:
+                        schema_atoms.append(Atom(feature=feat_name, op=">", value=float(p.lo)))
+                    else:
+                        schema_atoms.append(Atom(feature=feat_name, op="between", value=[float(p.lo), float(p.hi)]))
                 else:
                     schema_atoms.append(Atom(feature=feat_name, op="in", value=list(p.allowed)))
             schema_rules.append(
-                Rule(atoms=schema_atoms, scores=[float(ind.weight)], rule_id=f"r_{idx}")
+                Rule(atoms=schema_atoms, scores=[float(w)], rule_id=f"r_{idx}")
             )
 
         schema_rules.append(
-            Rule(atoms=[], scores=[float(self.default_weight_)], rule_id="default_reg")
+            Rule(atoms=[], scores=[float(intercept)], rule_id="default_reg", metadata={"is_default": True})
         )
-
+        comp = sum(len(r.atoms) for r in schema_rules if r.atoms)
         ruleset = ScoredRuleSet(
             class_labels=[],
             task_type="regression",
             feature_names=list(self.feature_names_in_),
             rules=schema_rules,
-            aggregation=AggregationSpec(type="mean_active"),
-            metadata={"estimator": "RulePLCSRegressor", "rules_count": len(schema_rules)},
+            aggregation=AggregationSpec(type="default_plus_sum"),
+            metadata={
+                "estimator": "RulePLCSRegressor",
+                "rules_count": len(schema_rules),
+                "complexity_atoms": int(comp),
+            },
         )
         ruleset.validate()
         return ruleset
+
+    def _build_prefix_archive_and_final_ruleset(
+        self,
+        X_arr: np.ndarray,
+        y_arr: np.ndarray,
+        rule_masks: list[np.ndarray],
+        ridge_alpha: float = 1.0,
+    ) -> ScoredRuleSet:
+        n_samples = X_arr.shape[0]
+        if not self.discovered_rules_:
+            rs = self._build_ruleset_from_prefix([], [], self.default_weight_)
+            self.pareto_archive_[0] = rs
+            return rs
+
+        M_all = np.column_stack(rule_masks).astype(float)
+        final_rs: ScoredRuleSet | None = None
+        for k in range(1, len(self.discovered_rules_) + 1):
+            M_sub = M_all[:, :k]
+            M_ext = np.column_stack([np.ones(n_samples), M_sub])
+            K_ext = M_ext.shape[1]
+            reg_mat = ridge_alpha * np.eye(K_ext)
+            reg_mat[0, 0] = 1e-8
+            weights = np.linalg.solve(M_ext.T @ M_ext + reg_mat, M_ext.T @ y_arr)
+            w0 = float(weights[0])
+            rw = [float(w) for w in weights[1:]]
+            for idx, w in enumerate(rw):
+                self.discovered_rules_[idx].weight = w
+            self.default_weight_ = w0
+            rs_k = self._build_ruleset_from_prefix(self.discovered_rules_[:k], rw, w0)
+            comp = sum(len(r.atoms) for r in rs_k.rules if r.atoms)
+            self.pareto_archive_[comp] = rs_k
+            final_rs = rs_k
+
+        assert final_rs is not None
+        return final_rs
+
+    def _to_schema_ruleset(self) -> ScoredRuleSet:
+        return self._build_ruleset_from_prefix(
+            self.discovered_rules_,
+            [float(ind.weight) for ind in self.discovered_rules_],
+            self.default_weight_,
+        )
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")

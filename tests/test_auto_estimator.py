@@ -803,6 +803,13 @@ class TestHVContributionProbing:
         reg_cascaded.fit(X, y)
         assert len(reg_cascaded.predict(X)) == len(y)
 
+        reg_plcs = ScoredRuleSetRegressor(backend="ruleplcs", random_state=42)
+        reg_plcs.fit(X, y)
+        assert len(reg_plcs.predict(X)) == len(y)
+        assert reg_plcs.ruleset_.aggregation.type == "default_plus_sum"
+        assert isinstance(getattr(reg_plcs, "pareto_archive_", None), dict)
+        assert len(reg_plcs.pareto_archive_) >= 1
+
     def test_preference_best_single_cv_classifier(self, iris_data):
         """Test preference='best_single_cv' activates winner while preserving archive."""
         X, y = iris_data

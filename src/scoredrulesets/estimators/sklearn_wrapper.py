@@ -18,7 +18,7 @@ from ..runtime import predict_regression as predict_regression_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
 from ..preprocessing.feature_selection import build_feature_selector, get_selected_feature_names
 from ..preprocessing.pipeline import build_preprocessing_pipeline
-from .backends import build_backend_estimator
+from .backends import _resolve_hs_regressor_class, build_backend_estimator
 from .base import BaseRuleSetEstimator
 from .tree_transform import TreeTransformParams, estimator_to_scored_ruleset, serialize_canonical_tree
 
@@ -727,6 +727,18 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 )
                 self.pareto_archive_ = self._build_cart_pruning_archive(X_valid, y_valid)
                 self.estimator_.pareto_archive_ = self.pareto_archive_
+            elif backend_key == "hs":
+                hs_cls = _resolve_hs_regressor_class()
+                params = dict(self.backend_params or {})
+                params.setdefault("random_state", self.random_state)
+                self.estimator_ = hs_cls(**params)
+                self.estimator_.fit(X_valid, y_valid)
+                self.ruleset_ = _regressor_to_scored_ruleset(
+                    estimator=self.estimator_,
+                    feature_names=self.feature_names_in_,
+                )
+                self.pareto_archive_ = self._build_cart_pruning_archive(X_valid, y_valid)
+                self.estimator_.pareto_archive_ = self.pareto_archive_
             elif backend_key in {"rulegp", "rulegp_native"}:
                 from .rulegp_regressor import RuleGPRegressor
                 params = dict(self.backend_params or {})
@@ -801,7 +813,7 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
             else:
                 raise ValueError(
                     f"ScoredRuleSetRegressor unsupported backend '{self.backend}'. "
-                    "Supported: 'cart', 'greedy_cascaded', 'greedy_residual', 'greedy_pareto', 'cascaded_rulegp', "
+                    "Supported: 'cart', 'hs', 'greedy_cascaded', 'greedy_residual', 'greedy_pareto', 'cascaded_rulegp', "
                     "'rulegp', 'rulensga2', 'ruleplcs', 'projection_rulegp', 'projection_rulensga2'."
                 )
 
@@ -816,22 +828,36 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
         y: np.ndarray,
         max_variants: int = 12,
     ) -> dict[int, ScoredRuleSet]:
-        """Expose regression decision tree pruning path as a Pareto archive."""
+        """Expose regression decision tree (or HS tree) pruning path as a Pareto archive."""
         archive: dict[int, ScoredRuleSet] = {}
         full_atoms = sum(len(r.atoms) for r in self.ruleset_.rules)
         archive[full_atoms] = self.ruleset_
 
-        if not hasattr(self.estimator_, "cost_complexity_pruning_path"):
+        tree_est = getattr(self.estimator_, "estimator_", self.estimator_)
+        if not hasattr(tree_est, "cost_complexity_pruning_path"):
             return archive
 
         try:
-            path = self.estimator_.cost_complexity_pruning_path(X, y)
+            path = tree_est.cost_complexity_pruning_path(X, y)
             selected_alphas = _select_pruning_alphas(path.ccp_alphas, max_variants=max_variants)
 
             for alpha in selected_alphas:
-                sub_tree = clone(self.estimator_).set_params(ccp_alpha=alpha)
+                if self.backend.lower() == "hs":
+                    base_tree = clone(tree_est).set_params(ccp_alpha=alpha)
+                    reg_param = getattr(self.estimator_, "reg_param", 10.0)
+                    shrinkage_scheme = getattr(self.estimator_, "shrinkage_scheme_", "node_based")
+                    hs_cls = self.estimator_.__class__
+                    sub_tree = hs_cls(
+                        estimator_=base_tree,
+                        reg_param=reg_param,
+                        shrinkage_scheme_=shrinkage_scheme,
+                        random_state=self.random_state,
+                    )
+                else:
+                    sub_tree = clone(self.estimator_).set_params(ccp_alpha=alpha)
                 sub_tree.fit(X, y)
-                if getattr(sub_tree.tree_, "node_count", 0) <= 1:
+                inner_node_count = getattr(getattr(sub_tree, "estimator_", sub_tree).tree_, "node_count", 0)
+                if inner_node_count <= 1 or inner_node_count > 150:
                     continue
                 sub_rs = _regressor_to_scored_ruleset(
                     estimator=sub_tree,
@@ -843,7 +869,7 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                     sub_rs.metadata["complexity_atoms"] = comp
                     archive[comp] = sub_rs
         except Exception as e:
-            warnings.warn(f"CART regression pruning path extraction encountered an issue: {e}", UserWarning)
+            warnings.warn(f"Tree regression pruning path extraction encountered an issue: {e}", UserWarning)
 
         return archive
 

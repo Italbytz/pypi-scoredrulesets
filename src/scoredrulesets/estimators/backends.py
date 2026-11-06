@@ -294,6 +294,35 @@ def _resolve_hs_class():
     )
 
 
+def _resolve_hs_regressor_class():
+    candidate_locations = [
+        ("imodels", "HSTreeRegressor"),
+        ("imodels", "HSTreeRegressorCV"),
+        ("imodels.tree.hierarchical_shrinkage", "HSTreeRegressor"),
+        ("imodels.tree.hierarchical_shrinkage", "HSTreeRegressorCV"),
+    ]
+
+    tried: list[str] = []
+    for module_name, class_name in candidate_locations:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            tried.append(f"{module_name}.{class_name}")
+            continue
+
+        cls = getattr(module, class_name, None)
+        if cls is not None:
+            return cls
+        tried.append(f"{module_name}.{class_name}")
+
+    raise ImportError(
+        "backend='hs' requires an imodels HSTreeRegressor class, but none could be found. "
+        "Install/update with: pip install -e '.[hs]'. "
+        "Checked: "
+        + ", ".join(tried)
+    )
+
+
 def _resolve_rulekit_class():
     """
     Try to load the RuleKit class.
