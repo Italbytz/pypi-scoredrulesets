@@ -244,7 +244,7 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return ExactCPSATClassifier(**params)
 
-    if backend_key in ("greedy_pareto", "greedypareto"):
+    if backend_key in ("greedy", "greedy_pareto", "greedypareto"):
         from .greedy_pareto import GreedyParetoClassifier
         if random_state is not None:
             params.setdefault("random_state", random_state)
@@ -260,7 +260,7 @@ def build_backend_estimator(
         f"Unknown backend '{backend}'. Supported backends: "
         f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', "
         f"'ruleplcs', 'rulenln', 'rulensga2', 'rulegp', 'exact', "
-        f"'greedy_pareto', 'greedy_cascaded', 'greedy_residual'."
+        f"'greedy', 'greedy_pareto', 'greedy_cascaded', 'greedy_residual'."
     )
 
 

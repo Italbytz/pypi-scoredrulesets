@@ -36,8 +36,8 @@ from .base import BaseRuleSetEstimator
 from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 
-_DEFAULT_CLASSIFIER_BACKENDS = ["greedy_pareto", "cart", "hs", "ruleplcs"]
-_DEFAULT_REGRESSOR_BACKENDS = ["greedy_residual", "cart", "hs", "ruleplcs"]
+_DEFAULT_CLASSIFIER_BACKENDS = ["greedy", "cart", "hs", "ruleplcs"]
+_DEFAULT_REGRESSOR_BACKENDS = ["greedy", "cart", "hs", "ruleplcs"]
 
 # Architectural top-k sweep harvested for the neural backend when the user
 # does not pin ``max_atoms_per_rule`` explicitly.  Each k contributes its own
@@ -1226,7 +1226,7 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
     Parameters
     ----------
     candidate_backends : list[str] | None
-        List of backend names to evaluate (default: ``["greedy_pareto", "cart",
+        List of backend names to evaluate (default: ``["greedy", "cart",
         "hs", "ruleplcs"]``).  Additional backends are reachable on request:
         ``rulenln`` (gradient-based; when no ``max_atoms_per_rule`` is pinned,
         an architectural top-k sweep k in {2, 3, 4, 6} is harvested into the
@@ -1728,8 +1728,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
     Parameters
     ----------
     candidate_backends : list[str] | None
-        List of backend names to evaluate (default: ``["greedy_residual",
-        "greedy_pareto", "cart", "ruleplcs"]``).
+        List of backend names to evaluate (default: ``["greedy", "cart",
+        "hs", "ruleplcs"]``).
     preference : {"compact", "balanced", "performance", "expressive", "accuracy", "pareto_menu", "manual", "best_single_cv"}, default="balanced"
         Operational intent profile:
         - "compact": fewest atoms within ``compact_tolerance`` of the best score.
