@@ -294,8 +294,18 @@ def test_extract_pareto_from_master_archive():
     assert summary.n_models == 2
     assert "SNP1" in summary.backbone_features
     assert "SNP2" in summary.backbone_features
-    edges = {(e.feature_a, e.feature_b): e.count for e in summary.edges}
+    edges = {(e.feature_a, e.feature_b): e for e in summary.edges}
     assert ("SNP1", "SNP2") in edges
-    assert edges[("SNP1", "SNP2")] == 2
+    assert edges[("SNP1", "SNP2")].count == 2
+    assert "cart" in edges[("SNP1", "SNP2")].backends
+    assert "greedy" in edges[("SNP1", "SNP2")].backends
+
+    # Check TikZ export
+    tikz_str = summary.to_tikz(standalone=True)
+    assert r"\documentclass[tikz,border=5pt]{standalone}" in tikz_str
+    assert "SNP1" in tikz_str
+    assert "SNP2" in tikz_str
+    assert r"\begin{tikzpicture}" in tikz_str
+
 
 

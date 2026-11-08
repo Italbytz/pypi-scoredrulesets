@@ -43,6 +43,7 @@ class ParetoInteractionEdge:
     ratio_b: float
     strength: float
     weight: float = 0.0
+    backends: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         res = {
@@ -55,6 +56,8 @@ class ParetoInteractionEdge:
         }
         if self.weight > 0.0:
             res["weight"] = round(self.weight, 4)
+        if self.backends:
+            res["backends"] = list(self.backends)
         return res
 
 
@@ -138,14 +141,77 @@ class ParetoFrontSummary:
             a = _dot_id(e.feature_a)
             b = _dot_id(e.feature_b)
             pw = max(1.0, min(5.0, 1.0 + 4.0 * e.strength))
+            b_tag = f"\\n[{','.join(e.backends)}]" if e.backends else ""
             edge_lbl = (
-                f"{e.count}" if e.weight <= 0.0 else f"{e.count} (w={e.weight:.1f})"
+                f"{e.count}{b_tag}" if e.weight <= 0.0 else f"{e.count} (w={e.weight:.1f}){b_tag}"
             )
             lines.append(
                 f'  {a} -- {b} [label="{edge_lbl}", penwidth={pw:.1f}, color="#495057"];'
             )
 
         lines.append("}\n")
+        return "\n".join(lines)
+
+    def to_tikz(self, title: str | None = None, standalone: bool = False) -> str:
+        """Generate a publication-ready LaTeX TikZ network graph string."""
+        active_nodes = sorted(set(self.backbone_features) | {e.feature_a for e in self.edges} | {e.feature_b for e in self.edges})
+        n_nodes = len(active_nodes)
+        if n_nodes == 0:
+            return "% Empty interaction network\n"
+
+        lines = []
+        if standalone:
+            lines.extend([
+                r"\documentclass[tikz,border=5pt]{standalone}",
+                r"\usetikzlibrary{positioning,shapes,calc}",
+                r"\begin{document}",
+            ])
+
+        lines.extend([
+            r"\begin{tikzpicture}[",
+            r"  font=\sffamily\footnotesize,",
+            r"  bbnode/.style={draw=green!60!black, fill=green!15, rounded corners=2pt, thick, align=center, inner sep=3pt},",
+            r"  pernode/.style={draw=gray!80, fill=gray!10, ellipse, align=center, inner sep=2.5pt},",
+            r"  intedge/.style={draw=darkgray, line cap=round},",
+            r"]",
+        ])
+
+        # Place nodes in a regular polygon layout for clean symmetry
+        import math
+        radius = max(2.5, min(5.5, 1.0 + 0.35 * n_nodes))
+        coords = {}
+        for idx, name in enumerate(active_nodes):
+            angle = 90.0 - (360.0 * idx / max(1, n_nodes))
+            rad = math.radians(angle)
+            x = radius * math.cos(rad)
+            y = radius * math.sin(rad)
+            safe_id = re.sub(r"\W+", "_", name).strip("_")
+            coords[name] = safe_id
+            is_bb = name in self.backbone_features
+            style = "bbnode" if is_bb else "pernode"
+            freq = self.model_feature_frequencies.get(name, 0.0)
+            cnt = self.feature_counts.get(name, 0)
+            pct = f"{freq:.0%}".replace("%", r"\%")
+            lbl = f"\\textbf{{{name}}}\\\\{pct}" if is_bb else f"{name}\\\\{pct}"
+            lines.append(f"  \\node[{style}] ({safe_id}) at ({x:.2f}, {y:.2f}) {{{lbl}}};")
+
+        # Draw edges
+        for e in self.edges:
+            id_a = coords.get(e.feature_a)
+            id_b = coords.get(e.feature_b)
+            if not id_a or not id_b:
+                continue
+            lw = max(0.8, min(4.5, 0.8 + 3.5 * e.strength))
+            b_str = f" [{','.join(e.backends)}]" if e.backends else ""
+            lbl = f"{e.count}{b_str}" if e.weight <= 0.0 else f"{e.count}"
+            lines.append(
+                f"  \\draw[intedge, line width={lw:.1f}pt] ({id_a}) -- node[midway, fill=white, inner sep=1pt, text=darkgray] {{\\tiny {lbl}}} ({id_b});"
+            )
+
+        lines.append(r"\end{tikzpicture}")
+        if standalone:
+            lines.append(r"\end{document}")
+        lines.append("")
         return "\n".join(lines)
 
     def to_markdown(self) -> str:
@@ -190,21 +256,30 @@ class ParetoFrontSummary:
 
         if self.edges:
             has_w = any(e.weight > 0 for e in self.edges)
+            has_b = any(bool(e.backends) for e in self.edges)
+            header = "| Feature A | Feature B | Co-occurrences | Strength | Coverage Ratios |"
+            sep = "|---|---|---|---|---|"
+            if has_w:
+                header += " Weight |"
+                sep += "---|"
+            if has_b:
+                header += " Supporting Backends |"
+                sep += "---|"
             lines.extend(
                 [
                     "",
                     "#### Top Feature Interactions (Co-occurrences in Rules)",
                     "",
-                    "| Feature A | Feature B | Co-occurrences | Strength | Coverage Ratios |"
-                    + (" Weight |" if has_w else ""),
-                    "|---|---|---|---|---|" + ("---|" if has_w else ""),
+                    header,
+                    sep,
                 ]
             )
             for e in self.edges:
-                extra = f" {e.weight:.2f} |" if has_w else ""
+                w_col = f" {e.weight:.2f} |" if has_w else ""
+                b_col = f" {', '.join(e.backends)} |" if has_b else ""
                 lines.append(
                     f"| `{e.feature_a}` | `{e.feature_b}` | {e.count} | {e.strength:.2f} | "
-                    f"A: {e.ratio_a:.1%}, B: {e.ratio_b:.1%} |{extra}"
+                    f"A: {e.ratio_a:.1%}, B: {e.ratio_b:.1%} |{w_col}{b_col}"
                 )
 
         return "\n".join(lines)
@@ -382,7 +457,11 @@ def _extract_ensemble_rules(
     return rules_with_weights, names
 
 
-def _collect_models(estimator_or_models: Any) -> tuple[list[Any], list[str] | None]:
+def _collect_models(
+    estimator_or_models: Any,
+    archive_source: str = "balanced_pool",
+    max_models_per_backend: int = 5,
+) -> tuple[list[Any], list[str] | None]:
     """Collect individual models and feature names from an estimator or sequence."""
     feature_names: list[str] | None = None
 
@@ -399,16 +478,27 @@ def _collect_models(estimator_or_models: Any) -> tuple[list[Any], list[str] | No
     if hasattr(est, "feature_names_in_"):
         feature_names = [str(f) for f in est.feature_names_in_]
 
-    # AutoScoredRuleSet with MasterParetoArchive
-    if hasattr(est, "master_archive_") and est.master_archive_:
-        arch = est.master_archive_
-        models = [c.ruleset for c in (arch.candidates_ or arch.candidate_pool_)]
-        return models, feature_names
+    # Check for MasterParetoArchive on estimator or passed directly
+    arch = getattr(est, "master_archive_", None)
+    if arch is None and hasattr(est, "candidates_") and hasattr(est, "candidate_pool_"):
+        arch = est
 
-    # Direct MasterParetoArchive object
-    if hasattr(est, "candidates_") and hasattr(est, "candidate_pool_"):
-        models = [c.ruleset for c in (est.candidates_ or est.candidate_pool_)]
-        return models, feature_names
+    if arch is not None:
+        if archive_source == "strict_front":
+            candidates = list(arch.candidates_)
+        elif archive_source == "full_pool":
+            candidates = list(arch.candidate_pool_) or list(arch.candidates_)
+        else:  # "balanced_pool" (default)
+            pool = list(arch.candidate_pool_) or list(arch.candidates_)
+            by_b = defaultdict(list)
+            for c in pool:
+                b = getattr(c, "backend", "unknown")
+                by_b[b].append(c)
+            candidates = []
+            for b, b_cands in by_b.items():
+                sorted_cands = sorted(b_cands, key=lambda c: -getattr(c, "score", 0.0))
+                candidates.extend(sorted_cands[:max_models_per_backend])
+        return candidates, feature_names
 
     # RuleGP final_archive_ (Pareto front)
     if hasattr(est, "final_archive_") and est.final_archive_:
@@ -432,8 +522,8 @@ def _collect_models(estimator_or_models: Any) -> tuple[list[Any], list[str] | No
 
     raise ValueError(
         "Could not extract models from the provided object. "
-        "Expected a fitted RuleGPClassifier/LogicGPClassifier, a ScoredRuleSet, "
-        "or a sequence of models."
+        "Expected a fitted RuleGPClassifier/LogicGPClassifier, AutoScoredRuleSet, "
+        "MasterParetoArchive, ScoredRuleSet, or a sequence of models."
     )
 
 
@@ -442,11 +532,14 @@ def extract_pareto_interactions(
     *,
     mode: str = "auto",
     feature_names: Sequence[str] | None = None,
+    archive_source: str = "balanced_pool",
+    max_models_per_backend: int = 5,
     min_occurrences: int = 1,
     min_ratio: float = 0.05,
     backbone_threshold: float = 0.5,
     backbone_criterion: str = "frequency",
     out_dot: str | Path | None = None,
+    out_tikz: str | Path | None = None,
     out_csv: str | Path | None = None,
 ) -> ParetoFrontSummary:
     """Analyze feature inclusions and interactions across a Pareto front or rule ensemble.
@@ -456,8 +549,9 @@ def extract_pareto_interactions(
     estimator_or_models:
         A fitted estimator with a Pareto archive (`RuleGPClassifier` with
         `final_archive_` or `LogicGPClassifier` with `_final_population`),
-        an ensemble estimator (`RuleFitClassifier`, `ExSTraCS`), a single
-        `ScoredRuleSet`, or a list of model instances.
+        an `AutoScoredRuleSetClassifier` / `AutoScoredRuleSetRegressor`,
+        a direct `MasterParetoArchive`, an ensemble estimator (`RuleFitClassifier`,
+        `ExSTraCS`), a single `ScoredRuleSet`, or a list of model instances.
     mode:
         Operation mode:
         - ``"auto"`` (default): Selects ``"ensemble"`` if input is a RuleFit / ExSTraCS
@@ -470,6 +564,14 @@ def extract_pareto_interactions(
     feature_names:
         Optional sequence of feature names. If omitted, inferred from the
         estimator's `feature_names_in_` or rule specifications.
+    archive_source:
+        Selection strategy when extracting models from an AutoScoredRuleSet or MasterParetoArchive:
+        - ``"balanced_pool"`` (default): Balanced representation taking up to `max_models_per_backend`
+          Pareto-optimal variants from each active backend. Prevents multi-backend pool dilution.
+        - ``"strict_front"``: Global non-dominated Pareto front candidates only.
+        - ``"full_pool"``: All harvested candidate variants across all backends.
+    max_models_per_backend:
+        Maximum number of models to admit per backend when ``archive_source="balanced_pool"`` (default: 5).
     min_occurrences:
         Minimum number of times a feature pair must co-occur in the same rule.
     min_ratio:
@@ -485,6 +587,8 @@ def extract_pareto_interactions(
         - ``"weight"``: Feature weight relative to max feature weight >= backbone_threshold.
     out_dot:
         Optional file path to write a GraphViz DOT representation.
+    out_tikz:
+        Optional file path to write a publication-ready LaTeX TikZ network representation.
     out_csv:
         Optional file path to write an interactions CSV.
 
@@ -492,7 +596,8 @@ def extract_pareto_interactions(
     -------
     ParetoFrontSummary
         Structured object containing backbone features, interaction edges,
-        frequencies, and export methods (`to_dot`, `to_markdown`, `to_dict`).
+        frequencies, supporting backends, and export methods (`to_dot`, `to_tikz`,
+        `to_markdown`, `to_dict`).
     """
     if mode not in ("auto", "pareto", "ensemble"):
         raise ValueError(
@@ -517,6 +622,11 @@ def extract_pareto_interactions(
             or type(estimator_or_models).__name__.startswith("ExSTraCS")
         ):
             effective_mode = "ensemble"
+        # AutoScoredRuleSet / MasterParetoArchive
+        elif hasattr(estimator_or_models, "master_archive_") or (
+            hasattr(estimator_or_models, "candidates_") and hasattr(estimator_or_models, "candidate_pool_")
+        ):
+            effective_mode = "pareto"
         # Multi-model archive
         elif (
             hasattr(estimator_or_models, "final_archive_")
@@ -661,7 +771,11 @@ def extract_pareto_interactions(
     # MODE A: INTER-MODEL CONSENSUS ACROSS PARETO FRONT
     # =========================================================================
     else:
-        models, inferred_names = _collect_models(estimator_or_models)
+        models, inferred_names = _collect_models(
+            estimator_or_models,
+            archive_source=archive_source,
+            max_models_per_backend=max_models_per_backend,
+        )
         if feature_names is None:
             feature_names = inferred_names
 
@@ -682,10 +796,12 @@ def extract_pareto_interactions(
         model_presence: dict[str, int] = defaultdict(int)
         feature_rule_counts: dict[str, int] = defaultdict(int)
         pair_counts: dict[tuple[str, str], int] = defaultdict(int)
+        pair_backends: dict[tuple[str, str], set[str]] = defaultdict(set)
         all_discovered_features: set[str] = set()
         total_rules_across_models = 0
 
         for model in models:
+            b = str(getattr(model, "backend", "") or getattr(model, "metadata", {}).get("backend", ""))
             rules_feats = _extract_rules_from_single_model(model, feature_names)
             model_feats: set[str] = set()
 
@@ -698,6 +814,8 @@ def extract_pareto_interactions(
 
                 for fa, fb in itertools.combinations(sorted(feats), 2):
                     pair_counts[(fa, fb)] += 1
+                    if b:
+                        pair_backends[(fa, fb)].add(b)
 
             for f in model_feats:
                 model_presence[f] += 1
@@ -744,6 +862,7 @@ def extract_pareto_interactions(
                     ratio_a=ratio_a,
                     ratio_b=ratio_b,
                     strength=strength,
+                    backends=tuple(sorted(pair_backends.get((fa, fb), set()))),
                 )
             )
 
@@ -767,15 +886,23 @@ def extract_pareto_interactions(
         dot_path.parent.mkdir(parents=True, exist_ok=True)
         dot_path.write_text(summary.to_dot(), encoding="utf-8")
 
+    if out_tikz is not None:
+        tikz_path = Path(out_tikz)
+        tikz_path.parent.mkdir(parents=True, exist_ok=True)
+        tikz_path.write_text(summary.to_tikz(), encoding="utf-8")
+
     if out_csv is not None:
         csv_path = Path(out_csv)
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         with csv_path.open("w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
             has_w = any(e.weight > 0 for e in summary.edges)
+            has_b = any(bool(e.backends) for e in summary.edges)
             header = ["feature_a", "feature_b", "count", "ratio_a", "ratio_b", "strength"]
             if has_w:
                 header.append("weight")
+            if has_b:
+                header.append("backends")
             writer.writerow(header)
             for e in summary.edges:
                 row = [
@@ -788,6 +915,8 @@ def extract_pareto_interactions(
                 ]
                 if has_w:
                     row.append(f"{e.weight:.4f}")
+                if has_b:
+                    row.append(";".join(e.backends))
                 writer.writerow(row)
 
     return summary
