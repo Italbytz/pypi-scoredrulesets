@@ -244,15 +244,10 @@ def _extract_from_scored_ruleset(
             if feat is not None:
                 if inferred_names and isinstance(feat, int) and feat < len(inferred_names):
                     feats.add(str(inferred_names[feat]))
-                elif (
-                    inferred_names
-                    and isinstance(feat, str)
-                    and feat.startswith("f")
-                    and feat[1:].isdigit()
-                ):
-                    idx = int(feat[1:])
-                    if idx < len(inferred_names):
-                        feats.add(str(inferred_names[idx]))
+                elif inferred_names and isinstance(feat, str):
+                    m = re.match(r"^(?:x|fx|f|ff|var_?)(\d+)$", feat)
+                    if m and int(m.group(1)) < len(inferred_names):
+                        feats.add(str(inferred_names[int(m.group(1))]))
                     else:
                         feats.add(str(feat))
                 else:
@@ -275,6 +270,9 @@ def _extract_rules_from_single_model(
     model: Any, feature_names: Sequence[str] | None = None
 ) -> list[set[str]]:
     """Extract set of feature names per rule from a model or ruleset."""
+    if hasattr(model, "ruleset"):
+        model = getattr(model, "ruleset")
+
     # 1. Rule sets with a list of rules (ScoredRuleSet or RuleGP _RuleSet2)
     if hasattr(model, "rules") and isinstance(model.rules, list):
         rules_w, _ = _extract_from_scored_ruleset(model, feature_names)
@@ -400,6 +398,17 @@ def _collect_models(estimator_or_models: Any) -> tuple[list[Any], list[str] | No
     est = estimator_or_models
     if hasattr(est, "feature_names_in_"):
         feature_names = [str(f) for f in est.feature_names_in_]
+
+    # AutoScoredRuleSet with MasterParetoArchive
+    if hasattr(est, "master_archive_") and est.master_archive_:
+        arch = est.master_archive_
+        models = [c.ruleset for c in (arch.candidates_ or arch.candidate_pool_)]
+        return models, feature_names
+
+    # Direct MasterParetoArchive object
+    if hasattr(est, "candidates_") and hasattr(est, "candidate_pool_"):
+        models = [c.ruleset for c in (est.candidates_ or est.candidate_pool_)]
+        return models, feature_names
 
     # RuleGP final_archive_ (Pareto front)
     if hasattr(est, "final_archive_") and est.final_archive_:

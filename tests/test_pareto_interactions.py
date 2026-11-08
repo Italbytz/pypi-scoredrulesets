@@ -278,3 +278,24 @@ def test_invalid_mode_raises():
     with pytest.raises(ValueError, match="Invalid mode"):
         extract_pareto_interactions([m1], mode="nonexistent")
 
+
+def test_extract_pareto_from_master_archive():
+    from scoredrulesets.estimators.auto import MasterParetoArchive
+
+    fn = ["SNP1", "SNP2", "SNP3"]
+    m1 = _make_sample_ruleset([["x0", "x1"]], fn)
+    m2 = _make_sample_ruleset([["f0", "f1", "f2"]], fn)
+
+    archive = MasterParetoArchive(higher_is_better=True)
+    archive.add(m1, score=0.8, backend="greedy")
+    archive.add(m2, score=0.85, backend="cart")
+
+    summary = extract_pareto_interactions(archive, feature_names=fn, backbone_threshold=0.5)
+    assert summary.n_models == 2
+    assert "SNP1" in summary.backbone_features
+    assert "SNP2" in summary.backbone_features
+    edges = {(e.feature_a, e.feature_b): e.count for e in summary.edges}
+    assert ("SNP1", "SNP2") in edges
+    assert edges[("SNP1", "SNP2")] == 2
+
+
