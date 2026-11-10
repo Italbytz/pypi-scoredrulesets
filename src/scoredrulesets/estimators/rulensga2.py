@@ -41,6 +41,51 @@ from .atom_space import ContinuousThresholdStrategy, NativeAtomSpaceStrategy
 from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
 
+try:
+    from evolutionary_ml.bitset import (
+        AtomSpec,
+        BitsetSpace,
+        eval_rule_mask_u64,
+        unpack_mask_bool,
+    )
+    HAS_BITSET_PARALLEL = True
+except ImportError:
+    HAS_BITSET_PARALLEL = False
+
+
+class _BitsetContextNSGA2:
+    """Precomputed bitset environment for acceleration during NSGA-II evolution."""
+
+    def __init__(
+        self,
+        bitset_space: Any,
+        train_bitsets: np.ndarray,
+        n_train: int,
+        eval_bitsets: np.ndarray | None = None,
+        n_eval: int = 0,
+    ) -> None:
+        self.bitset_space = bitset_space
+        self.train_bitsets = train_bitsets
+        self.n_train = n_train
+        self.n_train_words = (n_train + 63) // 64
+        self.eval_bitsets = eval_bitsets
+        self.n_eval = n_eval
+        self.n_eval_words = (n_eval + 63) // 64 if n_eval > 0 else 0
+        self.atom_id_cache: dict[tuple[int, str, object], int] = {}
+        for idx, atom in enumerate(bitset_space.atoms):
+            self.atom_id_cache[atom.key] = idx
+
+    def get_atom_id(self, gene: "_AtomGene") -> int | None:
+        key = (gene.feature_idx, gene.op, tuple(gene.value) if gene.op in ("between", "in") else gene.value)
+        return self.atom_id_cache.get(key)
+
+
+def _fast_per_class_f1_nsga2(y_true: np.ndarray, y_pred: np.ndarray, n_classes: int) -> np.ndarray:
+    conf = np.bincount(y_true * n_classes + y_pred, minlength=n_classes * n_classes).reshape(n_classes, n_classes)
+    tp = np.diag(conf)
+    denom = conf.sum(axis=0) + conf.sum(axis=1)
+    return np.divide(2.0 * tp, denom, out=np.zeros(n_classes, dtype=float), where=denom > 0)
+
 
 # ---------------------------------------------------------------------------
 # Internal gene representations
@@ -438,12 +483,35 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         if not hasattr(self, "_atom_pool_") or not self._atom_pool_:
             self._atom_pool_ = self._build_atom_pool(specs, X_train, y_train, n_classes)
 
+        ctx: _BitsetContextNSGA2 | None = None
+        has_val = X_eval is not X_train
+        if HAS_BITSET_PARALLEL:
+            try:
+                candidate_atoms = []
+                for atom_list in self._atom_pool_.values():
+                    candidate_atoms.extend(atom_list)
+                bitset_space = BitsetSpace([
+                    AtomSpec(feature_idx=a.feature_idx, op=a.op, value=a.value)
+                    for a in candidate_atoms
+                ])
+                train_bitsets = bitset_space.compute_bitsets(X_train)
+                eval_bitsets = bitset_space.compute_bitsets(X_eval) if has_val else None
+                ctx = _BitsetContextNSGA2(
+                    bitset_space=bitset_space,
+                    train_bitsets=train_bitsets,
+                    n_train=X_train.shape[0],
+                    eval_bitsets=eval_bitsets,
+                    n_eval=X_eval.shape[0] if has_val else 0,
+                )
+            except Exception:
+                ctx = None
+
         # ---------- Initialise population ----------
         pop = self._init_population(
-            specs, X_train, y_train, n_classes, rng, warmstart_seeds=warmstart_seed_individuals
+            specs, X_train, y_train, n_classes, rng, warmstart_seeds=warmstart_seed_individuals, ctx=ctx
         )
         for ind in pop:
-            self._evaluate(ind, X_eval, y_eval, n_classes)
+            self._evaluate(ind, X_eval, y_eval, n_classes, ctx=ctx, is_eval=has_val)
 
         # ---------- GP loop ----------
         best_front_size = 0
@@ -468,8 +536,8 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                 child = self._crossover(p1, p2, rng)
                 child = self._mutate(child, specs, rng)
                 # Refit scores for the child
-                self._refit_scores(child, X_train, y_train, n_classes)
-                self._evaluate(child, X_eval, y_eval, n_classes)
+                self._refit_scores(child, X_train, y_train, n_classes, ctx=ctx)
+                self._evaluate(child, X_eval, y_eval, n_classes, ctx=ctx, is_eval=has_val)
                 offspring.append(child)
                 # Stop building offspring as soon as the budget is exhausted;
                 # the partial offspring set is still valid for selection.
@@ -564,6 +632,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         n_classes: int,
         rng: np.random.Generator,
         warmstart_seeds: list[_Individual] | None = None,
+        ctx: _BitsetContextNSGA2 | None = None,
     ) -> list[_Individual]:
         pop: list[_Individual] = []
         n_init = max(2, self.population_size)
@@ -584,7 +653,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
                 break
             ind = self._seed_class_discriminative(specs, X, y, n_classes, rng)
             if ind is not None:
-                self._refit_scores(ind, X, y, n_classes)
+                self._refit_scores(ind, X, y, n_classes, ctx=ctx)
                 pop.append(ind)
 
         # (c) Greedy sequential-cover seed
@@ -592,7 +661,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
             if warmstart_seeds and len(pop) >= n_init:
                 break
             ind = self._seed_greedy_cover(specs, X, y, n_classes, rng)
-            self._refit_scores(ind, X, y, n_classes)
+            self._refit_scores(ind, X, y, n_classes, ctx=ctx)
             pop.append(ind)
 
         # (d) Random individuals to fill the rest
@@ -951,25 +1020,19 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         X: np.ndarray,
         y: np.ndarray,
         n_classes: int,
+        ctx: _BitsetContextNSGA2 | None = None,
+        is_eval: bool = False,
     ) -> None:
         """Compute fitness: F1-macro, class-aware objectives, and complexity."""
-        preds = self._predict_individual(ind, X, n_classes)
-        try:
-            ind.fitness_f1 = float(f1_score(y, preds, average="macro", zero_division=0))
-            class_f1 = f1_score(
-                y, preds, average=None, zero_division=0, labels=list(range(n_classes))
-            )
-            ind.fitness_class_f1 = np.asarray(class_f1, dtype=float)
-            ind.fitness_best_class = int(np.argmax(class_f1)) if len(class_f1) > 0 else 0
-            if len(class_f1) > 1:
-                other = np.delete(ind.fitness_class_f1, ind.fitness_best_class)
-                ind.fitness_other_class_f1 = float(np.mean(other)) if other.size else 0.0
-            else:
-                ind.fitness_other_class_f1 = 0.0
-        except Exception:
-            ind.fitness_f1 = 0.0
-            ind.fitness_class_f1 = np.zeros(n_classes, dtype=float)
-            ind.fitness_best_class = 0
+        preds = self._predict_individual(ind, X, n_classes, ctx=ctx, is_eval=is_eval)
+        class_f1 = _fast_per_class_f1_nsga2(y, preds, n_classes)
+        ind.fitness_class_f1 = class_f1
+        ind.fitness_f1 = float(np.mean(class_f1))
+        ind.fitness_best_class = int(np.argmax(class_f1)) if len(class_f1) > 0 else 0
+        if len(class_f1) > 1:
+            other = np.delete(ind.fitness_class_f1, ind.fitness_best_class)
+            ind.fitness_other_class_f1 = float(np.mean(other)) if other.size else 0.0
+        else:
             ind.fitness_other_class_f1 = 0.0
         ind.fitness_complexity = ind.total_atoms
 
@@ -978,14 +1041,19 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         ind: _Individual,
         X: np.ndarray,
         n_classes: int,
+        ctx: _BitsetContextNSGA2 | None = None,
+        is_eval: bool = False,
     ) -> np.ndarray:
         """Predict class labels for X using individual's rules (argmax-sum)."""
-        n = X.shape[0]
+        n = ctx.n_eval if (ctx is not None and is_eval) else (ctx.n_train if ctx is not None else X.shape[0])
         scores = np.zeros((n, n_classes), dtype=float)
         any_fired = np.zeros(n, dtype=bool)
 
         for rule in ind.rules:
-            mask = self._rule_mask(rule, X)
+            if ctx is not None:
+                mask = self._rule_mask_bitset(rule, ctx, is_eval=is_eval, X_fallback=X)
+            else:
+                mask = self._rule_mask(rule, X)
             if not mask.any():
                 continue
             any_fired |= mask
@@ -1009,6 +1077,7 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         X: np.ndarray,
         y: np.ndarray,
         n_classes: int,
+        ctx: _BitsetContextNSGA2 | None = None,
     ) -> None:
         """Recompute class-balanced FLCW-style scores for each rule and the default."""
         any_fired = np.zeros(X.shape[0], dtype=bool)
@@ -1016,7 +1085,10 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         class_counts = np.maximum(class_counts, 1.0)
 
         for rule in ind.rules:
-            mask = self._rule_mask(rule, X)
+            if ctx is not None:
+                mask = self._rule_mask_bitset(rule, ctx, is_eval=False, X_fallback=X)
+            else:
+                mask = self._rule_mask(rule, X)
             any_fired |= mask
             if mask.sum() > 0:
                 counts = np.bincount(y[mask], minlength=n_classes).astype(float)
@@ -1236,6 +1308,35 @@ class RuleNSGA2Classifier(BaseRuleSetEstimator):
         for atom in rule.atoms:
             mask &= self._atom_mask(atom, X)
         return mask
+
+    def _rule_mask_bitset(
+        self,
+        rule: _RuleGene,
+        ctx: _BitsetContextNSGA2,
+        is_eval: bool = False,
+        X_fallback: np.ndarray | None = None,
+    ) -> np.ndarray:
+        if not rule.atoms:
+            n = ctx.n_eval if is_eval else ctx.n_train
+            return np.ones(n, dtype=bool)
+
+        atom_ids: list[int] = []
+        for a in rule.atoms:
+            aid = ctx.get_atom_id(a)
+            if aid is None:
+                if X_fallback is not None:
+                    return self._rule_mask(rule, X_fallback)
+                return np.zeros(ctx.n_eval if is_eval else ctx.n_train, dtype=bool)
+            atom_ids.append(aid)
+
+        bitsets = ctx.eval_bitsets if is_eval else ctx.train_bitsets
+        n_words = ctx.n_eval_words if is_eval else ctx.n_train_words
+        n_samples = ctx.n_eval if is_eval else ctx.n_train
+
+        rule_mask_u64 = eval_rule_mask_u64(atom_ids, bitsets, n_words)
+        if not np.any(rule_mask_u64):
+            return np.zeros(n_samples, dtype=bool)
+        return unpack_mask_bool(rule_mask_u64, n_samples)
 
     # ------------------------------------------------------------------
     # Train / val split

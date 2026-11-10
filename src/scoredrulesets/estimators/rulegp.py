@@ -38,6 +38,17 @@ from .atom_space import ContinuousThresholdStrategy, NativeAtomSpaceStrategy
 from .atom_space import build_native_feature_specs
 from .base import BaseRuleSetEstimator
 
+try:
+    from evolutionary_ml.bitset import (
+        AtomSpec,
+        BitsetSpace,
+        eval_rule_mask_u64,
+        unpack_mask_bool,
+    )
+    HAS_BITSET_PARALLEL = True
+except ImportError:
+    HAS_BITSET_PARALLEL = False
+
 
 AtomPreselectionStrategy = Literal[
     "none",
@@ -137,6 +148,101 @@ class _RuleSet2:
     def predict_classes(self, X: np.ndarray) -> np.ndarray:
         return np.argmax(self.predict_scores(X), axis=1)
 
+    def _rule_mask_bitset(
+        self,
+        rule: _Rule2,
+        ctx: "_BitsetContext",
+        is_val: bool = False,
+        X_fallback: np.ndarray | None = None,
+    ) -> np.ndarray:
+        if not rule.atoms:
+            n = ctx.n_val if is_val else ctx.n_train
+            return np.zeros(n, dtype=bool)
+
+        atom_ids: list[int] = []
+        for a in rule.atoms:
+            aid = ctx.get_atom_id(a)
+            if aid is None:
+                if X_fallback is not None:
+                    return self._rule_mask(rule, X_fallback)
+                return np.zeros(ctx.n_val if is_val else ctx.n_train, dtype=bool)
+            atom_ids.append(aid)
+
+        bitsets = ctx.val_bitsets if is_val else ctx.train_bitsets
+        n_words = ctx.n_val_words if is_val else ctx.n_train_words
+        n_samples = ctx.n_val if is_val else ctx.n_train
+
+        rule_mask_u64 = eval_rule_mask_u64(atom_ids, bitsets, n_words)
+        if not np.any(rule_mask_u64):
+            return np.zeros(n_samples, dtype=bool)
+        return unpack_mask_bool(rule_mask_u64, n_samples)
+
+    def predict_classes_bitset(
+        self,
+        ctx: "_BitsetContext",
+        is_val: bool = False,
+        X_fallback: np.ndarray | None = None,
+    ) -> np.ndarray:
+        n_samples = ctx.n_val if is_val else ctx.n_train
+        n_classes = self.default_weights.shape[0]
+        scores = np.zeros((n_samples, n_classes), dtype=float)
+        any_fired = np.zeros(n_samples, dtype=bool)
+
+        for rule in self.rules:
+            mask = self._rule_mask_bitset(rule, ctx, is_val=is_val, X_fallback=X_fallback)
+            if mask.any():
+                scores[mask] += rule.weights
+                any_fired |= mask
+        scores[~any_fired] = self.default_weights
+        return np.argmax(scores, axis=1)
+
+
+class _BitsetContext:
+    """Precomputed bitset environment for acceleration during GP evolution."""
+
+    def __init__(
+        self,
+        bitset_space: Any,
+        train_bitsets: np.ndarray,
+        n_train: int,
+        val_bitsets: np.ndarray | None = None,
+        n_val: int = 0,
+    ) -> None:
+        self.bitset_space = bitset_space
+        self.train_bitsets = train_bitsets
+        self.n_train = n_train
+        self.n_train_words = (n_train + 63) // 64
+        self.val_bitsets = val_bitsets
+        self.n_val = n_val
+        self.n_val_words = (n_val + 63) // 64 if n_val > 0 else 0
+        self.atom_id_cache: dict[tuple[int, str, object], int] = {}
+        for idx, atom in enumerate(bitset_space.atoms):
+            self.atom_id_cache[atom.key] = idx
+
+    def get_atom_id(self, gene: _AtomGene2) -> int | None:
+        key = _RuleSet2._atom_key(gene)
+        return self.atom_id_cache.get(key)
+
+
+def _fast_per_class_f1(y_true: np.ndarray, y_pred: np.ndarray, n_classes: int) -> np.ndarray:
+    conf = np.bincount(y_true * n_classes + y_pred, minlength=n_classes * n_classes).reshape(n_classes, n_classes)
+    tp = np.diag(conf)
+    denom = conf.sum(axis=0) + conf.sum(axis=1)
+    return np.divide(2.0 * tp, denom, out=np.zeros(n_classes, dtype=float), where=denom > 0)
+
+
+def _fast_per_class_recall(y_true: np.ndarray, y_pred: np.ndarray, n_classes: int) -> np.ndarray:
+    conf = np.bincount(y_true * n_classes + y_pred, minlength=n_classes * n_classes).reshape(n_classes, n_classes)
+    tp = np.diag(conf)
+    actual_pos = conf.sum(axis=1)
+    return np.divide(tp, actual_pos, out=np.zeros(n_classes, dtype=float), where=actual_pos > 0)
+
+
+def _fast_calc_f1(y_true: np.ndarray, y_pred: np.ndarray, n_classes: int, averaging: str = "macro") -> float:
+    if averaging == "micro":
+        return float(np.mean(y_true == y_pred))
+    return float(np.mean(_fast_per_class_f1(y_true, y_pred, n_classes)))
+
 
 @dataclass(frozen=True)
 class _FitnessRLCW2:
@@ -189,30 +295,17 @@ def _evaluate_fitness_rlcw2(
     y_idx: np.ndarray,
     n_classes: int,
     objective_mode: ObjectiveMode,
+    ctx: _BitsetContext | None = None,
 ) -> _FitnessRLCW2:
-    pred = rs.predict_classes(X)
+    if ctx is not None:
+        pred = rs.predict_classes_bitset(ctx, is_val=False, X_fallback=X)
+    else:
+        pred = rs.predict_classes(X)
 
     if objective_mode == "recall":
-        conf = np.zeros((n_classes, n_classes), dtype=float)
-        for yt, yp in zip(y_idx, pred):
-            conf[yt, yp] += 1.0
-        per_class_metric = np.divide(
-            np.diag(conf),
-            conf.sum(axis=1),
-            out=np.zeros(n_classes, dtype=float),
-            where=conf.sum(axis=1) > 0,
-        )
+        per_class_metric = _fast_per_class_recall(y_idx, pred, n_classes)
     elif objective_mode == "f1":
-        per_class_metric = np.asarray(
-            _f1_score(
-                y_idx,
-                pred,
-                average=None,
-                labels=list(range(n_classes)),
-                zero_division=0,
-            ),
-            dtype=float,
-        )
+        per_class_metric = _fast_per_class_f1(y_idx, pred, n_classes)
     else:
         raise ValueError("objective_mode must be 'recall' or 'f1'.")
 
@@ -318,6 +411,7 @@ def _compute_weights2(
     X: np.ndarray,
     y_idx: np.ndarray,
     n_classes: int,
+    ctx: _BitsetContext | None = None,
 ) -> None:
     class_counts = np.bincount(y_idx, minlength=n_classes).astype(float)
     class_counts = np.maximum(class_counts, 1.0)
@@ -326,7 +420,10 @@ def _compute_weights2(
     any_fired = np.zeros(n_samples, dtype=bool)
 
     for rule in rs.rules:
-        mask = rs._rule_mask(rule, X)
+        if ctx is not None:
+            mask = rs._rule_mask_bitset(rule, ctx, is_val=False, X_fallback=X)
+        else:
+            mask = rs._rule_mask(rule, X)
         any_fired |= mask
         if not mask.any():
             rule.weights = np.ones(n_classes, dtype=float) / n_classes
@@ -725,6 +822,29 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         # taken inside ``_run_gp`` right after weight computation.
         if self.record_population:
             self.warmstart_seeds_ = [rs.clone() for rs in warmstart_seeds]
+
+        ctx: _BitsetContext | None = None
+        if HAS_BITSET_PARALLEL:
+            try:
+                candidate_atoms_for_space = list(all_atoms)
+                if all_atoms_full:
+                    candidate_atoms_for_space.extend(all_atoms_full)
+                bitset_space = BitsetSpace([
+                    AtomSpec(feature_idx=a.feature_idx, op=a.op, value=a.value)
+                    for a in candidate_atoms_for_space
+                ])
+                train_bitsets = bitset_space.compute_bitsets(X_train)
+                val_bitsets = bitset_space.compute_bitsets(X_val) if X_val is not None else None
+                ctx = _BitsetContext(
+                    bitset_space=bitset_space,
+                    train_bitsets=train_bitsets,
+                    n_train=X_train.shape[0],
+                    val_bitsets=val_bitsets,
+                    n_val=X_val.shape[0] if X_val is not None else 0,
+                )
+            except Exception:
+                ctx = None
+
         best_rs = self._run_gp(
             population=population,
             all_atoms=all_atoms,
@@ -734,6 +854,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             n_classes=n_classes,
             X_val=X_val,
             y_val=y_val,
+            ctx=ctx,
         )
 
         if X_val is not None and y_val is not None:
@@ -1184,6 +1305,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         n_classes: int,
         X_val: np.ndarray | None,
         y_val: np.ndarray | None,
+        ctx: _BitsetContext | None = None,
     ) -> _RuleSet2:
         if self.f1_averaging.lower().strip() not in ("micro", "macro"):
             raise ValueError("f1_averaging must be 'micro' or 'macro'.")
@@ -1197,8 +1319,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         eval_y = y_val if has_val else y_train
         labels = list(range(n_classes))
 
+        def _calc_f1(true_y: np.ndarray, predicted_y: np.ndarray) -> float:
+            return _fast_calc_f1(true_y, predicted_y, n_classes, averaging=self.f1_averaging)
+
         for rs in population:
-            _compute_weights2(rs, X_train, y_train, n_classes)
+            _compute_weights2(rs, X_train, y_train, n_classes, ctx=ctx)
 
         if self.record_population:
             # Raw P0 snapshot: translated initial population with weights
@@ -1214,6 +1339,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     y_train,
                     n_classes,
                     self.objective_mode,
+                    ctx=ctx,
                 ),
             )
             for rs in population
@@ -1228,7 +1354,10 @@ class RuleGPClassifier(BaseRuleSetEstimator):
 
         if self.early_stopping_metric == "f1":
             best_signal = max(
-                float(_f1_score(eval_y, rs.predict_classes(eval_X), average=self.f1_averaging, labels=labels))
+                _calc_f1(
+                    eval_y,
+                    rs.predict_classes_bitset(ctx, is_val=has_val, X_fallback=eval_X) if ctx is not None else rs.predict_classes(eval_X),
+                )
                 for rs, _ in evaluated
             )
         else:
@@ -1238,9 +1367,13 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         all_candidates: list[tuple[_RuleSet2, _FitnessRLCW2, float, float]] = []
 
         for rs, fit in evaluated:
-            pred = rs.predict_classes(eval_X)
-            f1 = float(_f1_score(eval_y, pred, average=self.f1_averaging, labels=labels))
-            train_preds = rs.predict_classes(X_train)
+            if ctx is not None:
+                train_preds = rs.predict_classes_bitset(ctx, is_val=False, X_fallback=X_train)
+                pred = train_preds if not has_val else rs.predict_classes_bitset(ctx, is_val=True, X_fallback=X_val)
+            else:
+                pred = rs.predict_classes(eval_X)
+                train_preds = rs.predict_classes(X_train)
+            f1 = _calc_f1(eval_y, pred)
             train_mcr = float(np.mean(train_preds != y_train))
             all_candidates.append((rs, fit, f1, train_mcr))
 
@@ -1251,6 +1384,7 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             y_train,
             n_classes,
             self.objective_mode,
+            ctx=ctx,
         )
         elite_f1 = max(c[2] for c in all_candidates)
 
@@ -1266,13 +1400,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             return [
                 (
                     int(fit.size),
-                    float(
-                        _f1_score(
-                            eval_y,
-                            rs.predict_classes(eval_X),
-                            average=self.f1_averaging,
-                            labels=labels,
-                        )
+                    _calc_f1(
+                        eval_y,
+                        rs.predict_classes_bitset(ctx, is_val=has_val, X_fallback=eval_X) if ctx is not None else rs.predict_classes(eval_X),
                     ),
                 )
                 for rs, fit in evals
@@ -1329,13 +1459,14 @@ class RuleGPClassifier(BaseRuleSetEstimator):
 
             new_eval: list[tuple[_RuleSet2, _FitnessRLCW2]] = []
             for rs in new_rs:
-                _compute_weights2(rs, X_train, y_train, n_classes)
+                _compute_weights2(rs, X_train, y_train, n_classes, ctx=ctx)
                 fit = _evaluate_fitness_rlcw2(
                     rs,
                     X_train,
                     y_train,
                     n_classes,
                     self.objective_mode,
+                    ctx=ctx,
                 )
                 new_eval.append((rs, fit))
                 # Stop mid-generation once the budget is exhausted; the rule set
@@ -1357,9 +1488,13 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     evaluated.append((elite_rs, elite_fit))
 
             for rs, fit in new_eval:
-                pred = rs.predict_classes(eval_X)
-                f1 = float(_f1_score(eval_y, pred, average=self.f1_averaging, labels=labels))
-                train_preds = rs.predict_classes(X_train)
+                if ctx is not None:
+                    train_preds = rs.predict_classes_bitset(ctx, is_val=False, X_fallback=X_train)
+                    pred = train_preds if not has_val else rs.predict_classes_bitset(ctx, is_val=True, X_fallback=X_val)
+                else:
+                    pred = rs.predict_classes(eval_X)
+                    train_preds = rs.predict_classes(X_train)
+                f1 = _calc_f1(eval_y, pred)
                 train_mcr = float(np.mean(train_preds != y_train))
                 all_candidates.append((rs, fit, f1, train_mcr))
                 if f1 > elite_f1:
@@ -1386,7 +1521,10 @@ class RuleGPClassifier(BaseRuleSetEstimator):
 
             if self.early_stopping_metric == "f1":
                 current_signal = max(
-                    float(_f1_score(eval_y, rs.predict_classes(eval_X), average=self.f1_averaging, labels=labels))
+                    _calc_f1(
+                        eval_y,
+                        rs.predict_classes_bitset(ctx, is_val=has_val, X_fallback=eval_X) if ctx is not None else rs.predict_classes(eval_X),
+                    )
                     for rs, _ in evaluated
                 )
             else:
