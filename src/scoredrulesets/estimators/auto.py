@@ -36,8 +36,8 @@ from .base import BaseRuleSetEstimator
 from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 
-_DEFAULT_CLASSIFIER_BACKENDS = ["greedy", "cart", "hs", "ruleplcs"]
-_DEFAULT_REGRESSOR_BACKENDS = ["greedy", "cart", "hs", "ruleplcs"]
+_DEFAULT_CLASSIFIER_BACKENDS = ["greedy", "cart", "add", "hs", "ruleplcs"]
+_DEFAULT_REGRESSOR_BACKENDS = ["greedy", "cart", "add", "hs", "ruleplcs"]
 
 # Architectural top-k sweep harvested for the neural backend when the user
 # does not pin ``max_atoms_per_rule`` explicitly.  Each k contributes its own
@@ -1421,6 +1421,8 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                     bp = per_backend_params.get(backend)
                     if bp is None and backend == "cart":
                         bp = {"max_depth": 3}
+                    elif bp is None and backend in ("add", "additive_add", "additiveadd"):
+                        bp = {"max_depth": 2, "n_estimators": 15}
                     factories[backend] = _probe_factory(backend, bp)
                 try:
                     probe_ranks = _probe_hv_contribution(
@@ -1435,6 +1437,8 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                     bp = per_backend_params.get(backend)
                     if bp is None and backend == "cart":
                         bp = {"max_depth": 3}
+                    elif bp is None and backend in ("add", "additive_add", "additiveadd"):
+                        bp = {"max_depth": 2, "n_estimators": 15}
                     try:
                         sc = cross_val_score(
                             _probe_factory(backend, bp)(), X_probe, y_probe,
@@ -1904,6 +1908,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                     bp = per_backend_params.get(backend)
                     if bp is None and backend == "cart":
                         bp = {"max_depth": 3}
+                    elif bp is None and backend in ("add", "additive_add", "additiveadd"):
+                        bp = {"max_depth": 2, "n_estimators": 15}
                     factories[backend] = _probe_factory_reg(backend, bp)
                 try:
                     probe_ranks_reg = _probe_hv_contribution(
@@ -1918,6 +1924,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                     bp = per_backend_params.get(backend)
                     if bp is None and backend == "cart":
                         bp = {"max_depth": 3}
+                    elif bp is None and backend in ("add", "additive_add", "additiveadd"):
+                        bp = {"max_depth": 2, "n_estimators": 15}
                     try:
                         sc = cross_val_score(
                             _probe_factory_reg(backend, bp)(), X_probe, y_probe,

@@ -175,7 +175,7 @@ def decision_function_regression(ruleset: ScoredRuleSet, X: np.ndarray, debug: b
                 predictions[i] = np.mean(active_values, axis=0)
             else:
                 predictions[i] = default_value if has_default else (np.zeros(d) if d > 1 else 0.0)
-        elif agg == "default_plus_sum":
+        elif agg in ("default_plus_sum", "sum"):
             if active_values:
                 predictions[i] = default_value + np.sum(active_values, axis=0)
             else:

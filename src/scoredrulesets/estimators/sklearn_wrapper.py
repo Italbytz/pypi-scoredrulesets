@@ -309,6 +309,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "ExactCPSATClassifier has no 'ruleset_' after fit(). "
                     "Please check exact_cpusat.py for errors."
                 )
+        elif backend_lower in {"add", "additive_add", "additiveadd"}:
+            if hasattr(self.estimator_, "to_ruleset"):
+                self.ruleset_ = self.estimator_.to_ruleset(feature_names=self.feature_names_in_)
+            else:
+                raise RuntimeError(
+                    "AdditiveADDClassifier has no 'to_ruleset()' method. "
+                    "Please check evolutionary_ml.obdd.additive for errors."
+                )
         else:
             # Tree-basierte Transformation (CART, HS)
             transform_cfg = TreeTransformParams(**(self.transform_params or {}))
@@ -785,6 +793,21 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 self.estimator_ = GreedyCascadedRegressor(**params)
                 self.estimator_.fit(X_valid, y_valid, feature_names=self.feature_names_in_)
                 self.ruleset_ = self.estimator_.to_ruleset()
+            elif backend_key in {"add", "additive_add", "additiveadd"}:
+                try:
+                    from evolutionary_ml.obdd import AdditiveADDRegressor
+                except ImportError as e:
+                    raise ImportError(
+                        "backend='add' requires evolutionary-ml to be installed. "
+                        "Install with: pip install 'evolutionary-ml'. "
+                        f"Import error: {e}"
+                    ) from e
+                params = dict(self.backend_params or {})
+                if self.random_state is not None:
+                    params.setdefault("random_state", self.random_state)
+                self.estimator_ = AdditiveADDRegressor(**params)
+                self.estimator_.fit(X_valid, y_valid)
+                self.ruleset_ = self.estimator_.to_ruleset(feature_names=self.feature_names_in_)
             elif backend_key in {"projection_rulegp", "projection_rulensga2"}:
                 base_b = "rulegp" if "rulegp" in backend_key else "rulensga2"
                 y_encoded, bin_edges, bin_centers = _encode_regression_targets(
@@ -814,7 +837,7 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 raise ValueError(
                     f"ScoredRuleSetRegressor unsupported backend '{self.backend}'. "
                     "Supported: 'cart', 'hs', 'greedy', 'greedy_cascaded', 'greedy_residual', 'greedy_pareto', 'cascaded_rulegp', "
-                    "'rulegp', 'rulensga2', 'ruleplcs', 'projection_rulegp', 'projection_rulensga2'."
+                    "'rulegp', 'rulensga2', 'ruleplcs', 'projection_rulegp', 'projection_rulensga2', 'add'."
                 )
 
         if hasattr(self.estimator_, "pareto_archive_") and not hasattr(self, "pareto_archive_"):

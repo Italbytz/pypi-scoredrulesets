@@ -256,11 +256,24 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return GreedyCascadedRegressor(**params)
 
+    if backend_key in ("add", "additive_add", "additiveadd"):
+        try:
+            from evolutionary_ml.obdd import AdditiveADDClassifier
+        except ImportError as e:
+            raise ImportError(
+                "backend='add' requires evolutionary-ml to be installed. "
+                "Install with: pip install 'evolutionary-ml'. "
+                f"Import error: {e}"
+            ) from e
+        if random_state is not None and _supports_kwarg(AdditiveADDClassifier, "random_state"):
+            params.setdefault("random_state", random_state)
+        return AdditiveADDClassifier(**params)
+
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: "
         f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', "
         f"'ruleplcs', 'rulenln', 'rulensga2', 'rulegp', 'exact', "
-        f"'greedy', 'greedy_pareto', 'greedy_cascaded', 'greedy_residual'."
+        f"'greedy', 'greedy_pareto', 'greedy_cascaded', 'greedy_residual', 'add'."
     )
 
 
