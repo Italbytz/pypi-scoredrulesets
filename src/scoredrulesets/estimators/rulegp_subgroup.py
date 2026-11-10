@@ -32,6 +32,17 @@ from .atom_space import (
 )
 from .base import BaseRuleSetEstimator
 
+try:
+    from evolutionary_ml.bitset import (
+        AtomSpec,
+        BitsetSpace,
+        eval_rule_mask_u64,
+        unpack_mask_bool,
+    )
+    HAS_BITSET_PARALLEL = True
+except ImportError:
+    HAS_BITSET_PARALLEL = False
+
 
 @dataclass(frozen=True)
 class _AtomGeneSubgroup:
@@ -145,6 +156,51 @@ class _RuleSetSubgroup:
                 preds[unfired] = self.default_weight
         return preds
 
+    def _rule_mask_bitset(
+        self,
+        rule: _RuleSubgroup,
+        ctx: "_BitsetContextSubgroup",
+        X_fallback: np.ndarray | None = None,
+    ) -> np.ndarray:
+        if not rule.atoms:
+            return np.zeros(ctx.n_samples, dtype=bool)
+
+        atom_ids: list[int] = []
+        for a in rule.atoms:
+            aid = ctx.get_atom_id(a)
+            if aid is None:
+                if X_fallback is not None:
+                    return self._rule_mask(rule, X_fallback)
+                return np.zeros(ctx.n_samples, dtype=bool)
+            atom_ids.append(aid)
+
+        rule_mask_u64 = eval_rule_mask_u64(atom_ids, ctx.bitsets, ctx.n_words)
+        if not np.any(rule_mask_u64):
+            return np.zeros(ctx.n_samples, dtype=bool)
+        return unpack_mask_bool(rule_mask_u64, ctx.n_samples)
+
+
+class _BitsetContextSubgroup:
+    """Precomputed bitset environment for subgroup GP evolution."""
+
+    def __init__(
+        self,
+        bitset_space: Any,
+        bitsets: np.ndarray,
+        n_samples: int,
+    ) -> None:
+        self.bitset_space = bitset_space
+        self.bitsets = bitsets
+        self.n_samples = n_samples
+        self.n_words = (n_samples + 63) // 64
+        self.atom_id_cache: dict[tuple[int, str, object], int] = {}
+        for idx, atom in enumerate(bitset_space.atoms):
+            self.atom_id_cache[atom.key] = idx
+
+    def get_atom_id(self, gene: _AtomGeneSubgroup) -> int | None:
+        key = _RuleSetSubgroup._atom_key(gene)
+        return self.atom_id_cache.get(key)
+
 
 @dataclass
 class _FitnessSubgroup:
@@ -161,23 +217,24 @@ class _FitnessSubgroup:
 
 
 def _evaluate_fitness_subgroup(
-    rs: _RuleSetSubgroup, 
-    X: np.ndarray, 
-    y: np.ndarray, 
-    global_mean: float, 
-    gamma: float
+    rs: _RuleSetSubgroup,
+    X: np.ndarray,
+    y: np.ndarray,
+    global_mean: float,
+    gamma: float,
+    ctx: _BitsetContextSubgroup | None = None,
 ) -> _FitnessSubgroup:
-    n = X.shape[0]
+    n = ctx.n_samples if ctx is not None else X.shape[0]
     total_quality = 0.0
-    
+
     # Track overlapping coverage
     coverage_counts = np.zeros(n, dtype=int)
-    
+
     for r in rs.rules:
-        mask = rs._rule_mask(r, X)
+        mask = rs._rule_mask_bitset(r, ctx, X_fallback=X) if ctx is not None else rs._rule_mask(r, X)
         coverage_counts[mask] += 1
         n_r = mask.sum()
-        
+
         if n_r > 0:
             local_mean = float(np.mean(y[mask]))
             # Subgroup Quality: (coverage^gamma) * absolute deviation from global mean
@@ -189,11 +246,11 @@ def _evaluate_fitness_subgroup(
         else:
             r.weight = global_mean
             r.quality = 0.0
-            
+
     # Overlap penalty
     overlap_sum = np.maximum(0, coverage_counts - 1).sum()
     overlap_penalty = (overlap_sum / n) * abs(global_mean) * 0.5
-    
+
     final_quality = total_quality - overlap_penalty
     size = sum(len(r.atoms) for r in rs.rules)
     return _FitnessSubgroup(quality=float(final_quality), size=size)
@@ -318,6 +375,22 @@ class RuleGPSubgroup(BaseRuleSetEstimator):
             # Fallback atom if no variation
             available_atoms.append(_AtomGeneSubgroup(feature_idx=0, op="<=", value=0.0))
 
+        ctx: _BitsetContextSubgroup | None = None
+        if HAS_BITSET_PARALLEL:
+            try:
+                bitset_space = BitsetSpace([
+                    AtomSpec(feature_idx=a.feature_idx, op=a.op, value=a.value)
+                    for a in available_atoms
+                ])
+                bitsets = bitset_space.compute_bitsets(X_arr)
+                ctx = _BitsetContextSubgroup(
+                    bitset_space=bitset_space,
+                    bitsets=bitsets,
+                    n_samples=X_arr.shape[0],
+                )
+            except Exception:
+                ctx = None
+
         # 2. Initialize Population
         pop_size = max(int(self.population_size), 10)
         pop: list[tuple[_RuleSetSubgroup, _FitnessSubgroup]] = []
@@ -331,7 +404,7 @@ class RuleGPSubgroup(BaseRuleSetEstimator):
                 rules.append(_RuleSubgroup(atoms=chosen_atoms))
             
             rs = _RuleSetSubgroup(rules=rules)
-            fit = _evaluate_fitness_subgroup(rs, X_arr, y_arr, self.global_mean_, self.gamma)
+            fit = _evaluate_fitness_subgroup(rs, X_arr, y_arr, self.global_mean_, self.gamma, ctx=ctx)
             pop.append((rs, fit))
 
         best_rs = pop[0][0]
@@ -377,7 +450,7 @@ class RuleGPSubgroup(BaseRuleSetEstimator):
                     if child_rs.rules[r_idx].atoms:
                         a_idx = rng.integers(0, len(child_rs.rules[r_idx].atoms))
                         child_rs.rules[r_idx].atoms[a_idx] = rng.choice(available_atoms)
-                c_fit = _evaluate_fitness_subgroup(child_rs, X_arr, y_arr, self.global_mean_, self.gamma)
+                c_fit = _evaluate_fitness_subgroup(child_rs, X_arr, y_arr, self.global_mean_, self.gamma, ctx=ctx)
                 offspring.append((child_rs, c_fit))
 
             # Combine and trim population
@@ -401,13 +474,19 @@ class RuleGPSubgroup(BaseRuleSetEstimator):
                 break
 
         # 4. Backward Rule Elimination (Post-hoc Compaction)
-        self.ruleset_internal_ = self._compact_ruleset(best_rs, X_arr, y_arr)
+        self.ruleset_internal_ = self._compact_ruleset(best_rs, X_arr, y_arr, ctx=ctx)
         self.ruleset_ = self._to_schema_ruleset(self.ruleset_internal_, X_arr)
         return self
 
-    def _compact_ruleset(self, rs: _RuleSetSubgroup, X: np.ndarray, y: np.ndarray) -> _RuleSetSubgroup:
+    def _compact_ruleset(
+        self,
+        rs: _RuleSetSubgroup,
+        X: np.ndarray,
+        y: np.ndarray,
+        ctx: _BitsetContextSubgroup | None = None,
+    ) -> _RuleSetSubgroup:
         curr_rs = rs.clone()
-        base_fit = _evaluate_fitness_subgroup(curr_rs, X, y, self.global_mean_, self.gamma)
+        base_fit = _evaluate_fitness_subgroup(curr_rs, X, y, self.global_mean_, self.gamma, ctx=ctx)
         
         # Greedily remove rules if Quality does not drop significantly
         improved = True
@@ -419,15 +498,14 @@ class RuleGPSubgroup(BaseRuleSetEstimator):
             for idx in range(len(curr_rs.rules)):
                 cand_rs = curr_rs.clone()
                 cand_rs.rules.pop(idx)
-                cand_fit = _evaluate_fitness_subgroup(cand_rs, X, y, self.global_mean_, self.gamma)
+                cand_fit = _evaluate_fitness_subgroup(cand_rs, X, y, self.global_mean_, self.gamma, ctx=ctx)
                 if cand_fit.quality >= best_cand_quality:
                     best_cand_quality = cand_fit.quality
                     best_candidate = cand_rs
 
             if best_candidate is not None:
                 curr_rs = best_candidate
-                base_fit = _evaluate_fitness_subgroup(curr_rs, X, y, self.global_mean_, self.gamma)
-                improved = True
+                base_fit = _evaluate_fitness_subgroup(curr_rs, X, y, self.global_mean_, self.gamma, ctx=ctx)
                 improved = True
 
         return curr_rs

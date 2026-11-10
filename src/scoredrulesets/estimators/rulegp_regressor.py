@@ -32,6 +32,17 @@ from .atom_space import (
 )
 from .base import BaseRuleSetEstimator
 
+try:
+    from evolutionary_ml.bitset import (
+        AtomSpec,
+        BitsetSpace,
+        eval_rule_mask_u64,
+        unpack_mask_bool,
+    )
+    HAS_BITSET_PARALLEL = True
+except ImportError:
+    HAS_BITSET_PARALLEL = False
+
 
 @dataclass(frozen=True)
 class _AtomGeneReg:
@@ -161,6 +172,93 @@ class _RuleSetReg:
                     preds[unfired] = self.default_weight
         return preds
 
+    def _rule_mask_bitset(
+        self,
+        rule: _RuleReg,
+        ctx: "_BitsetContextReg",
+        X_fallback: np.ndarray | None = None,
+    ) -> np.ndarray:
+        if not rule.atoms:
+            return np.zeros(ctx.n_samples, dtype=bool)
+
+        atom_ids: list[int] = []
+        for a in rule.atoms:
+            aid = ctx.get_atom_id(a)
+            if aid is None:
+                if X_fallback is not None:
+                    return self._rule_mask(rule, X_fallback)
+                return np.zeros(ctx.n_samples, dtype=bool)
+            atom_ids.append(aid)
+
+        rule_mask_u64 = eval_rule_mask_u64(atom_ids, ctx.bitsets, ctx.n_words)
+        if not np.any(rule_mask_u64):
+            return np.zeros(ctx.n_samples, dtype=bool)
+        return unpack_mask_bool(rule_mask_u64, ctx.n_samples)
+
+    def predict_bitset(
+        self,
+        ctx: "_BitsetContextReg",
+        X: np.ndarray,
+    ) -> np.ndarray:
+        n_samples = ctx.n_samples
+        is_multi = isinstance(self.default_weight, np.ndarray) and self.default_weight.ndim > 0
+        if is_multi:
+            preds = np.zeros((n_samples, len(self.default_weight)), dtype=float)
+            counts = np.zeros((n_samples, 1), dtype=int)
+        else:
+            preds = np.zeros(n_samples, dtype=float)
+            counts = np.zeros(n_samples, dtype=int)
+
+        for rule in self.rules:
+            mask = self._rule_mask_bitset(rule, ctx, X_fallback=X)
+            if mask.any():
+                if self.prediction_type == "linear" and getattr(rule, "beta", None) is not None:
+                    preds[mask] += (X[mask] @ rule.beta) + rule.beta0
+                else:
+                    if is_multi:
+                        preds[mask] += rule.weight.reshape(1, -1)
+                        counts[mask] += 1
+                    else:
+                        preds[mask] += rule.weight
+                        counts[mask] += 1
+
+        fired = (counts > 0).ravel() if is_multi else counts > 0
+        if fired.any():
+            preds[fired] /= counts[fired]
+
+        unfired = ~fired
+        if unfired.any():
+            if self.prediction_type == "linear" and getattr(self, "default_beta", None) is not None:
+                preds[unfired] = (X[unfired] @ self.default_beta) + self.default_beta0
+            else:
+                if is_multi:
+                    preds[unfired] = self.default_weight.reshape(1, -1)
+                else:
+                    preds[unfired] = self.default_weight
+        return preds
+
+
+class _BitsetContextReg:
+    """Precomputed bitset environment for regression GP evolution."""
+
+    def __init__(
+        self,
+        bitset_space: Any,
+        bitsets: np.ndarray,
+        n_samples: int,
+    ) -> None:
+        self.bitset_space = bitset_space
+        self.bitsets = bitsets
+        self.n_samples = n_samples
+        self.n_words = (n_samples + 63) // 64
+        self.atom_id_cache: dict[tuple[int, str, object], int] = {}
+        for idx, atom in enumerate(bitset_space.atoms):
+            self.atom_id_cache[atom.key] = idx
+
+    def get_atom_id(self, gene: _AtomGeneReg) -> int | None:
+        key = _RuleSetReg._atom_key(gene)
+        return self.atom_id_cache.get(key)
+
 
 @dataclass(frozen=True)
 class _FitnessReg:
@@ -174,25 +272,31 @@ class _FitnessReg:
         return ge and gt
 
 
-def _compute_regression_weights(rs: _RuleSetReg, X: np.ndarray, y: np.ndarray) -> None:
+def _compute_regression_weights(
+    rs: _RuleSetReg,
+    X: np.ndarray,
+    y: np.ndarray,
+    ctx: _BitsetContextReg | None = None,
+) -> None:
     global_mean = np.mean(y, axis=0) if y.size > 0 else (np.zeros(y.shape[1]) if y.ndim > 1 else 0.0)
     any_fired = np.zeros(X.shape[0], dtype=bool)
 
     if getattr(rs, "prediction_type", "constant") == "linear":
         from sklearn.linear_model import Ridge
-        
+
         # Fit global linear model as fallback
-        ridge_global = Ridge(alpha=1.0)
-        if X.shape[0] > 1:
-            ridge_global.fit(X, y)
-            rs.default_beta = ridge_global.coef_
-            rs.default_beta0 = float(ridge_global.intercept_)
-        else:
-            rs.default_beta = np.zeros(X.shape[1])
-            rs.default_beta0 = global_mean
+        if getattr(rs, "default_beta", None) is None:
+            ridge_global = Ridge(alpha=1.0)
+            if X.shape[0] > 1:
+                ridge_global.fit(X, y)
+                rs.default_beta = ridge_global.coef_
+                rs.default_beta0 = float(ridge_global.intercept_)
+            else:
+                rs.default_beta = np.zeros(X.shape[1])
+                rs.default_beta0 = global_mean
 
         for rule in rs.rules:
-            mask = rs._rule_mask(rule, X)
+            mask = rs._rule_mask_bitset(rule, ctx, X_fallback=X) if ctx is not None else rs._rule_mask(rule, X)
             any_fired |= mask
             if mask.sum() > 1:
                 ridge_local = Ridge(alpha=1.0)
@@ -204,7 +308,7 @@ def _compute_regression_weights(rs: _RuleSetReg, X: np.ndarray, y: np.ndarray) -
                 rule.beta0 = global_mean
     else:
         for rule in rs.rules:
-            mask = rs._rule_mask(rule, X)
+            mask = rs._rule_mask_bitset(rule, ctx, X_fallback=X) if ctx is not None else rs._rule_mask(rule, X)
             any_fired |= mask
             if mask.any():
                 rule.weight = np.mean(y[mask], axis=0)
@@ -218,9 +322,15 @@ def _compute_regression_weights(rs: _RuleSetReg, X: np.ndarray, y: np.ndarray) -
             rs.default_weight = global_mean
 
 
-def _evaluate_fitness_reg(rs: _RuleSetReg, X: np.ndarray, y: np.ndarray) -> _FitnessReg:
-    preds = rs.predict(X)
-    mse = float(np.mean((y - preds) ** 2))
+def _evaluate_fitness_reg(
+    rs: _RuleSetReg,
+    X: np.ndarray,
+    y: np.ndarray,
+    ctx: _BitsetContextReg | None = None,
+) -> _FitnessReg:
+    preds = rs.predict_bitset(ctx, X) if ctx is not None else rs.predict(X)
+    diff = y - preds
+    mse = float(np.mean(diff ** 2))
     rmse = float(np.sqrt(mse))
     var_y = float(np.var(y))
     r2 = 1.0 - (mse / var_y) if var_y > 1e-12 else 0.0
@@ -344,6 +454,22 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
             available_atoms.append(_AtomGeneReg(feature_idx=0, op="<=", value=0.0))
 
         # 2. Initialize Population
+        ctx: _BitsetContextReg | None = None
+        if HAS_BITSET_PARALLEL:
+            try:
+                bitset_space = BitsetSpace([
+                    AtomSpec(feature_idx=a.feature_idx, op=a.op, value=a.value)
+                    for a in available_atoms
+                ])
+                bitsets = bitset_space.compute_bitsets(X_arr)
+                ctx = _BitsetContextReg(
+                    bitset_space=bitset_space,
+                    bitsets=bitsets,
+                    n_samples=X_arr.shape[0],
+                )
+            except Exception:
+                ctx = None
+
         pop_size = max(int(self.population_size), 10)
         pop: list[tuple[_RuleSetReg, _FitnessReg]] = []
 
@@ -354,10 +480,10 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
                 n_a = rng.integers(1, min(self.max_atoms_per_rule or 4, len(available_atoms)) + 1)
                 chosen_atoms = [rng.choice(available_atoms) for _ in range(n_a)]
                 rules.append(_RuleReg(atoms=chosen_atoms))
-            
+
             rs = _RuleSetReg(rules=rules, prediction_type=self.prediction_type)
-            _compute_regression_weights(rs, X_arr, y_arr)
-            fit = _evaluate_fitness_reg(rs, X_arr, y_arr)
+            _compute_regression_weights(rs, X_arr, y_arr, ctx=ctx)
+            fit = _evaluate_fitness_reg(rs, X_arr, y_arr, ctx=ctx)
             pop.append((rs, fit))
 
         best_rs = pop[0][0]
@@ -378,7 +504,7 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
 
                 # Mutation operators
                 mut_type = rng.choice(["add_rule", "drop_rule", "add_atom", "drop_atom", "modify_atom"])
-                
+
                 max_r = self.max_rules or 12
                 max_a = self.max_atoms_per_rule or 4
 
@@ -404,8 +530,8 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
                         a_idx = rng.integers(0, len(child_rs.rules[r_idx].atoms))
                         child_rs.rules[r_idx].atoms[a_idx] = rng.choice(available_atoms)
 
-                _compute_regression_weights(child_rs, X_arr, y_arr)
-                c_fit = _evaluate_fitness_reg(child_rs, X_arr, y_arr)
+                _compute_regression_weights(child_rs, X_arr, y_arr, ctx=ctx)
+                c_fit = _evaluate_fitness_reg(child_rs, X_arr, y_arr, ctx=ctx)
                 offspring.append((child_rs, c_fit))
 
             # Combine and trim population
@@ -429,14 +555,20 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
                 break
 
         # 4. Backward Rule Elimination (Post-hoc Compaction)
-        self.ruleset_internal_ = self._compact_ruleset(best_rs, X_arr, y_arr)
+        self.ruleset_internal_ = self._compact_ruleset(best_rs, X_arr, y_arr, ctx=ctx)
         self.ruleset_ = self._to_schema_ruleset(self.ruleset_internal_)
         return self
 
-    def _compact_ruleset(self, rs: _RuleSetReg, X: np.ndarray, y: np.ndarray) -> _RuleSetReg:
+    def _compact_ruleset(
+        self,
+        rs: _RuleSetReg,
+        X: np.ndarray,
+        y: np.ndarray,
+        ctx: _BitsetContextReg | None = None,
+    ) -> _RuleSetReg:
         curr_rs = rs.clone()
-        base_fit = _evaluate_fitness_reg(curr_rs, X, y)
-        
+        base_fit = _evaluate_fitness_reg(curr_rs, X, y, ctx=ctx)
+
         # Greedily remove rules if RMSE does not increase significantly
         improved = True
         while improved and len(curr_rs.rules) > 1:
@@ -447,15 +579,15 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
             for idx in range(len(curr_rs.rules)):
                 cand_rs = curr_rs.clone()
                 cand_rs.rules.pop(idx)
-                _compute_regression_weights(cand_rs, X, y)
-                cand_fit = _evaluate_fitness_reg(cand_rs, X, y)
+                _compute_regression_weights(cand_rs, X, y, ctx=ctx)
+                cand_fit = _evaluate_fitness_reg(cand_rs, X, y, ctx=ctx)
                 if cand_fit.rmse <= best_cand_rmse:
                     best_cand_rmse = cand_fit.rmse
                     best_candidate = cand_rs
 
             if best_candidate is not None:
                 curr_rs = best_candidate
-                base_fit = _evaluate_fitness_reg(curr_rs, X, y)
+                base_fit = _evaluate_fitness_reg(curr_rs, X, y, ctx=ctx)
                 improved = True
 
         return curr_rs
