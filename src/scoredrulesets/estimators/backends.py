@@ -415,13 +415,13 @@ def _supports_kwarg(cls: type[Any], param_name: str) -> bool:
 
 
 def _resolve_logicgp_class():
-    """Load the LogicGPClassifier class from this project."""
+    """Load the LogicGPClassifier class from evolutionary_ml.logicgp."""
     try:
-        from .logicgp import LogicGPClassifier
+        from evolutionary_ml.logicgp import LogicGPClassifier
         return LogicGPClassifier
     except ImportError as e:
         raise ImportError(
-            "backend='logicgp' could not load LogicGPClassifier. "
+            "backend='logicgp' requires evolutionary-ml to be installed. "
             f"Import error: {e}"
         ) from e
 

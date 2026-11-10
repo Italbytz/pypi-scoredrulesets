@@ -45,7 +45,7 @@ def test_rulegp_logicgp_binned_sets_stays_close_to_logicgp_rlcw_macro_f1():
     from sklearn.metrics import f1_score
     from sklearn.model_selection import train_test_split
 
-    from scoredrulesets.estimators.logicgp import LogicGPClassifier, _discretize_features
+    from evolutionary_ml.logicgp import LogicGPClassifier, discretize_features as _discretize_features
     from scoredrulesets.estimators.rulegp import RuleGPClassifier
 
     X, y = load_wine(return_X_y=True)
