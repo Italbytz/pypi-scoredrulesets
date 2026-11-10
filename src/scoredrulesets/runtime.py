@@ -71,19 +71,31 @@ def decision_function(ruleset: ScoredRuleSet, X: np.ndarray, debug: bool = False
     scores = np.zeros((X.shape[0], n_classes), dtype=float)
     feature_names = ruleset.feature_names or [f"f{i}" for i in range(X.shape[1])]
 
-    # Identify default rule(s) (rules without conditions).
+    # Identify default rule(s) and intercept rule(s).
     default_scores = np.zeros(n_classes, dtype=float)
+    intercept_scores = np.zeros(n_classes, dtype=float)
     has_default = False
+    has_intercept = False
     non_default_rules = []
+    is_default_plus = ruleset.aggregation.type in ("default_plus_sum", "default_plus_argmax_sum")
+
     for rule in ruleset.rules:
         if not getattr(rule, 'atoms', None):
-            default_scores += np.asarray(rule.scores, dtype=float)
-            has_default = True
+            is_intercept = is_default_plus or getattr(rule, "metadata", {}).get("kind") == "intercept"
+            if is_intercept:
+                intercept_scores += np.asarray(rule.scores, dtype=float)
+                has_intercept = True
+            else:
+                default_scores += np.asarray(rule.scores, dtype=float)
+                has_default = True
         else:
             non_default_rules.append(rule)
 
     for i, row in enumerate(X):
         fired_rules = []
+        if has_intercept:
+            scores[i] += intercept_scores
+            fired_rules.append(("intercept", intercept_scores.tolist()))
         # Check whether at least one non-default rule fires.
         non_default_fired = []
         for rule in non_default_rules:

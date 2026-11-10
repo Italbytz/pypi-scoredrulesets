@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from sklearn.datasets import load_breast_cancer, load_iris, make_regression
+from sklearn.datasets import load_breast_cancer, load_iris, load_wine, make_regression
 from sklearn.metrics import f1_score, r2_score
 
 from scoredrulesets.estimators import (
@@ -158,7 +158,7 @@ class TestBackendADD:
 
         clf = ScoredRuleSetClassifier(
             backend="memetic_add",
-            backend_params={"n_estimators": 4, "max_depth": 2, "population_size": 15, "n_generations": 5, "random_state": 42},
+            backend_params={"n_estimators": 6, "max_depth": 2, "population_size": 20, "n_generations": 8, "random_state": 42},
             random_state=42,
         )
         clf.fit(X, y)
@@ -171,7 +171,7 @@ class TestBackendADD:
         preds = clf.predict(X)
         assert len(preds) == len(y)
         f1 = f1_score(y, preds, average="macro")
-        assert f1 > 0.80
+        assert f1 > 0.85
 
         proba = clf.predict_proba(X)
         assert proba.shape == (len(y), 2)
@@ -196,3 +196,40 @@ class TestBackendADD:
         assert len(preds) == len(y)
         r2 = r2_score(y, preds)
         assert r2 > 0.20
+
+    def test_exact_prediction_identity_between_add_model_and_ruleset(self):
+        """Verify that ScoredRuleSet evaluation is 100% mathematically identical to ADD ensemble evaluation."""
+        from scoredrulesets.runtime import predict, predict_regression
+
+        # Binary
+        X_bc, y_bc = load_breast_cancer(return_X_y=True)
+        clf = ScoredRuleSetClassifier(
+            backend="add",
+            backend_params={"n_estimators": 8, "max_depth": 2, "random_state": 42},
+            random_state=42,
+        ).fit(X_bc, y_bc)
+        m_pred = clf.estimator_.predict(X_bc)
+        rs_pred = predict(clf.ruleset_, X_bc)
+        np.testing.assert_array_equal(m_pred, rs_pred)
+
+        # Multiclass
+        X_w, y_w = load_wine(return_X_y=True)
+        clf_w = ScoredRuleSetClassifier(
+            backend="add",
+            backend_params={"n_estimators": 6, "max_depth": 2, "random_state": 42},
+            random_state=42,
+        ).fit(X_w, y_w)
+        m_pred_w = clf_w.estimator_.predict(X_w)
+        rs_pred_w = predict(clf_w.ruleset_, X_w)
+        np.testing.assert_array_equal(m_pred_w, rs_pred_w)
+
+        # Regression
+        X_d, y_d = load_breast_cancer(return_X_y=True)  # use continuous X
+        reg = ScoredRuleSetRegressor(
+            backend="add",
+            backend_params={"n_estimators": 8, "max_depth": 2, "random_state": 42},
+            random_state=42,
+        ).fit(X_d, y_d.astype(float))
+        m_pred_reg = reg.estimator_.predict(X_d)
+        rs_pred_reg = predict_regression(reg.ruleset_, X_d)
+        np.testing.assert_allclose(m_pred_reg, rs_pred_reg, atol=1e-10)
