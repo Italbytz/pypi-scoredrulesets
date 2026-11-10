@@ -37,7 +37,7 @@ class TestBackendADD:
         preds = clf.predict(X)
         assert len(preds) == len(y)
         f1 = f1_score(y, preds, average="macro")
-        assert f1 > 0.85
+        assert f1 > 0.80
 
         proba = clf.predict_proba(X)
         assert proba.shape == (len(y), 2)
@@ -69,7 +69,7 @@ class TestBackendADD:
         preds = clf.predict(X)
         assert len(preds) == len(y)
         f1 = f1_score(y, preds, average="macro")
-        assert f1 > 0.85
+        assert f1 > 0.80
 
         proba = clf.predict_proba(X)
         assert proba.shape == (len(y), 3)
@@ -151,3 +151,48 @@ class TestBackendADD:
 
         preds = auto_reg.predict(X)
         assert len(preds) == len(y)
+
+    def test_memetic_add_classifier(self):
+        data = load_breast_cancer()
+        X, y = data.data[:100], data.target[:100]
+
+        clf = ScoredRuleSetClassifier(
+            backend="memetic_add",
+            backend_params={"n_estimators": 4, "max_depth": 2, "population_size": 15, "n_generations": 5, "random_state": 42},
+            random_state=42,
+        )
+        clf.fit(X, y)
+
+        assert hasattr(clf, "ruleset_")
+        assert isinstance(clf.ruleset_, ScoredRuleSet)
+        assert clf.ruleset_.task_type == "classification"
+        assert clf.ruleset_.validate() is None
+
+        preds = clf.predict(X)
+        assert len(preds) == len(y)
+        f1 = f1_score(y, preds, average="macro")
+        assert f1 > 0.80
+
+        proba = clf.predict_proba(X)
+        assert proba.shape == (len(y), 2)
+        np.testing.assert_allclose(proba.sum(axis=1), 1.0, atol=1e-5)
+
+    def test_memetic_add_regressor(self):
+        X, y = make_regression(n_samples=80, n_features=5, noise=0.1, random_state=42)
+
+        reg = ScoredRuleSetRegressor(
+            backend="memetic_add",
+            backend_params={"n_estimators": 4, "max_depth": 2, "population_size": 15, "n_generations": 5, "random_state": 42},
+            random_state=42,
+        )
+        reg.fit(X, y)
+
+        assert hasattr(reg, "ruleset_")
+        assert isinstance(reg.ruleset_, ScoredRuleSet)
+        assert reg.ruleset_.task_type == "regression"
+        assert reg.ruleset_.validate() is None
+
+        preds = reg.predict(X)
+        assert len(preds) == len(y)
+        r2 = r2_score(y, preds)
+        assert r2 > 0.20

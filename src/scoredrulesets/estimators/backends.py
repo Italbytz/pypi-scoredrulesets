@@ -269,11 +269,24 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return AdditiveADDClassifier(**params)
 
+    if backend_key in ("memetic_add", "memeticadd"):
+        try:
+            from evolutionary_ml.obdd import MemeticADDClassifier
+        except ImportError as e:
+            raise ImportError(
+                "backend='memetic_add' requires evolutionary-ml to be installed. "
+                "Install with: pip install 'evolutionary-ml'. "
+                f"Import error: {e}"
+            ) from e
+        if random_state is not None and _supports_kwarg(MemeticADDClassifier, "random_state"):
+            params.setdefault("random_state", random_state)
+        return MemeticADDClassifier(**params)
+
     raise ValueError(
         f"Unknown backend '{backend}'. Supported backends: "
         f"'cart', 'hs', 'rulekit', 'rulekit_native', 'exstracs', 'logicgp', "
         f"'ruleplcs', 'rulenln', 'rulensga2', 'rulegp', 'exact', "
-        f"'greedy', 'greedy_pareto', 'greedy_cascaded', 'greedy_residual', 'add'."
+        f"'greedy', 'greedy_pareto', 'greedy_cascaded', 'greedy_residual', 'add', 'memetic_add'."
     )
 
 

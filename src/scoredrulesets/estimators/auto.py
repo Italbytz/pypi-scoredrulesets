@@ -1423,6 +1423,8 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                         bp = {"max_depth": 3}
                     elif bp is None and backend in ("add", "additive_add", "additiveadd"):
                         bp = {"max_depth": 2, "n_estimators": 15}
+                    elif bp is None and backend in ("memetic_add", "memeticadd"):
+                        bp = {"max_depth": 2, "n_estimators": 5, "n_generations": 5, "population_size": 20}
                     factories[backend] = _probe_factory(backend, bp)
                 try:
                     probe_ranks = _probe_hv_contribution(
@@ -1439,6 +1441,8 @@ class AutoScoredRuleSetClassifier(BaseRuleSetEstimator, ClassifierMixin):
                         bp = {"max_depth": 3}
                     elif bp is None and backend in ("add", "additive_add", "additiveadd"):
                         bp = {"max_depth": 2, "n_estimators": 15}
+                    elif bp is None and backend in ("memetic_add", "memeticadd"):
+                        bp = {"max_depth": 2, "n_estimators": 5, "n_generations": 5, "population_size": 20}
                     try:
                         sc = cross_val_score(
                             _probe_factory(backend, bp)(), X_probe, y_probe,
@@ -1910,6 +1914,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                         bp = {"max_depth": 3}
                     elif bp is None and backend in ("add", "additive_add", "additiveadd"):
                         bp = {"max_depth": 2, "n_estimators": 15}
+                    elif bp is None and backend in ("memetic_add", "memeticadd"):
+                        bp = {"max_depth": 2, "n_estimators": 5, "n_generations": 5, "population_size": 20}
                     factories[backend] = _probe_factory_reg(backend, bp)
                 try:
                     probe_ranks_reg = _probe_hv_contribution(
@@ -1926,6 +1932,8 @@ class AutoScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                         bp = {"max_depth": 3}
                     elif bp is None and backend in ("add", "additive_add", "additiveadd"):
                         bp = {"max_depth": 2, "n_estimators": 15}
+                    elif bp is None and backend in ("memetic_add", "memeticadd"):
+                        bp = {"max_depth": 2, "n_estimators": 5, "n_generations": 5, "population_size": 20}
                     try:
                         sc = cross_val_score(
                             _probe_factory_reg(backend, bp)(), X_probe, y_probe,
