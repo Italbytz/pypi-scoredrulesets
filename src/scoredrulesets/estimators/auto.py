@@ -298,7 +298,8 @@ def _admit_full_fit(
             and bool(fold_ladders)
             and max(stable_front_keys, default=0) < 16
         )
-        if (not raw_scores or len(raw_scores) < min_folds) and not is_sparse_terminal:
+        has_ladder = len(key) == 2 and key[0] == "front" and bool(fold_ladders)
+        if (not raw_scores or len(raw_scores) < min_folds) and not is_sparse_terminal and not has_ladder:
             continue
         if len(key) == 2 and key[0] == "front" and fold_ladders and (
             not raw_scores or len(raw_scores) < len(fold_ladders)
