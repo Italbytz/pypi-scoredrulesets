@@ -488,6 +488,9 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
 
         if self.is_ruleset_mode_:
             X_prepared = self._prepare_X_for_prediction(X_valid)
+            if hasattr(self.estimator_, "threshold_") and len(self.classes_) == 2 and getattr(self.estimator_, "class_weight", None) is not None:
+                proba = self.predict_proba(X)
+                return self.classes_[(proba[:, 1] > self.estimator_.threshold_).astype(int)]
             return predict_from_ruleset(self.ruleset_, X_prepared)
 
         estimator: Any = self.estimator_

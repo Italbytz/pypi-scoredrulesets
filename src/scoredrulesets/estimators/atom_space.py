@@ -22,7 +22,7 @@ NativeAtomSpaceStrategy = Literal[
     "categorical_low_cardinality_only",
     "genotype_aware",
 ]
-ContinuousThresholdStrategy = Literal["quantile_midpoint", "supervised_mdl"]
+ContinuousThresholdStrategy = Literal["quantile_midpoint", "supervised_mdl", "tree_splits"]
 NLNThresholdStrategy = Literal["quantile_midpoint", "quantile_only", "midpoint_only"]
 RulePLCSFeatureTypingStrategy = Literal[
     "auto_low_cardinality",
@@ -346,13 +346,13 @@ def build_native_feature_specs(
             f"'{strategy}'. Choose 'hybrid', 'numeric_only', "
             "'categorical_low_cardinality_only', or 'genotype_aware'."
         )
-    if continuous_threshold_strategy not in ("quantile_midpoint", "supervised_mdl"):
+    if continuous_threshold_strategy not in ("quantile_midpoint", "supervised_mdl", "tree_splits"):
         raise ValueError(
             "Unknown continuous threshold strategy "
-            f"'{continuous_threshold_strategy}'. Choose 'quantile_midpoint' or "
-            "'supervised_mdl'."
+            f"'{continuous_threshold_strategy}'. Choose 'quantile_midpoint', "
+            "'supervised_mdl', or 'tree_splits'."
         )
-    supervised = continuous_threshold_strategy == "supervised_mdl" and y is not None
+    supervised = continuous_threshold_strategy in ("supervised_mdl", "tree_splits") and y is not None
 
     specs: list[dict[str, Any]] = []
     for fi in range(X.shape[1]):
@@ -366,7 +366,26 @@ def build_native_feature_specs(
         if np.issubdtype(arr.dtype, np.number):
             float_full = arr.astype(float)
             vals = np.unique(float_full)
-            if supervised and vals.size >= 2:
+            if continuous_threshold_strategy == "tree_splits" and y is not None and vals.size >= 2:
+                from sklearn.tree import DecisionTreeClassifier
+                try:
+                    tree = DecisionTreeClassifier(
+                        max_leaf_nodes=max_thresholds or 10,
+                        random_state=42,
+                    )
+                    tree.fit(float_full.reshape(-1, 1), y)
+                    thresh = tree.tree_.threshold[tree.tree_.feature == 0]
+                    thresh = thresh[thresh != -2]
+                    thr = sorted(np.unique(thresh).astype(float).tolist()) if len(thresh) > 0 else []
+                except Exception:
+                    thr = []
+                if not thr:
+                    if vals.size <= 20:
+                        thr = ((vals[:-1] + vals[1:]) / 2.0).tolist()
+                    else:
+                        q = np.unique(np.quantile(vals, np.linspace(0.05, 0.95, 10)))
+                        thr = q.astype(float).tolist()
+            elif supervised and vals.size >= 2:
                 thr = fayyad_irani_cut_points(
                     float_full, y, max_cut_points=max_thresholds
                 )

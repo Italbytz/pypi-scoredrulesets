@@ -517,6 +517,8 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         diversity_stagnation_threshold: float = 0.1,
         diversity_rescue_attempts: int = 0,
         feature_names: list[str] | None = None,
+        subsample: float | int | None = None,
+        class_weight: str | dict | None = None,
         random_state: int | None = None,
         record_population: bool = False,
     ):
@@ -547,6 +549,8 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         self.max_thresholds_per_feature = max_thresholds_per_feature
         self.atom_space_strategy = atom_space_strategy
         self.continuous_threshold_strategy = continuous_threshold_strategy
+        self.subsample = subsample
+        self.class_weight = class_weight
         if atom_preselection_strategy not in (
             "none",
             "logicgp_singleton",
@@ -641,13 +645,43 @@ class RuleGPClassifier(BaseRuleSetEstimator):
         class_to_idx = {label: idx for idx, label in enumerate(self.classes_)}
         y_idx = np.asarray([class_to_idx[v] for v in y_valid], dtype=int)
 
-        X_train, y_train = X_valid, y_idx
+        use_subsample = False
+        n_samples_total = X_valid.shape[0]
+        if self.subsample is not None and n_samples_total > 50:
+            if isinstance(self.subsample, float) and 0.0 < self.subsample < 1.0:
+                n_sub = int(n_samples_total * self.subsample)
+            elif isinstance(self.subsample, (int, np.integer)) and 10 <= self.subsample < n_samples_total:
+                n_sub = int(self.subsample)
+            else:
+                n_sub = n_samples_total
+
+            if n_sub < n_samples_total:
+                use_subsample = True
+                try:
+                    sss_sub = StratifiedShuffleSplit(
+                        n_splits=1,
+                        train_size=n_sub,
+                        random_state=(self.random_state if self.random_state is not None else 0),
+                    )
+                    sub_idx, _ = next(sss_sub.split(X_valid, y_idx))
+                except Exception:
+                    sub_idx = self._rng_.choice(n_samples_total, size=n_sub, replace=False)
+                X_base = X_valid[sub_idx]
+                y_base = y_idx[sub_idx]
+            else:
+                X_base = X_valid
+                y_base = y_idx
+        else:
+            X_base = X_valid
+            y_base = y_idx
+
+        X_train, y_train = X_base, y_base
         X_val = None
         y_val = None
         if (
             self.validation_fraction > 0
-            and X_valid.shape[0] >= 30
-            and len(np.unique(y_idx)) >= 2
+            and X_base.shape[0] >= 30
+            and len(np.unique(y_base)) >= 2
         ):
             try:
                 sss = StratifiedShuffleSplit(
@@ -655,11 +689,11 @@ class RuleGPClassifier(BaseRuleSetEstimator):
                     test_size=self.validation_fraction,
                     random_state=(self.random_state if self.random_state is not None else 0),
                 )
-                train_idx, val_idx = next(sss.split(X_valid, y_idx))
-                X_train = X_valid[train_idx]
-                y_train = y_idx[train_idx]
-                X_val = X_valid[val_idx]
-                y_val = y_idx[val_idx]
+                train_idx, val_idx = next(sss.split(X_base, y_base))
+                X_train = X_base[train_idx]
+                y_train = y_base[train_idx]
+                X_val = X_base[val_idx]
+                y_val = y_base[val_idx]
             except ValueError:
                 pass
 
@@ -857,11 +891,26 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             ctx=ctx,
         )
 
-        if X_val is not None and y_val is not None:
+        if (X_val is not None and y_val is not None) or use_subsample:
             _compute_weights2(best_rs, X_valid, y_idx, n_classes)
 
         self.ruleset_ = _to_ruleset_rulegp(self, best_rs, n_classes)
         self.ruleset_.validate()
+
+        # Optional threshold calibration for binary classification with class_weight
+        if self.class_weight is not None and n_classes == 2:
+            proba_tr = self.predict_proba(X_valid)[:, 1]
+            best_tau = 0.5
+            best_score = -1.0
+            for tau in np.linspace(0.05, 0.95, 37):
+                preds_cand = (proba_tr > tau).astype(int)
+                score_cand = _f1_score(y_idx, preds_cand, average="macro")
+                if score_cand > best_score:
+                    best_score = score_cand
+                    best_tau = tau
+            self.threshold_ = float(best_tau)
+        else:
+            self.threshold_ = 0.5
 
         # Expose the final Pareto archive as schema rule sets keyed by atom
         # count, so AutoScoredRuleSetClassifier harvests the WHOLE front
@@ -883,6 +932,9 @@ class RuleGPClassifier(BaseRuleSetEstimator):
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
+        if self.class_weight is not None and len(self.classes_) == 2 and hasattr(self, "threshold_"):
+            proba = self.predict_proba(X)[:, 1]
+            return self.classes_[(proba > self.threshold_).astype(int)]
         X_arr: np.ndarray = np.asarray(check_array(X, dtype=None))
         if X_arr.shape[1] != self.n_features_in_:
             raise ValueError(
