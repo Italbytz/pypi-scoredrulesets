@@ -591,6 +591,10 @@ class RuleGPClassifier(BaseRuleSetEstimator):
             "ensemble_rich",
             "ensemble_rich_atoms_only",
             "ensemble_rich_seeds_only",
+            "cg",
+            "cg_atoms_only",
+            "cg_seeds_only",
+            "column_generation",
         )
         if warmstart_strategy not in valid_warmstarts:
             raise ValueError(

@@ -815,6 +815,49 @@ def extract_ensemble_rich_components(
     return full_atoms, seed_rules, multirule_seeds
 
 
+def extract_cg_components(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    feature_names: list[str],
+    max_rules: int = 20,
+    max_rules_seed: int = 15,
+    random_state: int | None = None,
+    return_estimator: bool = False,
+) -> tuple[Any, ...]:
+    """Extract atoms and seed rules using Dantzig-Wolfe Column Generation."""
+    from ..estimators.cg_ruleset import ColumnGenerationClassifier
+    clf = ColumnGenerationClassifier(
+        max_rules=max_rules,
+        random_state=random_state,
+    )
+    clf.fit(X_train, y_train, feature_names=feature_names)
+    rs = clf.to_ruleset()
+
+    atoms_set = set()
+    seed_rules = []
+    fname_to_idx = {fn: idx for idx, fn in enumerate(feature_names)}
+
+    for r in rs.rules:
+        if not r.atoms:
+            continue
+        rule_atoms = []
+        for a in r.atoms:
+            fi = fname_to_idx.get(a.feature, _parse_feature_idx(a.feature, feature_names))
+            atom_tuple = (fi, a.op, float(a.value))
+            atoms_set.add(atom_tuple)
+            rule_atoms.append(atom_tuple)
+        if rule_atoms:
+            seed_rules.append(rule_atoms)
+
+    if max_rules_seed and len(seed_rules) > max_rules_seed:
+        seed_rules = seed_rules[:max_rules_seed]
+
+    full_atoms = list(atoms_set)
+    if return_estimator:
+        return full_atoms, seed_rules, clf
+    return full_atoms, seed_rules
+
+
 def extract_warmstart_components(
     strategy: str,
     X_train: np.ndarray,
@@ -883,10 +926,15 @@ def extract_warmstart_components(
             espresso_expand_seeds, random_state, return_estimator,
             **({} if scouting_max_depth is None else {"scouting_max_depth": scouting_max_depth}),
         )
+    elif strat in ("cg", "cg_atoms_only", "cg_seeds_only", "column_generation"):
+        result = extract_cg_components(
+            X_train, y_train, feature_names, max_rules, max_rules_seed,
+            random_state, return_estimator
+        )
     else:
         raise ValueError(
             f"Unknown warmstart strategy '{strategy}'. "
-            f"Supported: 'rulefit', 'extratrees', 'figs', 'l1_logistic', 'ensemble_rich'."
+            f"Supported: 'rulefit', 'extratrees', 'figs', 'l1_logistic', 'ensemble_rich', 'cg'."
         )
     if classwise_multirule:
         groups = _assemble_classwise_multirule(

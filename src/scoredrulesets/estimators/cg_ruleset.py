@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
-from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.linear_model import LogisticRegression
+from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
+from sklearn.linear_model import Lasso, LogisticRegression
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
@@ -27,6 +27,7 @@ from .atom_space import (
 )
 from ..runtime import predict as predict_from_ruleset
 from ..runtime import predict_proba as predict_proba_from_ruleset
+from ..runtime import predict_regression as predict_regression_from_ruleset
 from ..schema import AggregationSpec, Atom, Rule, ScoredRuleSet
 
 
@@ -488,3 +489,232 @@ class ColumnGenerationClassifier(BaseEstimator, ClassifierMixin):
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, "ruleset_")
         return self.ruleset_
+
+
+class ColumnGenerationRegressor(BaseEstimator, RegressorMixin):
+    """Interpretable Scored Rule Set Regressor trained via Dantzig-Wolfe Column Generation.
+
+    Parameters
+    ----------
+    max_rules : int, default=20
+        Maximum number of rules to generate.
+    max_depth : int, default=3
+        Maximum number of literals (conjunction width) in a rule.
+    min_support : int, default=3
+        Minimum number of samples covered by a valid rule.
+    n_bins : int, default=5
+        Number of quantile bins used for continuous feature binarization.
+    max_thresholds_per_feature : int, default=5
+        Maximum cutoffs per continuous feature.
+    alpha : float, default=0.05
+        L1 regularization parameter for Lasso in Restricted Master Problem.
+    tol : float, default=1e-3
+        Minimum residual improvement to continue column generation.
+    pricing_max_nodes : int, default=1500
+        Maximum branch-and-bound nodes explored per pricing iteration.
+    pricing_max_admissible : int, default=60
+        Maximum number of most promising literals to consider during conjunction search.
+    random_state : int or None, default=None
+    """
+
+    def __init__(
+        self,
+        max_rules: int = 20,
+        max_depth: int = 3,
+        min_support: int = 3,
+        n_bins: int = 5,
+        max_thresholds_per_feature: int = 5,
+        alpha: float = 0.05,
+        tol: float = 1e-3,
+        pricing_max_nodes: int = 1500,
+        pricing_max_admissible: int = 60,
+        random_state: int | None = None,
+    ):
+        self.max_rules = max_rules
+        self.max_depth = max_depth
+        self.min_support = min_support
+        self.n_bins = n_bins
+        self.max_thresholds_per_feature = max_thresholds_per_feature
+        self.alpha = alpha
+        self.tol = tol
+        self.pricing_max_nodes = pricing_max_nodes
+        self.pricing_max_admissible = pricing_max_admissible
+        self.random_state = random_state
+
+    def fit(self, X, y, feature_names: list[str] | None = None):
+        if hasattr(X, "columns"):
+            detected_names = [str(c) for c in X.columns]
+        else:
+            detected_names = None
+
+        X_arr, y_arr = check_X_y(X, y, accept_sparse=False, dtype="numeric")
+        y_arr = y_arr.astype(float)
+        n_samples, n_features = X_arr.shape
+        self.n_features_in_ = n_features
+
+        if feature_names is not None:
+            self.feature_names_in_ = list(feature_names)
+        elif detected_names is not None and len(detected_names) == n_features:
+            self.feature_names_in_ = detected_names
+        else:
+            self.feature_names_in_ = [f"f{j}" for j in range(n_features)]
+
+        # 1. Feature Binarization
+        self._thresholds_ = compute_nln_thresholds(
+            X_arr,
+            n_bins=self.n_bins,
+            max_thresholds_per_feature=self.max_thresholds_per_feature,
+        )
+        P = binarize_with_thresholds(X_arr, self._thresholds_)
+        P_bool = P.astype(bool)
+
+        meta: list[LiteralSpec] = []
+        prop_idx = 0
+        for j, thrs in enumerate(self._thresholds_):
+            for t in thrs:
+                meta.append(LiteralSpec(feat_idx=j, op="<=", threshold=float(t), prop_idx=prop_idx))
+                prop_idx += 1
+            for t in thrs:
+                meta.append(LiteralSpec(feat_idx=j, op=">", threshold=float(t), prop_idx=prop_idx))
+                prop_idx += 1
+        self.literal_meta_ = meta
+
+        # 2. Column Generation Loop for Regression (Least Squares / Lasso RMP)
+        active_rules: list[tuple[int, ...]] = []
+        active_masks: list[np.ndarray] = []
+
+        w_0 = float(np.mean(y_arr))
+        y_pred = np.full(n_samples, w_0)
+        seen_rules: set[tuple[int, ...]] = set()
+
+        for it in range(self.max_rules):
+            residuals = y_arr - y_pred
+
+            best_lits_pos, score_pos = _solve_pricing_subproblem(
+                P_bool,
+                residuals,
+                meta,
+                max_depth=self.max_depth,
+                min_support=self.min_support,
+                max_admissible=self.pricing_max_admissible,
+                max_nodes=self.pricing_max_nodes,
+            )
+
+            best_lits_neg, score_neg = _solve_pricing_subproblem(
+                P_bool,
+                -residuals,
+                meta,
+                max_depth=self.max_depth,
+                min_support=self.min_support,
+                max_admissible=self.pricing_max_admissible,
+                max_nodes=self.pricing_max_nodes,
+            )
+
+            chosen_lits = None
+            if score_pos >= score_neg and score_pos > self.tol:
+                chosen_lits = best_lits_pos
+            elif score_neg > score_pos and score_neg > self.tol:
+                chosen_lits = best_lits_neg
+
+            if chosen_lits is None:
+                break
+
+            sorted_lits = tuple(sorted(chosen_lits))
+            if sorted_lits in seen_rules:
+                break
+
+            seen_rules.add(sorted_lits)
+            active_rules.append(sorted_lits)
+
+            mask = np.ones(n_samples, dtype=bool)
+            for lit in sorted_lits:
+                mask &= P_bool[:, lit]
+            active_masks.append(mask)
+
+            # Solve Restricted Master Problem via Lasso
+            A = np.column_stack([m.astype(float) for m in active_masks])
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore")
+                rmp_reg = Lasso(
+                    alpha=self.alpha,
+                    fit_intercept=True,
+                    random_state=self.random_state,
+                    max_iter=1000,
+                )
+                rmp_reg.fit(A, y_arr)
+
+            w_0 = float(rmp_reg.intercept_)
+            y_pred = rmp_reg.predict(A)
+
+        # 3. Final Master Problem Solve
+        if not active_rules:
+            final_rules = []
+        else:
+            A = np.column_stack([m.astype(float) for m in active_masks])
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore")
+                rmp_reg = Lasso(
+                    alpha=self.alpha,
+                    fit_intercept=True,
+                    random_state=self.random_state,
+                    max_iter=2000,
+                )
+                rmp_reg.fit(A, y_arr)
+            w_0 = float(rmp_reg.intercept_)
+            final_weights = rmp_reg.coef_
+
+            final_rules: list[Rule] = []
+            for idx, (lits, w) in enumerate(zip(active_rules, final_weights)):
+                if abs(w) < 1e-6:
+                    continue
+                atoms = [
+                    meta[l].to_atom(self.feature_names_in_[meta[l].feat_idx])
+                    for l in lits
+                ]
+                final_rules.append(
+                    Rule(
+                        atoms=atoms,
+                        scores=[float(w)],
+                        rule_id=f"cg_reg_{len(final_rules)}",
+                        metadata={
+                            "source": "column_generation_regression",
+                            "weight": float(w),
+                            "width": len(atoms),
+                        },
+                    )
+                )
+
+        default_rule = Rule(
+            atoms=[],
+            scores=[float(w_0)],
+            rule_id="cg_reg_default",
+            metadata={"source": "column_generation_regression", "kind": "default"},
+        )
+
+        rs = ScoredRuleSet(
+            class_labels=[],
+            task_type="regression",
+            feature_names=self.feature_names_in_,
+            rules=[default_rule] + final_rules,
+            aggregation=AggregationSpec(type="default_plus_sum"),
+            metadata={
+                "backend": "cg",
+                "task": "regression",
+                "max_rules": self.max_rules,
+                "max_depth": self.max_depth,
+                "n_rules_generated": len(final_rules),
+            },
+        )
+        rs.validate()
+        self.ruleset_ = rs
+        return self
+
+    def predict(self, X):
+        check_is_fitted(self, "ruleset_")
+        X_arr = check_array(X, dtype="numeric")
+        return predict_regression_from_ruleset(self.ruleset_, X_arr)
+
+    def to_ruleset(self) -> ScoredRuleSet:
+        check_is_fitted(self, "ruleset_")
+        return self.ruleset_
+

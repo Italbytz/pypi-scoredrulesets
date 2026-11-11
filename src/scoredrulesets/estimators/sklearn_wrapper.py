@@ -790,6 +790,13 @@ class ScoredRuleSetRegressor(RegressorMixin, BaseRuleSetEstimator):
                 self.estimator_ = RulePLCSRegressor(**params)
                 self.estimator_.fit(X_valid, y_valid)
                 self.ruleset_ = self.estimator_.to_ruleset()
+            elif backend_key in {"cg", "column_generation", "columngeneration", "cg_rule"}:
+                from .cg_ruleset import ColumnGenerationRegressor
+                params = dict(self.backend_params or {})
+                params.setdefault("random_state", self.random_state)
+                self.estimator_ = ColumnGenerationRegressor(**params)
+                self.estimator_.fit(X_valid, y_valid, feature_names=self.feature_names_in_)
+                self.ruleset_ = self.estimator_.to_ruleset()
             elif backend_key in {"greedy_pareto", "greedy_pareto_regressor", "greedy_regressor"}:
                 from .greedy_pareto import GreedyParetoRegressor
                 params = dict(self.backend_params or {})
