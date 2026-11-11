@@ -244,6 +244,12 @@ def build_backend_estimator(
             params.setdefault("random_state", random_state)
         return ExactCPSATClassifier(**params)
 
+    if backend_key in ("cg", "column_generation", "columngeneration", "cg_rule"):
+        from .cg_ruleset import ColumnGenerationClassifier
+        if random_state is not None:
+            params.setdefault("random_state", random_state)
+        return ColumnGenerationClassifier(**params)
+
     if backend_key in ("greedy", "greedy_pareto", "greedypareto"):
         from .greedy_pareto import GreedyParetoClassifier
         if random_state is not None:

@@ -7,6 +7,7 @@ from .atom_selection import (
 from .base import BaseRuleSetEstimator
 from .cluster_wrapper import ScoredRuleSetClusterer
 from .exact_cpusat import ExactCPSATClassifier
+from .cg_ruleset import ColumnGenerationClassifier
 from .greedy_pareto import GreedyCascadedRegressor, GreedyParetoClassifier, GreedyParetoRegressor
 from .logicgp import GPASClassifier, LogicGPClassifier
 from .rulenln import RuleNLNClassifier
@@ -33,6 +34,7 @@ __all__ = [
 	"BaseRuleSetEstimator",
 	"ScoredRuleSetClusterer",
 	"ExactCPSATClassifier",
+	"ColumnGenerationClassifier",
 	"GPASClassifier",
 	"LogicGPClassifier",
 	"RuleGPClassifier",

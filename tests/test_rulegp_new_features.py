@@ -67,3 +67,4 @@ def test_logicgp_backend_forwarding():
     clf.fit(X, y)
     preds = clf.predict(X)
     assert len(preds) == len(y)
+

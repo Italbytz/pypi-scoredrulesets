@@ -309,6 +309,14 @@ class ScoredRuleSetClassifier(BaseRuleSetEstimator):
                     "ExactCPSATClassifier has no 'ruleset_' after fit(). "
                     "Please check exact_cpusat.py for errors."
                 )
+        elif backend_lower in {"cg", "column_generation", "columngeneration", "cg_rule"}:
+            if hasattr(self.estimator_, "ruleset_"):
+                self.ruleset_ = self.estimator_.ruleset_
+            else:
+                raise RuntimeError(
+                    "ColumnGenerationClassifier has no 'ruleset_' after fit(). "
+                    "Please check cg_ruleset.py for errors."
+                )
         elif backend_lower in {"add", "additive_add", "additiveadd", "memetic_add", "memeticadd"}:
             if hasattr(self.estimator_, "to_ruleset"):
                 self.ruleset_ = self.estimator_.to_ruleset(feature_names=self.feature_names_in_)
