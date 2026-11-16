@@ -179,6 +179,7 @@ def _smart_init(
     prob_include: float,
     prob_one: float,
     allowed_feature_indices: np.ndarray | None = None,
+    max_init_predicates: float | None = None,
 ) -> _Individual:
     """Create one individual seeded around a random training instance."""
     # Pick a random instance of the target class
@@ -190,14 +191,28 @@ def _smart_init(
     inst = X[idx]
 
     predicates: list[_Predicate] = []
-    if allowed_feature_indices is None:
-        feature_iter = range(n_features)
-    else:
-        feature_iter = (int(i) for i in allowed_feature_indices.tolist())
+    n_active = n_features if allowed_feature_indices is None else len(allowed_feature_indices)
+    eff_prob = prob_include
+    if max_init_predicates is not None and n_active > 0:
+        eff_prob = min(prob_include, float(max_init_predicates) / float(n_active))
 
-    for fi in feature_iter:
-        if rng.random() > prob_include:
-            continue  # don't-care
+    if n_active == 0 or eff_prob <= 0.0:
+        selected_indices: list[int] = []
+    elif eff_prob < 0.25:
+        k_draw = int(rng.binomial(n_active, eff_prob))
+        if k_draw > 0:
+            if allowed_feature_indices is None:
+                selected_indices = sorted(rng.choice(n_active, size=k_draw, replace=False).tolist())
+            else:
+                picked = rng.choice(n_active, size=k_draw, replace=False)
+                selected_indices = sorted(int(allowed_feature_indices[i]) for i in picked)
+        else:
+            selected_indices = []
+    else:
+        pool = range(n_features) if allowed_feature_indices is None else (int(i) for i in allowed_feature_indices.tolist())
+        selected_indices = [fi for fi in pool if rng.random() <= eff_prob]
+
+    for fi in selected_indices:
         info = feature_info[fi]
         if info["numeric"]:
             domain = info["max"] - info["min"]
@@ -572,6 +587,7 @@ def _run_ga(
     n_strata: int,
     allowed_feature_indices: np.ndarray | None,
     fit_deadline: float | None,
+    max_init_predicates: float | None = None,
 ) -> _Individual:
     """Run one GA to find a single rule."""
     # Determine target classes (exclude default class)
@@ -595,7 +611,8 @@ def _run_ga(
         tc = int(rng.choice(target_classes))
         ind = _smart_init(rng, X, y, len(feature_info), feature_info,
                           tc, prob_include, prob_one,
-                          allowed_feature_indices=allowed_feature_indices)
+                          allowed_feature_indices=allowed_feature_indices,
+                          max_init_predicates=max_init_predicates)
         population.append(ind)
 
     if not population:
@@ -753,10 +770,14 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         Probability of adding an attribute (specialize operator).
     prob_include : float
         Probability that an attribute is included during smart init.
+    max_init_predicates : float | None
+        Optional cap on the expected number of active predicates per rule at
+        smart init (``effective_prob = min(prob_include, max_init_predicates / n_active)``).
+        Prevents rules from starting with hundreds of noise predicates on wide inputs.
     prob_one : float
         Probability that a categorical value is included during init.
     coverage_break : float
-        Minimal recall threshold for the coverage penalty.
+        Minimal recall threshold for the coverage penalty (default ``0.05``).
     coverage_ratio : float
         Scaling parameter for the coverage penalty curve.
     mdl_initial_ratio : float
@@ -810,8 +831,9 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         prob_generalize: float = 0.10,
         prob_specialize: float = 0.10,
         prob_include: float = 0.5,
+        max_init_predicates: float | None = 5.0,
         prob_one: float = 0.75,
-        coverage_break: float = 0.01,
+        coverage_break: float = 0.05,
         coverage_ratio: float = 0.90,
         mdl_initial_ratio: float = 0.25,
         mdl_activate_iter: int = 10,
@@ -838,6 +860,7 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
         self.prob_generalize = prob_generalize
         self.prob_specialize = prob_specialize
         self.prob_include = prob_include
+        self.max_init_predicates = max_init_predicates
         self.prob_one = prob_one
         self.coverage_break = coverage_break
         self.coverage_ratio = coverage_ratio
@@ -875,6 +898,8 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
             raise ValueError(
                 "atom_preselection_max_thresholds_per_feature must be > 0."
             )
+        if self.max_init_predicates is not None and float(self.max_init_predicates) <= 0.0:
+            raise ValueError("max_init_predicates must be > 0 or None.")
 
     # ------------------------------------------------------------------ fit
     def fit(self, X, y):
@@ -964,6 +989,7 @@ class RulePLCSClassifier(BaseRuleSetEstimator):
                     n_strata=self.n_strata,
                     allowed_feature_indices=allowed_feature_indices,
                     fit_deadline=fit_deadline,
+                    max_init_predicates=self.max_init_predicates,
                 )
                 ga_runs += 1
                 if best_rule is None or rule.fitness < best_rule.fitness:

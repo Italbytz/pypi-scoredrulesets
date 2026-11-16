@@ -257,3 +257,20 @@ class TestCoveringPrefixArchive:
         # front members carry ("front", comp) keys; single model ("model",)
         assert len(variants) >= 1
         assert any(v[0] == "front" for v in variants) or ("model",) in variants
+
+
+def test_max_init_predicates_caps_wide_initialization():
+    """On wide inputs, max_init_predicates bounds initial rule length."""
+    from scoredrulesets.estimators.ruleplcs import _smart_init
+    from scoredrulesets.estimators.atom_space import build_ruleplcs_feature_info
+
+    rng = np.random.default_rng(7)
+    X = rng.integers(0, 3, size=(120, 400)).astype(float)
+    y = (X[:, 0] > 0).astype(int)
+    feature_info = build_ruleplcs_feature_info(X, low_cardinality_threshold=10)
+    ind = _smart_init(
+        rng, X, y, X.shape[1], feature_info,
+        target_class=1, prob_include=0.5, prob_one=0.75,
+        max_init_predicates=5.0,
+    )
+    assert len(ind.predicates) < 25
