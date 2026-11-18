@@ -5,10 +5,10 @@ comparing Feature Selection with Generic vs. Feature-Type-Aware Atom Constructio
 Setup:
 - SNP dataset generated via catgen.simulate_snp_glm (n=2000, n_causal=5 dominant SNPs)
 - p in {2000, 10000, 50000, 100000}
-- Feature Selection: SelectKBest(mutual_info_classif, k=20)
+- Feature Selection: SelectKBest(f_classif, k=20) (or mutual_info_classif via --score-func)
 - Arms:
-  * fs_generic : FS (kbest20_mi) + generic atom construction (hybrid / quantile)
-  * fs_typed   : FS (kbest20_mi) + feature-type-aware construction (genotype_aware)
+  * fs_generic : FS (kbest20_f) + generic atom construction (hybrid / quantile)
+  * fs_typed   : FS (kbest20_f) + feature-type-aware construction (genotype_aware)
 - Models: RuleGP, RuleNSGA2, RulePLCS
 """
 
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from sklearn.feature_selection import SelectKBest, f_classif, mutual_info_classif
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 
@@ -114,6 +114,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-size", type=float, default=0.3)
     parser.add_argument("--arms", nargs="+", default=None)
     parser.add_argument("--models", nargs="+", default=None)
+    parser.add_argument(
+        "--score-func",
+        choices=["f_classif", "mutual_info_classif"],
+        default="f_classif",
+    )
     parser.add_argument(
         "--results-dir",
         default=str(
@@ -254,7 +259,12 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path]:
             # Univariate Feature Selection on Train
             t_fs_0 = time.perf_counter()
             k = min(args.k_features, int(snp_count))
-            selector = SelectKBest(score_func=mutual_info_classif, k=k)
+            score_func = (
+                f_classif
+                if args.score_func == "f_classif"
+                else mutual_info_classif
+            )
+            selector = SelectKBest(score_func=score_func, k=k)
             X_train_fs = selector.fit_transform(X_train, y_train)
             X_test_fs = selector.transform(X_test)
             fs_seconds = time.perf_counter() - t_fs_0
