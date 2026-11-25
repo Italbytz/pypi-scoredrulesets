@@ -36,8 +36,8 @@ from .base import BaseRuleSetEstimator
 from .sklearn_wrapper import ScoredRuleSetClassifier, ScoredRuleSetRegressor
 
 
-_DEFAULT_CLASSIFIER_BACKENDS = ["greedy", "cart", "add", "hs", "ruleplcs"]
-_DEFAULT_REGRESSOR_BACKENDS = ["greedy", "cart", "add", "hs", "ruleplcs"]
+_DEFAULT_CLASSIFIER_BACKENDS = ["greedy", "cart", "add", "hs", "ruleplcs", "cg"]
+_DEFAULT_REGRESSOR_BACKENDS = ["greedy", "cart", "add", "hs", "ruleplcs", "cg"]
 
 # Architectural top-k sweep harvested for the neural backend when the user
 # does not pin ``max_atoms_per_rule`` explicitly.  Each k contributes its own

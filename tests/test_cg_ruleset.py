@@ -162,3 +162,46 @@ def test_rulegp_warmstart_cg():
     assert acc > 0.85
 
 
+def test_cg_classifier_pareto_archive():
+    data = load_breast_cancer()
+    X, y = data.data[:140], data.target[:140]
+    clf = ColumnGenerationClassifier(max_rules=10, max_depth=2, c_reg=1.0, random_state=42)
+    clf.fit(X, y)
+
+    assert hasattr(clf, "pareto_archive_")
+    assert len(clf.pareto_archive_) >= 2
+    for n_atoms, rs in clf.pareto_archive_.items():
+        assert isinstance(rs, ScoredRuleSet)
+        assert sum(len(r.atoms) for r in rs.rules) == n_atoms
+
+
+def test_cg_regressor_pareto_archive():
+    data = load_diabetes()
+    X, y = data.data[:140], data.target[:140]
+    reg = ColumnGenerationRegressor(max_rules=12, max_depth=2, alpha=0.5, random_state=42)
+    reg.fit(X, y)
+
+    assert hasattr(reg, "pareto_archive_")
+    assert len(reg.pareto_archive_) >= 2
+    for n_atoms, rs in reg.pareto_archive_.items():
+        assert isinstance(rs, ScoredRuleSet)
+        assert rs.task_type == "regression"
+        assert sum(len(r.atoms) for r in rs.rules) == n_atoms
+
+
+def test_cg_in_automl():
+    from scoredrulesets.estimators import AutoScoredRuleSetClassifier
+
+    data = load_breast_cancer()
+    X, y = data.data[:120], data.target[:120]
+    auto_clf = AutoScoredRuleSetClassifier(
+        candidate_backends=["cg"],
+        cv=2,
+        random_state=42,
+    )
+    auto_clf.fit(X, y)
+    spectrum = auto_clf.get_pareto_spectrum()
+    assert len(spectrum) >= 1
+    assert accuracy_score(y, auto_clf.predict(X)) > 0.80
+
+

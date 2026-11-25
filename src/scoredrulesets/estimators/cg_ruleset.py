@@ -302,12 +302,13 @@ class ColumnGenerationClassifier(BaseEstimator, ClassifierMixin):
         y_idx = np.array([int(np.searchsorted(self.classes_, v)) for v in y_arr], dtype=int)
         classes_to_fit = [1] if n_classes == 2 else list(range(n_classes))
         default_scores = [0.0] * n_classes
+        class_active_data: list[tuple[np.ndarray, np.ndarray, list[tuple[int, ...]], int]] = []
 
         for c_idx in classes_to_fit:
             y_bin = (y_idx == c_idx).astype(float)
             target_class_idx = c_idx if n_classes > 2 else 1
 
-            rules_c, w_0, _ = self._column_generation_binary(
+            rules_c, w_0, _, active_info = self._column_generation_binary(
                 P_bool, y_bin, meta, target_class_idx, n_classes, rule_counter
             )
             rule_counter += len(rules_c)
@@ -317,6 +318,8 @@ class ColumnGenerationClassifier(BaseEstimator, ClassifierMixin):
                 default_scores[1] = float(w_0)
             else:
                 default_scores[c_idx] = float(w_0)
+            if active_info is not None:
+                class_active_data.append(active_info)
 
         # Assemble ScoredRuleSet
         default_rule = Rule(
@@ -340,7 +343,116 @@ class ColumnGenerationClassifier(BaseEstimator, ClassifierMixin):
         )
         rs.validate()
         self.ruleset_ = rs
+        self.pareto_archive_ = self._build_pareto_archive(
+            class_active_data=class_active_data,
+            meta=meta,
+            n_classes=n_classes,
+            main_ruleset=rs,
+        )
         return self
+
+    def _extract_clf_rules(
+        self,
+        active_rules: list[tuple[int, ...]],
+        weights: np.ndarray,
+        meta: list[LiteralSpec],
+        target_class_idx: int,
+        n_classes: int,
+        start_rule_id: int,
+    ) -> list[Rule]:
+        extracted: list[Rule] = []
+        for lits, w in zip(active_rules, weights):
+            if abs(w) < 1e-5:
+                continue
+            atoms = [
+                meta[l].to_atom(self.feature_names_in_[meta[l].feat_idx])
+                for l in lits
+            ]
+            scores = [0.0] * n_classes
+            scores[target_class_idx] = float(w)
+            extracted.append(
+                Rule(
+                    atoms=atoms,
+                    scores=scores,
+                    rule_id=f"cg_{target_class_idx}_{start_rule_id + len(extracted)}",
+                    metadata={
+                        "source": "column_generation",
+                        "weight": float(w),
+                        "width": len(atoms),
+                        "target_class": target_class_idx,
+                    },
+                )
+            )
+        return extracted
+
+    def _build_pareto_archive(
+        self,
+        class_active_data: list[tuple[np.ndarray, np.ndarray, list[tuple[int, ...]], int]],
+        meta: list[LiteralSpec],
+        n_classes: int,
+        main_ruleset: ScoredRuleSet,
+    ) -> dict[int, ScoredRuleSet]:
+        """Build a zero-repricing complexity ladder via an L1 regularization path."""
+        main_atoms = sum(len(r.atoms) for r in main_ruleset.rules)
+        archive: dict[int, ScoredRuleSet] = {main_atoms: main_ruleset}
+        if not class_active_data:
+            return archive
+
+        c_max = max(5.0, float(self.c_reg) * 2.0)
+        c_grid = np.geomspace(0.05, c_max, 8)
+        for c_val in c_grid:
+            path_rules: list[Rule] = []
+            path_default = [0.0] * n_classes
+            rule_counter = 0
+            for A, y_bin, active_rules, target_class_idx in class_active_data:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=FutureWarning)
+                    warnings.filterwarnings("ignore", category=UserWarning)
+                    rmp_clf = LogisticRegression(
+                        penalty="l1",
+                        C=float(c_val),
+                        solver="liblinear",
+                        fit_intercept=True,
+                        random_state=self.random_state,
+                        max_iter=500,
+                    )
+                    rmp_clf.fit(A, y_bin)
+                w_0 = float(rmp_clf.intercept_[0])
+                if n_classes == 2:
+                    path_default[1] = w_0
+                else:
+                    path_default[target_class_idx] = w_0
+                rules_c = self._extract_clf_rules(
+                    active_rules, rmp_clf.coef_[0], meta, target_class_idx, n_classes, rule_counter
+                )
+                rule_counter += len(rules_c)
+                path_rules.extend(rules_c)
+
+            n_atoms = sum(len(r.atoms) for r in path_rules)
+            if n_atoms in archive:
+                continue
+            default_rule = Rule(
+                atoms=[],
+                scores=path_default,
+                rule_id="cg_default",
+                metadata={"source": "column_generation", "kind": "default", "c_reg": float(c_val)},
+            )
+            rs_k = ScoredRuleSet(
+                class_labels=self.classes_.tolist(),
+                feature_names=self.feature_names_in_,
+                rules=[default_rule] + path_rules,
+                aggregation=AggregationSpec(type="argmax_sum", temperature=1.0),
+                metadata={
+                    "backend": "cg",
+                    "max_rules": self.max_rules,
+                    "max_depth": self.max_depth,
+                    "c_reg": float(c_val),
+                    "n_rules_generated": len(path_rules),
+                },
+            )
+            rs_k.validate()
+            archive[n_atoms] = rs_k
+        return dict(sorted(archive.items()))
 
     def _column_generation_binary(
         self,
@@ -350,7 +462,7 @@ class ColumnGenerationClassifier(BaseEstimator, ClassifierMixin):
         target_class_idx: int,
         n_classes: int,
         start_rule_id: int,
-    ) -> tuple[list[Rule], float, np.ndarray]:
+    ) -> tuple[list[Rule], float, np.ndarray, tuple[np.ndarray, np.ndarray, list[tuple[int, ...]], int] | None]:
         """Perform Column Generation for a binary indicator task."""
         n_samples = len(y_bin)
 
@@ -430,7 +542,7 @@ class ColumnGenerationClassifier(BaseEstimator, ClassifierMixin):
             p_pred = rmp_clf.predict_proba(A)[:, 1]
 
         if not active_rules:
-            return [], w_0, np.array([])
+            return [], w_0, np.array([]), None
 
         A = np.column_stack([m.astype(float) for m in active_masks])
         with warnings.catch_warnings():
@@ -448,33 +560,11 @@ class ColumnGenerationClassifier(BaseEstimator, ClassifierMixin):
         w_0 = float(rmp_clf.intercept_[0])
         final_weights = rmp_clf.coef_[0]
 
-        extracted_rules: list[Rule] = []
-        for idx, (lits, w) in enumerate(zip(active_rules, final_weights)):
-            if abs(w) < 1e-5:
-                continue
+        extracted_rules = self._extract_clf_rules(
+            active_rules, final_weights, meta, target_class_idx, n_classes, start_rule_id
+        )
 
-            atoms = [
-                meta[l].to_atom(self.feature_names_in_[meta[l].feat_idx])
-                for l in lits
-            ]
-            scores = [0.0] * n_classes
-            scores[target_class_idx] = float(w)
-
-            extracted_rules.append(
-                Rule(
-                    atoms=atoms,
-                    scores=scores,
-                    rule_id=f"cg_{target_class_idx}_{start_rule_id + len(extracted_rules)}",
-                    metadata={
-                        "source": "column_generation",
-                        "weight": float(w),
-                        "width": len(atoms),
-                        "target_class": target_class_idx,
-                    },
-                )
-            )
-
-        return extracted_rules, w_0, final_weights
+        return extracted_rules, w_0, final_weights, (A, y_bin, active_rules, target_class_idx)
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")
@@ -707,7 +797,97 @@ class ColumnGenerationRegressor(BaseEstimator, RegressorMixin):
         )
         rs.validate()
         self.ruleset_ = rs
+        self.pareto_archive_ = self._build_reg_pareto_archive(
+            A=A if active_rules else None,
+            y_arr=y_arr,
+            active_rules=active_rules,
+            meta=meta,
+            main_ruleset=rs,
+        )
         return self
+
+    def _extract_reg_rules(
+        self,
+        active_rules: list[tuple[int, ...]],
+        weights: np.ndarray,
+        meta: list[LiteralSpec],
+    ) -> list[Rule]:
+        extracted: list[Rule] = []
+        for lits, w in zip(active_rules, weights):
+            if abs(w) < 1e-6:
+                continue
+            atoms = [
+                meta[l].to_atom(self.feature_names_in_[meta[l].feat_idx])
+                for l in lits
+            ]
+            extracted.append(
+                Rule(
+                    atoms=atoms,
+                    scores=[float(w)],
+                    rule_id=f"cg_reg_{len(extracted)}",
+                    metadata={
+                        "source": "column_generation_regression",
+                        "weight": float(w),
+                        "width": len(atoms),
+                    },
+                )
+            )
+        return extracted
+
+    def _build_reg_pareto_archive(
+        self,
+        A: np.ndarray | None,
+        y_arr: np.ndarray,
+        active_rules: list[tuple[int, ...]],
+        meta: list[LiteralSpec],
+        main_ruleset: ScoredRuleSet,
+    ) -> dict[int, ScoredRuleSet]:
+        """Build a zero-repricing complexity ladder via a Lasso regularization path."""
+        main_atoms = sum(len(r.atoms) for r in main_ruleset.rules)
+        archive: dict[int, ScoredRuleSet] = {main_atoms: main_ruleset}
+        if A is None or not active_rules:
+            return archive
+
+        a_min = max(1e-4, float(self.alpha) * 0.1)
+        a_max = max(1.0, float(self.alpha) * 20.0)
+        for a_val in np.geomspace(a_min, a_max, 8):
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore")
+                rmp_reg = Lasso(
+                    alpha=float(a_val),
+                    fit_intercept=True,
+                    random_state=self.random_state,
+                    max_iter=1500,
+                )
+                rmp_reg.fit(A, y_arr)
+            path_rules = self._extract_reg_rules(active_rules, rmp_reg.coef_, meta)
+            n_atoms = sum(len(r.atoms) for r in path_rules)
+            if n_atoms in archive:
+                continue
+            default_rule = Rule(
+                atoms=[],
+                scores=[float(rmp_reg.intercept_)],
+                rule_id="cg_reg_default",
+                metadata={"source": "column_generation_regression", "kind": "default", "alpha": float(a_val)},
+            )
+            rs_k = ScoredRuleSet(
+                class_labels=[],
+                task_type="regression",
+                feature_names=self.feature_names_in_,
+                rules=[default_rule] + path_rules,
+                aggregation=AggregationSpec(type="default_plus_sum"),
+                metadata={
+                    "backend": "cg",
+                    "task": "regression",
+                    "max_rules": self.max_rules,
+                    "max_depth": self.max_depth,
+                    "alpha": float(a_val),
+                    "n_rules_generated": len(path_rules),
+                },
+            )
+            rs_k.validate()
+            archive[n_atoms] = rs_k
+        return dict(sorted(archive.items()))
 
     def predict(self, X):
         check_is_fitted(self, "ruleset_")

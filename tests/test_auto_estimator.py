@@ -108,7 +108,7 @@ class TestAutoEstimator:
         X, y = iris_data
         clf = AutoScoredRuleSetClassifier(cv=2, random_state=0)
         clf.fit(X, y)
-        assert clf.best_backend_ in ("greedy", "greedy_pareto", "cart", "hs", "ruleplcs", "add")
+        assert clf.best_backend_ in ("greedy", "greedy_pareto", "cart", "hs", "ruleplcs", "add", "cg")
 
     def test_rulenln_sweep_populates_archive(self, iris_data):
         """The neural backend should contribute top-k sweep variants to the archive."""
@@ -748,8 +748,8 @@ class TestHVContributionProbing:
             random_state=42,
         )
         clf.fit(X, y)
-        # 4 backends -> cutoff keeps exactly 2
-        assert len(clf.cv_results_) == 2
+        # 6 default backends -> cutoff keeps half (3)
+        assert len(clf.cv_results_) == 3
 
     def test_auto_regressor_harvests_greedy_spectrum(self):
         from sklearn.datasets import make_regression
