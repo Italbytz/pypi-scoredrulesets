@@ -308,4 +308,221 @@ def test_extract_pareto_from_master_archive():
     assert r"\begin{tikzpicture}" in tikz_str
 
 
+def test_balanced_pool_epsilon_and_equidistant_tiers():
+    from scoredrulesets.estimators.auto import MasterParetoArchive
+
+    fn = ["x0", "x1", "x2"]
+    archive = MasterParetoArchive(higher_is_better=True)
+
+    # Backend A: wide complexity spectrum inside epsilon=0.05 (atoms 2..12) + 1 outside (score 0.50)
+    for atoms, score in [(1, 0.50), (2, 0.86), (4, 0.88), (6, 0.89), (8, 0.90), (10, 0.87), (12, 0.88)]:
+        rs = _make_sample_ruleset([["x0", "x1"]] * max(1, atoms // 2), fn)
+        archive.add(rs, score=score, backend="cart")
+        # add() only puts non-dominated into candidates_; mirror auto.py candidate_pool_
+        from scoredrulesets.estimators.auto import ParetoCandidate
+        archive.candidate_pool_.append(
+            ParetoCandidate(ruleset=rs, score=score, atoms=atoms, rules=len(rs.rules), backend="cart")
+        )
+
+    # Collapsed Backend B below competence floor (best score 0.52)
+    rs_low = _make_sample_ruleset([["x1", "x2"]], fn)
+    from scoredrulesets.estimators.auto import ParetoCandidate
+    archive.candidate_pool_.append(
+        ParetoCandidate(ruleset=rs_low, score=0.52, atoms=2, rules=1, backend="weak")
+    )
+
+    summary = extract_pareto_interactions(
+        archive,
+        archive_source="balanced_pool",
+        max_models_per_backend=3,
+        rashomon_epsilon=0.05,
+        min_backend_score=0.60,
+        backbone_threshold=0.5,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    # Collapsed backend excluded, equidistant selection picks 3 tiers from [2,4,6,8,10,12]
+    assert summary.n_models == 3
+    assert summary.active_backends == ["cart"]
+    assert all(sc >= 0.85 for sc in summary.pool_scores)
+
+
+def test_laplace_and_provenance_suppress_rare_noise_edges():
+    fn = ["A", "B", "N1", "N2"]
+    # High-support pair (A, B) shared across 2 backends; rare count=1 noise pair (N1, N2) on 1 backend
+    m_cart = _make_sample_ruleset([["A", "B"], ["A", "B"], ["A", "N1"]], fn)
+    m_cart.metadata["backend"] = "cart"
+    m_hs = _make_sample_ruleset([["A", "B"], ["A", "B"], ["N1", "N2"]], fn)
+    m_hs.metadata["backend"] = "hs"
+
+    summary = extract_pareto_interactions(
+        [m_cart, m_hs],
+        laplace_alpha=1.0,
+        normalize_per_model=True,
+        provenance_weighting=True,
+        backbone_threshold=0.5,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    top_edge = summary.edges[0]
+    assert (top_edge.feature_a, top_edge.feature_b) == ("A", "B")
+    assert set(top_edge.backends) == {"cart", "hs"}
+
+
+def test_model_normalization_prevents_bloated_tree_dominance():
+    fn = ["X1", "X2", "N1", "N2"]
+    # Bloated tree with 20 noise rules on N1 & N2
+    bloated = _make_sample_ruleset([["N1", "N2"]] * 20, fn)
+    bloated.metadata["backend"] = "hs"
+    # Compact EC model with 1 rule on X1 & X2
+    compact = _make_sample_ruleset([["X1", "X2"]], fn)
+    compact.metadata["backend"] = "rulegp"
+
+    summary = extract_pareto_interactions(
+        [bloated, compact],
+        laplace_alpha=1.0,
+        normalize_per_model=True,
+        provenance_weighting=True,
+        backbone_threshold=0.5,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    edges = {(e.feature_a, e.feature_b): e for e in summary.edges}
+    # Both models carry identical total mass 1.0 -> equal strength despite 20x rule count difference
+    assert edges[("X1", "X2")].strength == pytest.approx(edges[("N1", "N2")].strength, abs=1e-6)
+
+
+def test_three_way_interaction_lift():
+    fn = ["A", "B", "C", "D"]
+    # 2 models: each has 1 rule on (A,B,C) and 3 distractor rules on D
+    m1 = _make_sample_ruleset([["A", "B", "C"], ["D"], ["D"], ["D"]], fn)
+    m2 = _make_sample_ruleset([["A", "B", "C"], ["D"], ["D"], ["D"]], fn)
+    m1.metadata["backend"] = "cart"
+    m2.metadata["backend"] = "rulegp"
+
+    summary = extract_pareto_interactions(
+        [m1, m2],
+        backbone_threshold=0.5,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    assert len(summary.triplets) == 1
+    tr = summary.triplets[0]
+    assert tr.features == ("A", "B", "C")
+    assert tr.count == 2
+    assert tr.lift > 1.0
+    assert set(tr.backends) == {"cart", "rulegp"}
+
+
+def test_mode_b_ochiai_strength_and_rulefit_support():
+    import pandas as pd
+
+    class MockRuleFitWithSupport:
+        feature_names_in_ = ["X1", "X2", "X3"]
+
+        def _get_rules(self):
+            return pd.DataFrame(
+                [
+                    {"rule": "X1 > 0.5 and X2 > 0.5", "type": "rule", "coef": 4.0, "support": 0.5},
+                    {"rule": "X1 > 0.5 and X3 <= 0.0", "type": "rule", "coef": 2.0, "support": 0.25},
+                ]
+            )
+
+    summary = extract_pareto_interactions(
+        MockRuleFitWithSupport(),
+        mode="ensemble",
+        backbone_threshold=0.4,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    # w1 = 4.0 * sqrt(0.5*0.5) = 2.0; w2 = 2.0 * sqrt(0.25*0.75) = sqrt(0.75) ~= 0.866025
+    w1 = 2.0
+    w2 = 2.0 * (0.25 * 0.75) ** 0.5
+    edges = {(e.feature_a, e.feature_b): e for e in summary.edges}
+    expected_s12 = w1 / (( (w1 + w2) * w1 ) ** 0.5)
+    assert edges[("X1", "X2")].weight == pytest.approx(w1, abs=1e-4)
+    assert edges[("X1", "X2")].strength == pytest.approx(expected_s12, abs=1e-4)
+
+
+def test_rulegp_regressor_pareto_archive():
+    from scoredrulesets.estimators import RuleGPRegressor
+
+    rng = np.random.default_rng(42)
+    X = rng.uniform(0, 1, size=(80, 4))
+    y = 10.0 * X[:, 0] * X[:, 1] + 2.0 * X[:, 2] + rng.normal(0, 0.2, size=80)
+    reg = RuleGPRegressor(population_size=30, max_generations=10, random_state=42)
+    reg.fit(X, y)
+
+    assert hasattr(reg, "final_archive_") and len(reg.final_archive_) >= 1
+    assert hasattr(reg, "pareto_archive_") and len(reg.pareto_archive_) >= 1
+    summary = reg.extract_pareto_interactions(
+        feature_names=["X1", "X2", "X3", "X4"],
+        backbone_threshold=0.3,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    assert summary.n_models == len(reg.pareto_archive_)
+    assert summary.n_models >= 1
+
+
+def test_skill_relative_competence_gate_and_drop_isolated():
+    from scoredrulesets.estimators.auto import MasterParetoArchive, ParetoCandidate
+
+    fn = ["x0", "x1", "x2", "x3"]
+
+    # 1. Classification with chance baseline 0.5 and gamma = 0.5
+    arch_cls = MasterParetoArchive(higher_is_better=True)
+    rs_strong = _make_sample_ruleset([["x0", "x1"]], fn)
+    rs_weak = _make_sample_ruleset([["x2", "x3"]], fn)
+    arch_cls.candidate_pool_.append(
+        ParetoCandidate(ruleset=rs_strong, score=0.90, atoms=2, rules=1, backend="strong")
+    )
+    # Gain = 0.65 - 0.50 = 0.15 vs max_gain = 0.40 -> ratio 0.375 < 0.50 -> excluded
+    arch_cls.candidate_pool_.append(
+        ParetoCandidate(ruleset=rs_weak, score=0.65, atoms=2, rules=1, backend="weak")
+    )
+    sum_cls = extract_pareto_interactions(
+        arch_cls,
+        archive_source="balanced_pool",
+        min_relative_skill=0.50,
+        skill_baseline=0.50,
+        backbone_threshold=0.5,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    assert sum_cls.active_backends == ["strong"]
+    assert sum_cls.n_models == 1
+
+    # 2. Regression (R^2) with baseline 0.0 and gamma = 0.5 + drop_isolated
+    arch_reg = MasterParetoArchive(higher_is_better=True)
+    rs_reg_best = _make_sample_ruleset([["x0", "x1"], ["x2"]], fn)
+    rs_reg_ok = _make_sample_ruleset([["x0", "x1"]], fn)
+    rs_reg_poor = _make_sample_ruleset([["x2", "x3"]], fn)
+    arch_reg.candidate_pool_.extend(
+        [
+            ParetoCandidate(ruleset=rs_reg_best, score=0.80, atoms=3, rules=2, backend="greedy_residual"),
+            ParetoCandidate(ruleset=rs_reg_ok, score=0.50, atoms=2, rules=1, backend="hs"),
+            ParetoCandidate(ruleset=rs_reg_poor, score=0.30, atoms=2, rules=1, backend="rulegp"),
+        ]
+    )
+    sum_reg = extract_pareto_interactions(
+        arch_reg,
+        archive_source="balanced_pool",
+        min_relative_skill=0.50,
+        skill_baseline=0.0,
+        backbone_threshold=0.5,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    assert sum_reg.active_backends == ["greedy_residual", "hs"]
+    assert "x2" in sum_reg.backbone_features
+
+    dot_with_isolated = sum_reg.to_dot(max_edges=1, drop_isolated=False)
+    dot_no_isolated = sum_reg.to_dot(max_edges=1, drop_isolated=True)
+    assert '"x2"' in dot_with_isolated
+    assert '"x2"' not in dot_no_isolated
+    assert '"x0"' in dot_no_isolated and '"x1"' in dot_no_isolated
+
+
+
 

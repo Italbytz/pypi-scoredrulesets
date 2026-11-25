@@ -108,6 +108,9 @@ def _archive_metric_from_scoring(scoring: str | None) -> Callable[[Any, Any], fl
     if base in ("accuracy", "acc"):
         from sklearn.metrics import accuracy_score
         return lambda y_true, y_pred: float(accuracy_score(y_true, y_pred))
+    if base in ("balanced_accuracy", "bal_acc", "bacc"):
+        from sklearn.metrics import balanced_accuracy_score
+        return lambda y_true, y_pred: float(balanced_accuracy_score(y_true, y_pred))
     warnings.warn(
         f"AutoScoredRuleSet: archive metric falls back to macro-F1 for "
         f"scoring='{scoring}'.",

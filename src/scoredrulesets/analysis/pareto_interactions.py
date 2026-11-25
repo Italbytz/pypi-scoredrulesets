@@ -25,11 +25,14 @@ from __future__ import annotations
 
 import csv
 import itertools
+import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
+
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,28 @@ class ParetoInteractionEdge:
         return res
 
 
+@dataclass(frozen=True)
+class ParetoInteractionTriplet:
+    """A 3-way higher-order feature interaction with Interaction Lift."""
+
+    features: tuple[str, str, str]
+    count: int
+    mass: float
+    lift: float
+    backends: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        res: dict[str, Any] = {
+            "features": list(self.features),
+            "count": self.count,
+            "mass": round(self.mass, 4),
+            "lift": round(self.lift, 4),
+        }
+        if self.backends:
+            res["backends"] = list(self.backends)
+        return res
+
+
 @dataclass
 class ParetoFrontSummary:
     """Compact summary of feature importance and interactions across a Pareto front or ensemble."""
@@ -76,6 +101,9 @@ class ParetoFrontSummary:
     n_rules: int = 0
     feature_weights: dict[str, float] = field(default_factory=dict)
     pair_weights: dict[tuple[str, str], float] = field(default_factory=dict)
+    triplets: list[ParetoInteractionTriplet] = field(default_factory=list)
+    active_backends: list[str] = field(default_factory=list)
+    pool_scores: list[float] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         res: dict[str, Any] = {
@@ -94,9 +122,24 @@ class ParetoFrontSummary:
             res["feature_weights"] = {
                 k: round(v, 4) for k, v in self.feature_weights.items()
             }
+        if self.triplets:
+            res["triplets"] = [t.to_dict() for t in self.triplets]
+        if self.active_backends:
+            res["active_backends"] = list(self.active_backends)
         return res
 
-    def to_dot(self, title: str | None = None) -> str:
+    def to_dot(
+        self,
+        title: str | None = None,
+        *,
+        max_edges: int | None = None,
+        drop_isolated: bool = False,
+        fontname: str = "Arial",
+        fontsize_node: int = 11,
+        fontsize_edge: int = 9,
+        nodesep: float = 0.5,
+        ranksep: float = 0.7,
+    ) -> str:
         """Generate a GraphViz DOT graph string."""
         if title is None:
             title = (
@@ -107,12 +150,19 @@ class ParetoFrontSummary:
         lines = [
             f'graph "{title}" {{',
             "  rankdir=LR;",
-            '  node [fontname="Helvetica", fontsize=11];',
-            '  edge [fontname="Helvetica", fontsize=9];',
+            f"  nodesep={nodesep};",
+            f"  ranksep={ranksep};",
+            f'  node [fontname="{fontname}", fontsize={fontsize_node}];',
+            f'  edge [fontname="{fontname}", fontsize={fontsize_edge}];',
         ]
 
-        active_nodes = set(self.backbone_features)
-        for e in self.edges:
+        edges_to_draw = self.edges[:max_edges] if max_edges is not None else self.edges
+
+        if drop_isolated and edges_to_draw:
+            active_nodes: set[str] = set()
+        else:
+            active_nodes = set(self.backbone_features)
+        for e in edges_to_draw:
             active_nodes.add(e.feature_a)
             active_nodes.add(e.feature_b)
 
@@ -137,13 +187,16 @@ class ParetoFrontSummary:
                     f'fillcolor="#f8f9fa", color="#6c757d"];'
                 )
 
-        for e in self.edges:
+        max_s = max((e.strength for e in edges_to_draw), default=1.0) or 1.0
+        for e in edges_to_draw:
             a = _dot_id(e.feature_a)
             b = _dot_id(e.feature_b)
-            pw = max(1.0, min(5.0, 1.0 + 4.0 * e.strength))
+            pw = max(1.0, min(5.0, 1.0 + 4.0 * (e.strength / max_s)))
             b_tag = f"\\n[{','.join(e.backends)}]" if e.backends else ""
             edge_lbl = (
-                f"{e.count}{b_tag}" if e.weight <= 0.0 else f"{e.count} (w={e.weight:.1f}){b_tag}"
+                f"{e.count} (S={e.strength:.2f}){b_tag}"
+                if e.weight <= 0.0
+                else f"{e.count} (S={e.strength:.2f}, w={e.weight:.1f}){b_tag}"
             )
             lines.append(
                 f'  {a} -- {b} [label="{edge_lbl}", penwidth={pw:.1f}, color="#495057"];'
@@ -382,7 +435,47 @@ def _extract_ensemble_rules(
     """Extract rules and weights from an ensemble estimator, population, or ScoredRuleSet."""
     inferred_names = list(feature_names) if feature_names else None
 
-    # Case 1: RuleFit (e.g., from imodels with visualize() DataFrame)
+    # Case 1: RuleFit (prefer _get_rules() with empirical support, else visualize())
+    if hasattr(estimator_or_object, "_get_rules") and callable(estimator_or_object._get_rules):
+        try:
+            df = estimator_or_object._get_rules()
+            if hasattr(df, "iterrows") and "rule" in df.columns and "coef" in df.columns:
+                if inferred_names is None:
+                    if hasattr(estimator_or_object, "feature_names_in_"):
+                        inferred_names = [str(f) for f in estimator_or_object.feature_names_in_]
+                    elif hasattr(estimator_or_object, "feature_names_"):
+                        inferred_names = [str(f) for f in estimator_or_object.feature_names_]
+
+                rules_with_weights: list[tuple[set[str], float]] = []
+                for _, row in df.iterrows():
+                    rule_str = str(row.get("rule", "")).strip()
+                    coef = float(row.get("coef", 1.0))
+                    abs_coef = abs(coef)
+                    if abs_coef < 1e-4:
+                        continue
+                    rule_type = str(row.get("type", "rule")).lower()
+                    support = float(row.get("support", float("nan"))) if "support" in df.columns else float("nan")
+                    if rule_type == "rule" and not math.isnan(support) and 0.0 < support < 1.0:
+                        weight = abs_coef * math.sqrt(support * (1.0 - support))
+                    else:
+                        weight = abs_coef
+                    if inferred_names:
+                        feats = {
+                            f
+                            for f in inferred_names
+                            if re.search(r"\b" + re.escape(f) + r"\b", rule_str)
+                        }
+                    else:
+                        tokens = re.findall(
+                            r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:<=|>=|<|>|==|!=)", rule_str
+                        )
+                        feats = set(tokens)
+                    if feats:
+                        rules_with_weights.append((feats, weight))
+                return rules_with_weights, inferred_names
+        except Exception:
+            pass
+
     if hasattr(estimator_or_object, "visualize") and callable(estimator_or_object.visualize):
         try:
             df = estimator_or_object.visualize()
@@ -457,10 +550,33 @@ def _extract_ensemble_rules(
     return rules_with_weights, names
 
 
+def _select_equidistant_tiers(ordered: list[Any], quota: int) -> list[Any]:
+    """Select up to ``quota`` complexity-ordered models evenly across the spectrum."""
+    if quota <= 0 or not ordered:
+        return []
+    if len(ordered) <= quota:
+        return list(ordered)
+    if quota == 1:
+        return [ordered[-1]]
+    idxs = np.round(np.linspace(0, len(ordered) - 1, quota)).astype(int)
+    seen: set[int] = set()
+    selected: list[Any] = []
+    for idx in idxs:
+        i = int(idx)
+        if i not in seen:
+            seen.add(i)
+            selected.append(ordered[i])
+    return selected
+
+
 def _collect_models(
     estimator_or_models: Any,
     archive_source: str = "balanced_pool",
     max_models_per_backend: int = 5,
+    rashomon_epsilon: float = 0.05,
+    min_backend_score: float | None = None,
+    min_relative_skill: float | None = None,
+    skill_baseline: float = 0.0,
 ) -> tuple[list[Any], list[str] | None]:
     """Collect individual models and feature names from an estimator or sequence."""
     feature_names: list[str] | None = None
@@ -488,17 +604,94 @@ def _collect_models(
             candidates = list(arch.candidates_)
         elif archive_source == "full_pool":
             candidates = list(arch.candidate_pool_) or list(arch.candidates_)
-        else:  # "balanced_pool" (default)
+        else:  # "balanced_pool" (default): per-backend epsilon-Rashomon + equidistant tiers
             pool = list(arch.candidate_pool_) or list(arch.candidates_)
-            by_b = defaultdict(list)
+            higher_is_better = bool(getattr(arch, "higher_is_better", True))
+            by_b: dict[str, list[Any]] = defaultdict(list)
             for c in pool:
-                b = getattr(c, "backend", "unknown")
+                b = str(getattr(c, "backend", "unknown"))
                 by_b[b].append(c)
-            candidates = []
+
+            backend_best: dict[str, float] = {}
             for b, b_cands in by_b.items():
-                sorted_cands = sorted(b_cands, key=lambda c: -getattr(c, "score", 0.0))
-                candidates.extend(sorted_cands[:max_models_per_backend])
+                scores_b = [float(getattr(c, "score", 0.0)) for c in b_cands]
+                backend_best[b] = max(scores_b) if higher_is_better else min(scores_b)
+
+            eligible_backends = list(by_b.keys())
+            if min_backend_score is not None:
+                filtered = [
+                    b for b in eligible_backends
+                    if (backend_best[b] >= min_backend_score if higher_is_better else backend_best[b] <= min_backend_score)
+                ]
+                if filtered:
+                    eligible_backends = filtered
+                elif eligible_backends:
+                    best_b = max(eligible_backends, key=lambda b: backend_best[b]) if higher_is_better else min(eligible_backends, key=lambda b: backend_best[b])
+                    eligible_backends = [best_b]
+
+            if min_relative_skill is not None and eligible_backends:
+                best_global = (
+                    max(backend_best[b] for b in eligible_backends)
+                    if higher_is_better
+                    else min(backend_best[b] for b in eligible_backends)
+                )
+                max_gain = (best_global - skill_baseline) if higher_is_better else (skill_baseline - best_global)
+                if max_gain > 1e-12:
+                    filtered_rel = [
+                        b for b in eligible_backends
+                        if (
+                            ((backend_best[b] - skill_baseline) / max_gain) >= min_relative_skill
+                            if higher_is_better
+                            else ((skill_baseline - backend_best[b]) / max_gain) >= min_relative_skill
+                        )
+                    ]
+                    if filtered_rel:
+                        eligible_backends = filtered_rel
+                    else:
+                        best_b = max(eligible_backends, key=lambda b: backend_best[b]) if higher_is_better else min(eligible_backends, key=lambda b: backend_best[b])
+                        eligible_backends = [best_b]
+                else:
+                    best_b = max(eligible_backends, key=lambda b: backend_best[b]) if higher_is_better else min(eligible_backends, key=lambda b: backend_best[b])
+                    eligible_backends = [best_b]
+
+            candidates = []
+            for b in eligible_backends:
+                b_cands = by_b[b]
+                b_best = backend_best[b]
+                if rashomon_epsilon is not None and rashomon_epsilon >= 0.0:
+                    rash = [
+                        c for c in b_cands
+                        if (
+                            float(getattr(c, "score", 0.0)) >= b_best - rashomon_epsilon
+                            if higher_is_better
+                            else float(getattr(c, "score", 0.0)) <= b_best + rashomon_epsilon
+                        )
+                    ]
+                else:
+                    rash = list(b_cands)
+                if not rash:
+                    best_c = max(b_cands, key=lambda c: float(getattr(c, "score", 0.0))) if higher_is_better else min(b_cands, key=lambda c: float(getattr(c, "score", 0.0)))
+                    rash = [best_c]
+
+                # Deduplicate by atom count, keeping best score per complexity tier
+                by_atoms: dict[int, Any] = {}
+                for c in rash:
+                    comp = int(getattr(c, "atoms", 0))
+                    sc = float(getattr(c, "score", 0.0))
+                    if comp not in by_atoms:
+                        by_atoms[comp] = c
+                    else:
+                        prev_sc = float(getattr(by_atoms[comp], "score", 0.0))
+                        if (higher_is_better and sc > prev_sc) or (not higher_is_better and sc < prev_sc):
+                            by_atoms[comp] = c
+                ordered = [by_atoms[a] for a in sorted(by_atoms)]
+                candidates.extend(_select_equidistant_tiers(ordered, max_models_per_backend))
         return candidates, feature_names
+
+    # Prefer deduplicated complexity Pareto archive if exposed
+    pareto_arch = getattr(est, "pareto_archive_", None)
+    if isinstance(pareto_arch, dict) and pareto_arch:
+        return [pareto_arch[k] for k in sorted(pareto_arch.keys())], feature_names
 
     # RuleGP final_archive_ (Pareto front)
     if hasattr(est, "final_archive_") and est.final_archive_:
@@ -534,8 +727,16 @@ def extract_pareto_interactions(
     feature_names: Sequence[str] | None = None,
     archive_source: str = "balanced_pool",
     max_models_per_backend: int = 5,
+    rashomon_epsilon: float = 0.05,
+    min_backend_score: float | None = None,
+    min_relative_skill: float | None = None,
+    skill_baseline: float = 0.0,
     min_occurrences: int = 1,
     min_ratio: float = 0.05,
+    laplace_alpha: float = 1.0,
+    normalize_per_model: bool = True,
+    provenance_weighting: bool = True,
+    max_edges: int | None = None,
     backbone_threshold: float = 0.5,
     backbone_criterion: str = "frequency",
     out_dot: str | Path | None = None,
@@ -732,11 +933,10 @@ def extract_pareto_interactions(
             if max(ratio_a, ratio_b) < min_ratio:
                 continue
 
-            strength = (
-                2.0 * (ratio_a * ratio_b) / (ratio_a + ratio_b)
-                if (ratio_a + ratio_b) > 0
-                else 0.0
-            )
+            wa = feature_weights[fa]
+            wb = feature_weights[fb]
+            denom = math.sqrt(wa * wb)
+            strength = (pair_weights[(fa, fb)] / denom) if denom > 0.0 else 0.0
             edges.append(
                 ParetoInteractionEdge(
                     feature_a=fa,
@@ -750,8 +950,10 @@ def extract_pareto_interactions(
             )
 
         edges.sort(
-            key=lambda e: (-e.weight, -e.strength, -e.count, e.feature_a, e.feature_b)
+            key=lambda e: (-e.strength, -e.weight, -e.count, e.feature_a, e.feature_b)
         )
+        if max_edges is not None:
+            edges = edges[:max_edges]
 
         summary = ParetoFrontSummary(
             n_models=1,
@@ -775,6 +977,10 @@ def extract_pareto_interactions(
             estimator_or_models,
             archive_source=archive_source,
             max_models_per_backend=max_models_per_backend,
+            rashomon_epsilon=rashomon_epsilon,
+            min_backend_score=min_backend_score,
+            min_relative_skill=min_relative_skill,
+            skill_baseline=skill_baseline,
         )
         if feature_names is None:
             feature_names = inferred_names
@@ -795,15 +1001,35 @@ def extract_pareto_interactions(
 
         model_presence: dict[str, int] = defaultdict(int)
         feature_rule_counts: dict[str, int] = defaultdict(int)
+        feature_mass: dict[str, float] = defaultdict(float)
         pair_counts: dict[tuple[str, str], int] = defaultdict(int)
+        pair_mass: dict[tuple[str, str], float] = defaultdict(float)
         pair_backends: dict[tuple[str, str], set[str]] = defaultdict(set)
+        triplet_counts: dict[tuple[str, str, str], int] = defaultdict(int)
+        triplet_mass: dict[tuple[str, str, str], float] = defaultdict(float)
+        triplet_backends: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+        seen_backends: set[str] = set()
+        pool_scores: list[float] = []
         all_discovered_features: set[str] = set()
         total_rules_across_models = 0
 
         for model in models:
             b = str(getattr(model, "backend", "") or getattr(model, "metadata", {}).get("backend", ""))
+            if b:
+                seen_backends.add(b)
+            sc = getattr(model, "score", None)
+            if sc is not None:
+                try:
+                    pool_scores.append(float(sc))
+                except Exception:
+                    pass
             rules_feats = _extract_rules_from_single_model(model, feature_names)
             model_feats: set[str] = set()
+            rule_mass = (
+                1.0 / float(len(rules_feats))
+                if (normalize_per_model and len(rules_feats) > 0)
+                else 1.0
+            )
 
             for feats in rules_feats:
                 total_rules_across_models += 1
@@ -811,14 +1037,26 @@ def extract_pareto_interactions(
                 all_discovered_features.update(feats)
                 for f in feats:
                     feature_rule_counts[f] += 1
+                    feature_mass[f] += rule_mass
 
-                for fa, fb in itertools.combinations(sorted(feats), 2):
+                sorted_feats = sorted(feats)
+                for fa, fb in itertools.combinations(sorted_feats, 2):
                     pair_counts[(fa, fb)] += 1
+                    pair_mass[(fa, fb)] += rule_mass
                     if b:
                         pair_backends[(fa, fb)].add(b)
 
+                for fa, fb, fc in itertools.combinations(sorted_feats, 3):
+                    triplet_counts[(fa, fb, fc)] += 1
+                    triplet_mass[(fa, fb, fc)] += rule_mass
+                    if b:
+                        triplet_backends[(fa, fb, fc)].add(b)
+
             for f in model_feats:
                 model_presence[f] += 1
+
+        active_backends = sorted(seen_backends)
+        n_backends = max(len(active_backends), 1)
 
         frequencies = {
             f: model_presence[f] / float(n_models) for f in all_discovered_features
@@ -828,14 +1066,14 @@ def extract_pareto_interactions(
             for f in sorted(all_discovered_features)
             if frequencies.get(f, 0.0) >= backbone_threshold
         ]
-        backbone.sort(key=lambda f: (-frequencies[f], -feature_rule_counts[f], f))
+        backbone.sort(key=lambda f: (-frequencies[f], -feature_mass[f], -feature_rule_counts[f], f))
 
         peripheral = [
             f
             for f in sorted(all_discovered_features)
             if frequencies.get(f, 0.0) < backbone_threshold
         ]
-        peripheral.sort(key=lambda f: (-frequencies[f], -feature_rule_counts[f], f))
+        peripheral.sort(key=lambda f: (-frequencies[f], -feature_mass[f], -feature_rule_counts[f], f))
 
         edges: list[ParetoInteractionEdge] = []
         for (fa, fb), count in pair_counts.items():
@@ -849,11 +1087,14 @@ def extract_pareto_interactions(
             if max(ratio_a, ratio_b) < min_ratio:
                 continue
 
-            strength = (
-                2.0 * (ratio_a * ratio_b) / (ratio_a + ratio_b)
-                if (ratio_a + ratio_b) > 0
-                else 0.0
-            )
+            denom = feature_mass[fa] + feature_mass[fb] + 2.0 * laplace_alpha
+            base_strength = (2.0 * pair_mass[(fa, fb)] / denom) if denom > 0.0 else 0.0
+            b_set = pair_backends.get((fa, fb), set())
+            if provenance_weighting and len(active_backends) > 1:
+                strength = base_strength * (len(b_set) / float(n_backends))
+            else:
+                strength = base_strength
+
             edges.append(
                 ParetoInteractionEdge(
                     feature_a=fa,
@@ -862,11 +1103,31 @@ def extract_pareto_interactions(
                     ratio_a=ratio_a,
                     ratio_b=ratio_b,
                     strength=strength,
-                    backends=tuple(sorted(pair_backends.get((fa, fb), set()))),
+                    backends=tuple(sorted(b_set)),
                 )
             )
 
         edges.sort(key=lambda e: (-e.strength, -e.count, e.feature_a, e.feature_b))
+        if max_edges is not None:
+            edges = edges[:max_edges]
+
+        total_mass = float(n_models) if normalize_per_model else float(total_rules_across_models)
+        triplets: list[ParetoInteractionTriplet] = []
+        for (fa, fb, fc), t_cnt in triplet_counts.items():
+            if t_cnt < min_occurrences:
+                continue
+            denom_t = feature_mass[fa] * feature_mass[fb] * feature_mass[fc]
+            lift = (triplet_mass[(fa, fb, fc)] * (total_mass ** 2) / denom_t) if denom_t > 0.0 else 0.0
+            triplets.append(
+                ParetoInteractionTriplet(
+                    features=(fa, fb, fc),
+                    count=t_cnt,
+                    mass=triplet_mass[(fa, fb, fc)],
+                    lift=lift,
+                    backends=tuple(sorted(triplet_backends.get((fa, fb, fc), set()))),
+                )
+            )
+        triplets.sort(key=lambda t: (-len(t.backends), -t.mass, -t.lift, t.features))
 
         summary = ParetoFrontSummary(
             n_models=n_models,
@@ -878,6 +1139,9 @@ def extract_pareto_interactions(
             edges=edges,
             feature_names=sorted(all_discovered_features),
             mode="pareto",
+            triplets=triplets,
+            active_backends=active_backends,
+            pool_scores=pool_scores,
         )
 
     # Export formats

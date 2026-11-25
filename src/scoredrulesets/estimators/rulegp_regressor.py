@@ -557,6 +557,37 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
         # 4. Backward Rule Elimination (Post-hoc Compaction)
         self.ruleset_internal_ = self._compact_ruleset(best_rs, X_arr, y_arr, ctx=ctx)
         self.ruleset_ = self._to_schema_ruleset(self.ruleset_internal_)
+
+        # 5. Extract non-dominated Pareto front across final population & served model
+        raw_pool: list[tuple[_RuleSetReg, _FitnessReg]] = list(pop)
+        raw_pool.append((best_rs, best_fit))
+        served_fit = _evaluate_fitness_reg(self.ruleset_internal_, X_arr, y_arr, ctx=ctx)
+        raw_pool.append((self.ruleset_internal_, served_fit))
+
+        best_by_size: dict[int, tuple[_RuleSetReg, _FitnessReg]] = {}
+        for rs_cand, fit_cand in raw_pool:
+            sz = int(fit_cand.size)
+            if sz not in best_by_size or fit_cand.rmse < best_by_size[sz][1].rmse:
+                best_by_size[sz] = (rs_cand, fit_cand)
+
+        nd_front: list[tuple[_RuleSetReg, _FitnessReg]] = []
+        min_rmse_so_far = float("inf")
+        for sz in sorted(best_by_size):
+            rs_cand, fit_cand = best_by_size[sz]
+            if fit_cand.rmse < min_rmse_so_far - 1e-12:
+                nd_front.append((rs_cand, fit_cand))
+                min_rmse_so_far = float(fit_cand.rmse)
+
+        self.final_archive_: list[_RuleSetReg] = [rs_c.clone() for rs_c, _ in nd_front]
+        self.pareto_archive_: dict[int, ScoredRuleSet] = {}
+        for rs_c, _ in nd_front:
+            schema_rs = self._to_schema_ruleset(rs_c)
+            comp = int(sum(len(r.atoms) for r in schema_rs.rules if r.atoms))
+            schema_rs.metadata["complexity_atoms"] = comp
+            self.pareto_archive_[comp] = schema_rs
+        served_comp = int(sum(len(r.atoms) for r in self.ruleset_.rules if r.atoms))
+        self.ruleset_.metadata["complexity_atoms"] = served_comp
+        self.pareto_archive_[served_comp] = self.ruleset_
         return self
 
     def _compact_ruleset(
@@ -649,3 +680,10 @@ class RuleGPRegressor(BaseRuleSetEstimator, RegressorMixin):
     def to_ruleset(self) -> ScoredRuleSet:
         check_is_fitted(self, "ruleset_")
         return self.ruleset_
+
+    def extract_pareto_interactions(self, **kwargs):
+        """Extract interaction network summary across this regressor's Pareto archive."""
+        from ..analysis.pareto_interactions import extract_pareto_interactions
+
+        check_is_fitted(self, "ruleset_")
+        return extract_pareto_interactions(self, **kwargs)
