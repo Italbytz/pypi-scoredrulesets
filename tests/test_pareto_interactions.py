@@ -524,5 +524,162 @@ def test_skill_relative_competence_gate_and_drop_isolated():
     assert '"x0"' in dot_no_isolated and '"x1"' in dot_no_isolated
 
 
+def test_multiclass_class_purity_and_score_intensity():
+    fn = ["F0", "F1", "F2", "F3", "F4", "F5"]
+    rules = [
+        # Pure class A high margin
+        Rule(atoms=[Atom(feature="F0", op="==", value=1), Atom(feature="F1", op="==", value=1)], scores=[10.0, 0.0, 0.0]),
+        # Equally split across all 3 classes -> low purity
+        Rule(atoms=[Atom(feature="F2", op="==", value=1), Atom(feature="F3", op="==", value=1)], scores=[3.0, 0.0, 0.0]),
+        Rule(atoms=[Atom(feature="F2", op="==", value=0), Atom(feature="F3", op="==", value=1)], scores=[0.0, 3.0, 0.0]),
+        Rule(atoms=[Atom(feature="F2", op="==", value=1), Atom(feature="F3", op="==", value=0)], scores=[0.0, 0.0, 3.0]),
+        # Low-margin rule for class C
+        Rule(atoms=[Atom(feature="F4", op="==", value=1), Atom(feature="F5", op="==", value=1)], scores=[0.1, 0.1, 0.6]),
+    ]
+    m1 = ScoredRuleSet(class_labels=["A", "B", "C"], rules=rules, feature_names=fn)
+    m1.metadata["backend"] = "cart"
+    m2 = ScoredRuleSet(class_labels=["A", "B", "C"], rules=rules, feature_names=fn)
+    m2.metadata["backend"] = "hs"
+
+    summary = extract_pareto_interactions(
+        [m1, m2],
+        backbone_threshold=0.5,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    assert summary.class_labels == ["A", "B", "C"]
+    edges = {(e.feature_a, e.feature_b): e for e in summary.edges}
+
+    pure_edge = edges[("F0", "F1")]
+    assert pure_edge.dominant_class == "A"
+    assert pure_edge.class_purity == pytest.approx(1.0, abs=1e-6)
+    assert pure_edge.score_intensity == pytest.approx(1.0, abs=1e-6)
+    assert dict(pure_edge.class_distribution)["A"] == pytest.approx(1.0, abs=1e-6)
+
+    mixed_edge = edges[("F2", "F3")]
+    assert mixed_edge.class_purity == pytest.approx(0.0, abs=1e-6)
+    assert mixed_edge.score_intensity == pytest.approx(0.3, abs=1e-6)
+
+    low_edge = edges[("F4", "F5")]
+    assert low_edge.dominant_class == "C"
+    assert low_edge.class_purity == pytest.approx(1.0, abs=1e-6)
+    assert low_edge.score_intensity == pytest.approx(0.05, abs=1e-6)
+
+    # Check DOT and TikZ color encodings and validation
+    dot_cls = summary.to_dot(color_by="class_score")
+    assert "subgraph cluster_legend" in dot_cls
+    assert "#0072b2" in dot_cls  # pure class A full color
+    assert "[c=A 100%]" in dot_cls
+
+    dot_score = summary.to_dot(color_by="score")
+    assert "[m=1.00]" in dot_score
+    assert "#1d4ed8" in dot_score
+
+    tikz_cls = summary.to_tikz(color_by="class_score", standalone=True)
+    assert r"\definecolor{prinedge0}{HTML}{" in tikz_cls
+    assert "draw=prinedge" in tikz_cls
+
+    with pytest.raises(ValueError, match="Invalid color_by"):
+        summary.to_dot(color_by="bogus")
+
+
+def test_score_weighting_cross_backend_scale_invariance():
+    fn = ["X1", "X2", "N1", "N2"]
+    # Backend 1 uses large logits [100, 0] and [1, 0]; Backend 2 uses tiny logits [0.1, 0] and [0.001, 0]
+    m_big = ScoredRuleSet(
+        class_labels=[0, 1],
+        rules=[
+            Rule(atoms=[Atom(feature="X1", op="==", value=1), Atom(feature="X2", op="==", value=1)], scores=[100.0, 0.0]),
+            Rule(atoms=[Atom(feature="N1", op="==", value=1), Atom(feature="N2", op="==", value=1)], scores=[1.0, 0.0]),
+        ],
+        feature_names=fn,
+    )
+    m_big.metadata["backend"] = "rulegp"
+
+    m_small = ScoredRuleSet(
+        class_labels=[0, 1],
+        rules=[
+            Rule(atoms=[Atom(feature="X1", op="==", value=1), Atom(feature="X2", op="==", value=1)], scores=[0.1, 0.0]),
+            Rule(atoms=[Atom(feature="N1", op="==", value=1), Atom(feature="N2", op="==", value=1)], scores=[0.001, 0.0]),
+        ],
+        feature_names=fn,
+    )
+    m_small.metadata["backend"] = "cart"
+
+    # Legacy uniform rule mass gives equal strength to (X1, X2) and (N1, N2)
+    sum_uniform = extract_pareto_interactions(
+        [m_big, m_small],
+        score_weighting=False,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    edges_u = {(e.feature_a, e.feature_b): e for e in sum_uniform.edges}
+    assert edges_u[("X1", "X2")].strength == pytest.approx(edges_u[("N1", "N2")].strength, abs=1e-6)
+
+    # Margin-normalized score weighting boosts high-margin (X1, X2) symmetrically across scales
+    sum_weighted = extract_pareto_interactions(
+        [m_big, m_small],
+        score_weighting=True,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    edges_w = {(e.feature_a, e.feature_b): e for e in sum_weighted.edges}
+    assert edges_w[("X1", "X2")].strength > edges_w[("N1", "N2")].strength * 10.0
+
+    # Symmetry check if rules are swapped across backends
+    m_small_swapped = ScoredRuleSet(
+        class_labels=[0, 1],
+        rules=[
+            Rule(atoms=[Atom(feature="N1", op="==", value=1), Atom(feature="N2", op="==", value=1)], scores=[0.1, 0.0]),
+            Rule(atoms=[Atom(feature="X1", op="==", value=1), Atom(feature="X2", op="==", value=1)], scores=[0.001, 0.0]),
+        ],
+        feature_names=fn,
+    )
+    m_small_swapped.metadata["backend"] = "cart"
+    sum_sym = extract_pareto_interactions(
+        [m_big, m_small_swapped],
+        score_weighting=True,
+        min_occurrences=1,
+        min_ratio=0.0,
+    )
+    edges_sym = {(e.feature_a, e.feature_b): e for e in sum_sym.edges}
+    assert edges_sym[("X1", "X2")].strength == pytest.approx(edges_sym[("N1", "N2")].strength, abs=1e-6)
+
+
+def test_multiclass_wine_auto_estimator_end_to_end():
+    from sklearn.datasets import load_wine
+    from scoredrulesets.estimators import AutoScoredRuleSetClassifier
+
+    wine = load_wine()
+    clf = AutoScoredRuleSetClassifier(
+        candidate_backends=["cart", "hs", "greedy"],
+        scoring="balanced_accuracy",
+        feature_selection="none",
+        cv=3,
+        random_state=42,
+    )
+    clf.fit(wine.data, wine.target)
+    summary = extract_pareto_interactions(
+        clf,
+        mode="pareto",
+        feature_names=list(wine.feature_names),
+        archive_source="balanced_pool",
+        skill_baseline=1.0 / 3.0,
+        min_relative_skill=0.50,
+        backbone_threshold=0.30,
+        min_occurrences=1,
+        min_ratio=0.05,
+        score_weighting=True,
+    )
+    assert len(summary.class_labels) == 3
+    assert len(summary.edges) > 0
+    assert any(e.dominant_class is not None for e in summary.edges)
+    assert all(0.0 <= e.class_purity <= 1.0 for e in summary.edges)
+    assert all(0.0 <= e.score_intensity <= 1.0 for e in summary.edges)
+    dot = summary.to_dot(color_by="class_score")
+    assert "cluster_legend" in dot
+
+
+
 
 
